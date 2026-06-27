@@ -72,3 +72,18 @@ Reason:
 
 - External accounting API writes are important business events.
 - Retries and "already exists/already paid" responses must be explainable later.
+
+## ADR-006: Build the Document Engine Before Accounting Models
+
+Date: 2026-06-27
+
+Decision:
+
+- Add the Django document model layer before invoice, company, accounting, audit, or integration-specific domain models.
+- Treat imported and generated files as first-class records that later workflows can reference.
+
+Reason:
+
+- Invoices, bank statements, Merit imports, EMTA exports, and manual uploads all begin as files.
+- Stable document identity, checksums, versions, tags, and source/status metadata reduce duplication in later accounting models.
+- This keeps the first Django domain step useful without migrating legacy business logic yet.

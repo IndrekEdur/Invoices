@@ -43,6 +43,20 @@ The repository now contains a minimal Django project in `platform/`. It is inten
 
 No legacy business logic or data has been migrated yet.
 
+## Document Engine
+
+`Document` is the root object for imported and generated files in the Django platform. Invoices, bank statements, Merit imports, EMTA exports, email attachments, and manual uploads should all start as documents before they become accounting-specific records.
+
+The document layer stores:
+
+- source and review status;
+- original filename and file metadata;
+- checksum, MIME type, size, and JSON metadata;
+- document versions;
+- simple tags for classification.
+
+Future invoice, banking, Merit, and EMTA models should reference documents instead of duplicating file identity and storage fields.
+
 ## Target Django App Boundaries
 
 Suggested apps:

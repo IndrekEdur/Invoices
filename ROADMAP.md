@@ -19,6 +19,7 @@ This roadmap describes the intended direction for the invoice automation project
 ## Phase 2: Start the Target Django Stack
 
 - Add a Django project beside the current application. Initial skeleton exists in `platform/`.
+- Current foundation step: build the Document Engine as the root layer for uploaded, imported, and generated files.
 - Use PostgreSQL as the target database.
 - Use HTMX for server-rendered interactive workflows.
 - Add initial models for invoices, documents, bank transactions, imports, Merit operations, and reconciliation runs.
