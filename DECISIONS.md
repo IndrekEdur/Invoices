@@ -87,3 +87,18 @@ Reason:
 - Invoices, bank statements, Merit imports, EMTA exports, and manual uploads all begin as files.
 - Stable document identity, checksums, versions, tags, and source/status metadata reduce duplication in later accounting models.
 - This keeps the first Django domain step useful without migrating legacy business logic yet.
+
+## ADR-007: Create Master Architecture Before Continuing Domain Expansion
+
+Date: 2026-06-27
+
+Decision:
+
+- Create `MASTER_ARCHITECTURE.md` as the central long-term architecture reference before adding more domain models.
+- Use it to align accounting automation with the broader AI Business Operating System vision.
+
+Reason:
+
+- The product is expanding beyond invoice automation.
+- Future modules need shared platform layers, domain vocabulary, and engineering rules.
+- Architecture decisions should be documented before Codex continues implementation tasks.

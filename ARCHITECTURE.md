@@ -1,6 +1,6 @@
 # Architecture
 
-This document summarizes the intended long-term architecture. For a deeper critique of the current repository and migration plan, see `ARCHITECTURE_REVIEW.md`.
+This document summarizes the intended long-term architecture. The central long-term architecture reference is `MASTER_ARCHITECTURE.md`. For a deeper critique of the current repository and migration plan, see `ARCHITECTURE_REVIEW.md`.
 
 ## Current System
 
