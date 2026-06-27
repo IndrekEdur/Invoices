@@ -16,7 +16,46 @@ $env:PYTHONPATH = "."
 C:\Users\Admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe -m unittest discover -s tests
 ```
 
+Uue Django platform skeletoni smoke-test:
+
+```powershell
+cd platform
+python manage.py test apps.core
+```
+
 Väike esimene prototüüp, mis loeb Outlooki `.pst` faili, leiab võimalikud arved ning salvestab kontrolltabeli CSV ja JSON formaadis.
+
+## Rakenduste käivitamine
+
+### Legacy lokaalne app
+
+Olemasolev brauseriliides jääb põhirakenduseks seni, kuni Django platvorm on valmis:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start_web_ui.ps1 -InputCsv ".\invoice_scan_output_outlook_refined\clean_invoice_candidates.csv" -DbPath ".\invoice_register.sqlite" -Port 8765
+```
+
+Seejärel ava:
+
+```text
+http://127.0.0.1:8765
+```
+
+### Uus Django platform skeleton
+
+Django platvorm asub kaustas `platform/` ja on praegu tühi paralleelne karkass:
+
+```powershell
+pip install -r requirements.txt
+cd platform
+python manage.py runserver 127.0.0.1:8000
+```
+
+Health check:
+
+```text
+http://127.0.0.1:8000/health/
+```
 
 ## Mida see praegu teeb
 

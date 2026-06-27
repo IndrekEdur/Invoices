@@ -26,6 +26,8 @@ env/
 *.sqlite
 *.sqlite3
 *.db
+platform/media/
+platform/staticfiles/
 
 # Invoice scans, attachments, bank exports and generated reconciliation data
 invoice_scan_*/

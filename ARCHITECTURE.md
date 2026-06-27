@@ -33,6 +33,16 @@ The target architecture is:
 - Background jobs for long-running imports, scans, reconciliations, and API sync.
 - Explicit audit/event models for accounting-relevant decisions.
 
+## Parallel Django Skeleton
+
+The repository now contains a minimal Django project in `platform/`. It is intentionally separate from the legacy local app and currently provides only:
+
+- local SQLite configuration for development;
+- placeholder app packages for core, documents, accounting, integrations, learning, and workflow;
+- a `/health/` JSON endpoint.
+
+No legacy business logic or data has been migrated yet.
+
 ## Target Django App Boundaries
 
 Suggested apps:

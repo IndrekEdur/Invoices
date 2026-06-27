@@ -1,3 +1,4 @@
 pypdf>=5.0
+Django>=5.0,<6.0
 # PST support:
 # pypff/libpff Python bindings are required for direct .pst reading.
