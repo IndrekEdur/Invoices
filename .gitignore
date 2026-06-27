@@ -1,0 +1,45 @@
+# Python/cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local virtual environments
+.venv/
+venv/
+env/
+
+# Runtime logs
+*.log
+*_stdout.log
+*_stderr.log
+
+# Local databases and exported private data
+*.sqlite
+*.sqlite3
+*.db
+
+# Invoice scans, attachments, bank exports and generated reconciliation data
+invoice_scan_*/
+invoice_scan_output*/
+bank_reconcile/
+confirmed_invoices/
+attachments/
+archive/
+
+# Potentially sensitive business documents
+*.pdf
+*.xml
+*.xlsx
+*.xls
+*.csv
+*.asice
+*.bdoc
+*.ddoc
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
