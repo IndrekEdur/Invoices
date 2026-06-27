@@ -1,0 +1,41 @@
+[tool.black]
+line-length = 120
+target-version = ["py311"]
+include = '\.pyi?$'
+extend-exclude = '''
+(
+  /(
+      \.git
+    | \.venv
+    | venv
+    | env
+    | __pycache__
+    | invoice_scan_.*
+    | invoice_scan_output.*
+  )/
+)
+'''
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+exclude = [
+  ".git",
+  ".venv",
+  "venv",
+  "env",
+  "__pycache__",
+  "invoice_scan_2026_03_with_files",
+  "invoice_scan_output_outlook",
+  "invoice_scan_output_outlook_refined",
+  "invoice_scan_with_files_test",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = [
+  "E501",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["pst_invoice_finder"]

@@ -4,11 +4,18 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+htmlcov/
 
 # Local virtual environments
 .venv/
 venv/
 env/
+
+# Local environment/secrets
+.env
+.env.*
+!.env.example
 
 # Runtime logs
 *.log

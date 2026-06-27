@@ -1,5 +1,21 @@
 # PST Invoice Finder MVP
 
+## Testide käivitamine
+
+Käivita testid repo juurkaustast:
+
+```powershell
+$env:PYTHONPATH = "."
+python -m unittest discover -s tests
+```
+
+Codexi bundeldatud Pythoniga:
+
+```powershell
+$env:PYTHONPATH = "."
+C:\Users\Admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe -m unittest discover -s tests
+```
+
 Väike esimene prototüüp, mis loeb Outlooki `.pst` faili, leiab võimalikud arved ning salvestab kontrolltabeli CSV ja JSON formaadis.
 
 ## Mida see praegu teeb

@@ -1,0 +1,54 @@
+# Roadmap
+
+This roadmap describes the intended direction for the invoice automation project. It is not a commitment to implement all items immediately.
+
+## Phase 0: Preserve the Working Prototype
+
+- Keep the current local Python application working.
+- Keep SQLite data and real invoice/bank files out of Git.
+- Maintain `SPECIFICATION.md` and `ARCHITECTURE_REVIEW.md` as product and architecture references.
+- Add repository hygiene files, test configuration, and contribution notes.
+
+## Phase 1: Stabilize the Legacy Codebase
+
+- Keep current behavior unchanged.
+- Add focused tests around extraction, matching, Merit payloads, and bank import.
+- Move risky business rules into documented, testable service functions only when necessary.
+- Avoid large refactors until the target architecture is ready.
+
+## Phase 2: Start the Target Django Stack
+
+- Add a Django project beside the current application.
+- Use PostgreSQL as the target database.
+- Use HTMX for server-rendered interactive workflows.
+- Add initial models for invoices, documents, bank transactions, imports, Merit operations, and reconciliation runs.
+- Add a one-way legacy SQLite import command.
+
+## Phase 3: Migrate Workflows Incrementally
+
+Recommended order:
+
+1. Invoice list and invoice detail review.
+2. Manual invoice upload.
+3. Bank statement import.
+4. Bank-to-invoice reconciliation with persisted match results.
+5. Read-only Merit sync.
+6. Bank vs Merit view.
+7. Merit invoice send.
+8. Merit payment send.
+9. Project/dimension sync.
+10. EMTA export preview and export.
+
+## Phase 4: Retire the Local Prototype UI
+
+- Keep reusable parsing/scoring modules.
+- Keep the old app as a reference until Django covers daily work.
+- Freeze the legacy web UI once replacement workflows are stable.
+
+## Guiding Principles
+
+- Do not lose working business logic.
+- Prefer small, auditable steps.
+- Keep external API writes explicit and logged.
+- Treat matching scores as evidence, not absolute truth.
+- Keep user confirmation in all tax/accounting-critical workflows.
