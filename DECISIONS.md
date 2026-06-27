@@ -102,3 +102,18 @@ Reason:
 - The product is expanding beyond invoice automation.
 - Future modules need shared platform layers, domain vocabulary, and engineering rules.
 - Architecture decisions should be documented before Codex continues implementation tasks.
+
+## ADR-008: Design the Domain Model Before Expanding Implementation
+
+Date: 2026-06-27
+
+Decision:
+
+- Expand the master architecture domain model before adding more Django models or migrations.
+- Treat `Document` and event history as platform roots, with accounting objects derived downstream.
+
+Reason:
+
+- The platform is becoming an AI Business Operating System, not only an invoice register.
+- Detailed domain vocabulary reduces the risk of prematurely coupling accounting, AI, workflow, learning, and integration concepts.
+- Future implementation tasks should be small and aligned with the domain design before code is added.

@@ -4,6 +4,8 @@ This roadmap describes the intended direction for the invoice automation project
 
 `MASTER_ARCHITECTURE.md` is the main architecture reference for aligning roadmap tasks with the broader AI Business Operating System vision.
 
+Current architecture phase: detailed domain design.
+
 ## Phase 0: Preserve the Working Prototype
 
 - Keep the current local Python application working.
