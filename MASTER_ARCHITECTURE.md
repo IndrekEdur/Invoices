@@ -650,7 +650,256 @@ Lifecycle: requested, submitted, applied by workflow, retained for audit and lea
 
 Future notes: user decisions are the bridge between AI suggestions and business responsibility.
 
-## 5. Document Engine
+## 5. Event Model
+
+The platform is event-driven. Important changes are recorded as events so the system can explain what happened, learn from confirmed actions, debug long-running processing, automate later steps, and provide future AI agents with trustworthy operational memory.
+
+Events are append-only. If a decision is corrected, the platform records a new event instead of rewriting the old one. This preserves history and keeps audit, learning, and debugging reliable.
+
+Events support:
+
+- audit trails for accounting and integration actions;
+- learning from user corrections and confirmations;
+- debugging imports, parsing, matching, and external sync;
+- automation triggers for review tasks, notifications, and follow-up processing;
+- future AI agents that need context about prior decisions and outcomes.
+
+### Event Categories
+
+#### Document Events
+
+Purpose: record the lifecycle of source files and generated artifacts.
+
+Typical payload: document id, source, filename, checksum, MIME type, size, parsing status, error details.
+
+Producer: document upload/import services, e-mail import, bank import, EMTA/Merit export generators, parsing jobs.
+
+Consumers: workflow engine, AI engine, review queues, audit log, knowledge engine, downstream accounting/banking modules.
+
+Retention/audit importance: high. Documents are evidence for later invoices, bank statements, exports, and user decisions.
+
+Concrete examples:
+
+- `DocumentReceived`
+- `DocumentStored`
+- `DocumentParsed`
+- `DocumentFailedParsing`
+
+#### Workflow Events
+
+Purpose: record process transitions, review state, and operational routing.
+
+Typical payload: target object type/id, previous status, new status, assigned user/role, reason, due date, review task id.
+
+Producer: workflow services, review UI, validators, import jobs, integration callbacks.
+
+Consumers: review inbox, notifications, audit log, progress views, dashboards, automation rules.
+
+Retention/audit importance: high. Workflow history explains why something is waiting, approved, rejected, blocked, or archived.
+
+Concrete examples:
+
+- `ReviewTaskCreated`
+- `ReviewTaskResolved`
+- `InvoiceCandidateCreated`
+- `InvoiceApproved`
+- `InvoiceRejected`
+
+#### AI Events
+
+Purpose: record AI/OCR/parsing/matching activity and changes in confidence.
+
+Typical payload: AI job id, model/provider, prompt template version, input document/version, output reference, confidence, reasons, errors.
+
+Producer: AI engine, OCR jobs, extraction services, matching services, validation services.
+
+Consumers: review UI, learning engine, audit log, knowledge engine, validation reporting.
+
+Retention/audit importance: high. AI output must be traceable because users and later agents need to know why a suggestion was made.
+
+Concrete examples:
+
+- `SupplierDetected`
+- `ConfidenceChanged`
+- `DocumentParsed`
+- `DocumentFailedParsing`
+
+#### Learning Events
+
+Purpose: record confirmed corrections and creation or use of learning rules.
+
+Typical payload: correction id, target object, field corrected, old value, new value, user id, rule id, evidence count.
+
+Producer: review UI, learning engine, user correction services, rule activation services.
+
+Consumers: learning engine, knowledge engine, AI prompt context builder, audit log, future automation.
+
+Retention/audit importance: high. Learning must be based on confirmed evidence and must remain explainable.
+
+Concrete examples:
+
+- `UserCorrectionCreated`
+- `SupplierCorrected`
+- `LearningRuleCreated`
+
+#### Accounting Events
+
+Purpose: record invoice and accounting-relevant lifecycle changes.
+
+Typical payload: invoice id, supplier id, document id, amount, VAT summary, status, external ids, validation summary.
+
+Producer: invoice extraction/review services, accounting services, Merit integration, EMTA export preview services.
+
+Consumers: audit log, Merit sync, EMTA preview, payment matching, reporting, notifications.
+
+Retention/audit importance: very high. Accounting events explain financial state and external system writes.
+
+Concrete examples:
+
+- `InvoiceCandidateCreated`
+- `InvoiceApproved`
+- `InvoiceRejected`
+- `InvoiceSentToMerit`
+
+#### Bank/Payment Events
+
+Purpose: record bank imports, transaction matching, and payment status changes.
+
+Typical payload: bank statement id, bank transaction id, invoice id, amount, currency, match score, match reasons, payment date.
+
+Producer: bank import services, reconciliation services, payment services, Merit payment sync.
+
+Consumers: accounting module, review tasks, audit log, reporting, Merit integration, notifications.
+
+Retention/audit importance: very high. Payment matching can affect accounting status and must be explainable.
+
+Concrete examples:
+
+- `BankStatementImported`
+- `BankTransactionMatched`
+- `PaymentMatched`
+- `PaymentSentToMerit`
+
+#### Integration Events
+
+Purpose: record external synchronization and API interactions.
+
+Typical payload: integration account id, provider, sync run id, object type, external id, item counts, request/response summary, error details.
+
+Producer: integration sync services, webhook handlers, external API clients.
+
+Consumers: audit log, workflow engine, notifications, external object mapping, retry logic, dashboards.
+
+Retention/audit importance: high. External writes and sync failures must be diagnosable.
+
+Concrete examples:
+
+- `IntegrationSyncStarted`
+- `IntegrationSyncCompleted`
+- `IntegrationSyncFailed`
+- `InvoiceSentToMerit`
+- `PaymentSentToMerit`
+
+#### User/Review Events
+
+Purpose: record human review, correction, approval, rejection, and explicit decisions.
+
+Typical payload: user id, review task id, target object, decision type, old value, new value, comment, timestamp.
+
+Producer: review UI, admin actions, approval screens, correction forms.
+
+Consumers: audit log, learning engine, workflow engine, notifications, knowledge engine.
+
+Retention/audit importance: very high. User decisions establish business responsibility and learning evidence.
+
+Concrete examples:
+
+- `UserCorrectionCreated`
+- `SupplierCorrected`
+- `ReviewTaskResolved`
+- `InvoiceApproved`
+- `InvoiceRejected`
+
+#### Knowledge Events
+
+Purpose: record creation, update, supersession, or retirement of company knowledge.
+
+Typical payload: knowledge fact id, source id, subject, predicate, object, confidence, source evidence, active flag.
+
+Producer: learning engine, knowledge curation UI, AI-assisted rule generation, integration imports.
+
+Consumers: AI engine, learning engine, matching services, reporting, future AI agents.
+
+Retention/audit importance: medium to high. Knowledge affects future suggestions and automation, so provenance matters.
+
+Concrete examples:
+
+- `KnowledgeFactCreated`
+- `LearningRuleCreated`
+- `ConfidenceChanged`
+
+### Event Payload Example
+
+```json
+{
+  "event_type": "SupplierCorrected",
+  "event_id": "evt_2026_000001",
+  "company_id": 1,
+  "occurred_at": "2026-06-27T12:30:00Z",
+  "actor": {
+    "type": "user",
+    "id": 42
+  },
+  "target": {
+    "type": "Invoice",
+    "id": 987
+  },
+  "causation_id": "evt_2026_000000",
+  "correlation_id": "corr_document_123",
+  "payload": {
+    "document_id": 123,
+    "field": "supplier",
+    "old_value": "ERLIN OÜ",
+    "new_value": "Esvika Elekter AS",
+    "confidence_before": 0.54,
+    "reason": "User corrected supplier after PDF review"
+  }
+}
+```
+
+The exact schema can evolve, but every event should preserve event type, actor, target, time, correlation, causation, and payload.
+
+### Event Flow Example
+
+```text
+Email attachment received
+-> DocumentReceived
+-> DocumentStored
+-> DocumentParsed
+-> SupplierDetected
+-> InvoiceCandidateCreated
+-> ReviewTaskCreated
+-> UserCorrectionCreated
+-> SupplierCorrected
+-> LearningRuleCreated
+-> InvoiceApproved
+-> InvoiceSentToMerit
+-> PaymentMatched
+```
+
+This flow shows how the system moves from raw input to accounting action without losing traceability. Each step can be inspected, retried, corrected, or used as learning evidence.
+
+### WorkflowEvent vs DomainEvent vs AuditEvent
+
+`WorkflowEvent` records process movement: review tasks, status changes, assignments, approvals, rejections, and operational state. It answers "where is this item in the process?"
+
+`DomainEvent` records that a meaningful business fact happened inside the domain. It can trigger handlers and automation. It answers "what business thing happened?"
+
+`AuditEvent` records durable accountability for important actions, especially high-risk or externally visible actions. It answers "who or what changed this, when, from what, to what, and why?"
+
+These may refer to the same underlying action but serve different purposes. For example, approving an invoice can create a domain event (`InvoiceApproved`), a workflow event (review task resolved and invoice status changed), and an audit event (user approved invoice X with amount Y).
+
+## 6. Document Engine
 
 `Document` is the root object because everything important starts as a file or generated artifact:
 
@@ -666,7 +915,7 @@ The document layer gives every file a stable identity before domain interpretati
 
 This prevents later modules from duplicating file metadata. An invoice, bank statement, EMTA export, or Merit import should reference a document rather than reinventing file identity and storage fields.
 
-## 6. Workflow Engine
+## 7. Workflow Engine
 
 The platform should use an event-driven process model. Instead of hiding business transitions inside views or scripts, important steps are recorded as workflow events.
 
@@ -684,7 +933,7 @@ Example event chain:
 
 Workflow events should support progress views, review queues, retries, audit trails, and future automation. They also make it easier to understand why a document is waiting, approved, blocked, sent, or archived.
 
-## 7. AI Engine
+## 8. AI Engine
 
 The AI Engine supports:
 
@@ -703,7 +952,7 @@ AI outputs must be stored with context: input reference, prompt/template version
 
 AI should make low-risk automation faster and high-risk decisions clearer, but it should not silently create accounting consequences.
 
-## 8. Learning Engine
+## 9. Learning Engine
 
 The system learns from confirmed user actions and repeated high-confidence outcomes.
 
@@ -721,7 +970,7 @@ Learning outputs can include supplier aliases, extraction hints, project allocat
 
 A learning rule should contain evidence: what was corrected, by whom, when, how often it repeated, and which future cases it applies to.
 
-## 9. Knowledge Engine
+## 10. Knowledge Engine
 
 The platform should capture company knowledge, not only data.
 
@@ -735,7 +984,7 @@ Examples:
 
 Knowledge facts should be reusable by AI prompts, matching algorithms, workflow decisions, and reporting. They should also be reviewable, because outdated company knowledge can become a source of systematic errors.
 
-## 10. Accounting Module
+## 11. Accounting Module
 
 The accounting module will build on the document, workflow, AI, learning, and integration layers.
 
@@ -760,7 +1009,7 @@ Accounting objects must preserve enough evidence to answer:
 - Which bank transaction paid it?
 - What is included in an EMTA preview?
 
-## 11. Integrations
+## 12. Integrations
 
 Planned integrations include:
 
@@ -773,7 +1022,7 @@ Planned integrations include:
 
 Integrations should separate read sync from write operations. Reads can often be automated. Writes to accounting, banking, or tax systems need previews, confirmation, audit logs, and stored request/response records.
 
-## 12. Security and Audit
+## 13. Security and Audit
 
 Security and audit requirements:
 
@@ -785,7 +1034,7 @@ Security and audit requirements:
 
 The system should treat accounting and banking data as sensitive by default.
 
-## 13. Migration Strategy
+## 14. Migration Strategy
 
 The legacy app remains working while the Django platform grows in parallel. Migration happens module by module, not through a large rewrite.
 
@@ -804,7 +1053,7 @@ Reusable code should be extracted into framework-light services where practical.
 
 The legacy UI can remain the daily tool until replacement workflows are stable in Django.
 
-## 14. Future Modules
+## 15. Future Modules
 
 Future business modules can reuse the same platform foundations:
 
@@ -819,7 +1068,7 @@ Future business modules can reuse the same platform foundations:
 
 These modules should not start from scratch. They should use documents, workflows, AI jobs, learning rules, knowledge facts, integrations, notifications, and audit events.
 
-## 15. Engineering Rules
+## 16. Engineering Rules
 
 - Work in small tasks.
 - Use one commit per task.
@@ -831,7 +1080,7 @@ These modules should not start from scratch. They should use documents, workflow
 - Add migrations only when domain models change.
 - Keep external API writes explicit, logged, and confirmed.
 
-## 16. Roadmap Alignment
+## 17. Roadmap Alignment
 
 Current phase:
 

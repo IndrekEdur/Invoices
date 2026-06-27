@@ -117,3 +117,18 @@ Reason:
 - The platform is becoming an AI Business Operating System, not only an invoice register.
 - Detailed domain vocabulary reduces the risk of prematurely coupling accounting, AI, workflow, learning, and integration concepts.
 - Future implementation tasks should be small and aligned with the domain design before code is added.
+
+## ADR-009: Event Model Is Append-Only and Becomes the Backbone of Audit and Learning
+
+Date: 2026-06-27
+
+Decision:
+
+- Important platform changes must be recorded as append-only events.
+- Event history becomes a shared foundation for audit, learning, debugging, automation, and future AI agents.
+
+Reason:
+
+- Accounting, banking, tax, integration, and AI decisions must remain traceable.
+- Learning from corrections requires reliable historical evidence.
+- Append-only events preserve what happened even when a later correction changes business state.
