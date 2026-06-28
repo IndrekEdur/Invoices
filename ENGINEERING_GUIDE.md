@@ -138,6 +138,7 @@ Examples:
 Service rules:
 
 - Business code should use domain services when available instead of creating important domain models directly. For example, use `AuditService.record(...)` instead of `AuditEvent.objects.create(...)`.
+- Service inputs should use Command objects whenever multiple business parameters are required. A Command object gives the action a named input shape, keeps method signatures stable as fields are added, and makes service calls easier to test and review.
 - One service method should perform one clear business action.
 - Services should emit events for important changes.
 - Services should return structured results, not only booleans.
