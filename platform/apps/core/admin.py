@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import AppUserProfile, AuditEvent, Organization
+from .models import AppUserProfile, AuditEvent, Organization, OrganizationConfiguration
 
 
 @admin.register(Organization)
@@ -9,6 +9,21 @@ class OrganizationAdmin(admin.ModelAdmin):
     list_filter = ("organization_type", "is_active", "country", "currency")
     search_fields = ("name", "legal_name", "registration_number", "vat_number")
     readonly_fields = ("uuid", "created_at", "updated_at")
+
+
+@admin.register(OrganizationConfiguration)
+class OrganizationConfigurationAdmin(admin.ModelAdmin):
+    list_display = (
+        "organization",
+        "default_currency",
+        "default_timezone",
+        "language",
+        "auto_approval_enabled",
+        "auto_approval_threshold",
+    )
+    list_filter = ("default_currency", "language", "auto_approval_enabled")
+    search_fields = ("organization__name", "organization__legal_name")
+    readonly_fields = ("created_at", "updated_at")
 
 
 @admin.register(AppUserProfile)

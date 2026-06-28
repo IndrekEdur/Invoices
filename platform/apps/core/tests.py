@@ -1,7 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.test import SimpleTestCase, TestCase
 
-from .models import AppUserProfile, AuditEvent, Organization
+from .models import AppUserProfile, AuditEvent, Organization, OrganizationConfiguration
 from .services import AuditService
 
 
@@ -43,6 +43,58 @@ class OrganizationModelTests(TestCase):
         organization = Organization.objects.create(name="Readable name")
 
         self.assertEqual(str(organization), "Readable name")
+
+
+class OrganizationConfigurationModelTests(TestCase):
+    def test_can_create_organization_configuration(self):
+        organization = Organization.objects.create(name="Erlin")
+
+        configuration = OrganizationConfiguration.objects.create(
+            organization=organization,
+            metadata={"source": "test"},
+        )
+
+        self.assertIsNotNone(configuration.id)
+        self.assertEqual(configuration.metadata, {"source": "test"})
+
+    def test_defaults_are_correct(self):
+        organization = Organization.objects.create(name="Default config")
+
+        configuration = OrganizationConfiguration.objects.create(organization=organization)
+
+        self.assertEqual(configuration.default_currency, "EUR")
+        self.assertEqual(configuration.default_timezone, "Europe/Tallinn")
+        self.assertEqual(configuration.language, "et")
+        self.assertEqual(configuration.date_format, "YYYY-MM-DD")
+        self.assertEqual(configuration.number_format, "1 234,56")
+
+    def test_linked_to_organization(self):
+        organization = Organization.objects.create(name="Linked config")
+
+        configuration = OrganizationConfiguration.objects.create(organization=organization)
+
+        self.assertEqual(configuration.organization, organization)
+        self.assertEqual(organization.configuration, configuration)
+
+    def test_auto_approval_enabled_defaults_false(self):
+        organization = Organization.objects.create(name="Manual approval")
+
+        configuration = OrganizationConfiguration.objects.create(organization=organization)
+
+        self.assertFalse(configuration.auto_approval_enabled)
+
+    def test_auto_approval_threshold_defaults_zero(self):
+        organization = Organization.objects.create(name="Zero threshold")
+
+        configuration = OrganizationConfiguration.objects.create(organization=organization)
+
+        self.assertEqual(configuration.auto_approval_threshold, 0)
+
+    def test_str_works(self):
+        organization = Organization.objects.create(name="Readable config")
+        configuration = OrganizationConfiguration.objects.create(organization=organization)
+
+        self.assertEqual(str(configuration), "Configuration for Readable config")
 
 
 class AppUserProfileModelTests(TestCase):

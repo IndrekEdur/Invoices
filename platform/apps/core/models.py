@@ -33,6 +33,26 @@ class Organization(models.Model):
         return self.name
 
 
+class OrganizationConfiguration(models.Model):
+    organization = models.OneToOneField(Organization, on_delete=models.CASCADE, related_name="configuration")
+    default_currency = models.CharField(max_length=3, default="EUR")
+    default_timezone = models.CharField(max_length=64, default="Europe/Tallinn")
+    language = models.CharField(max_length=16, default="et")
+    date_format = models.CharField(max_length=32, default="YYYY-MM-DD")
+    number_format = models.CharField(max_length=32, default="1 234,56")
+    auto_approval_enabled = models.BooleanField(default=False)
+    auto_approval_threshold = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["organization__name", "id"]
+
+    def __str__(self) -> str:
+        return f"Configuration for {self.organization}"
+
+
 class AppUserProfile(models.Model):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="app_profile")
     active_organization = models.ForeignKey(
