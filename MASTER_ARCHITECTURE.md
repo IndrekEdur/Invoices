@@ -26,11 +26,11 @@ This document is the central long-term architecture reference for the project. M
 
 ## 1. Vision
 
-The product is a Cognitive Business Platform: a practical internal platform that helps a company receive information, understand it, route it through review workflows, learn from corrections, and execute approved business actions.
+The product is a Cognitive Business Platform: a practical internal platform that helps an organization receive information, understand it, route it through review workflows, learn from corrections, and execute approved business actions.
 
 Accounting and invoice automation is the first real module because it has immediate value and clear data flows: documents, invoices, suppliers, bank transactions, Merit, and EMTA. It is not the whole product. The platform must later support wider business workflows such as quotations, projects, procurement, BIM/IFC tooling, CRM, fleet management, inventory, reporting, and business intelligence.
 
-The goal is not to replace human responsibility. The goal is to reduce repetitive work, make decisions traceable, and help the company build reusable operational knowledge.
+The goal is not to replace human responsibility. The goal is to reduce repetitive work, make decisions traceable, and help the organization build reusable operational knowledge.
 
 ## 2. Product Principles
 
@@ -45,7 +45,7 @@ The goal is not to replace human responsibility. The goal is to reduce repetitiv
 
 ### Core
 
-Core contains shared technical foundations: settings, company context, user profiles, permissions, time handling, shared identifiers, and common UI conventions.
+Core contains shared technical foundations: settings, organization context, user profiles, permissions, time handling, shared identifiers, and common UI conventions.
 
 ### Documents
 
@@ -57,7 +57,7 @@ Workflow stores event-driven process state. It records what happened, who or wha
 
 ### Policy Layer
 
-The Policy Layer decides what actions are allowed based on company rules, risk, confidence, permissions, thresholds, trust, history, and compliance rules.
+The Policy Layer decides what actions are allowed based on organization rules, risk, confidence, permissions, thresholds, trust, history, and compliance rules.
 
 ### Cognitive Layer
 
@@ -69,7 +69,7 @@ The Learning Engine turns confirmed corrections into reusable rules, aliases, la
 
 ### Knowledge Engine
 
-The Knowledge Engine stores company knowledge, not only raw data. It should preserve recurring patterns, approved exceptions, supplier-specific behavior, project allocation rules, and account selection logic.
+The Knowledge Engine stores organization knowledge, not only raw data. It should preserve recurring patterns, approved exceptions, party/supplier-specific behavior, project allocation rules, and account selection logic.
 
 ### Integrations
 
@@ -103,58 +103,121 @@ Business Modules
 
 Invoice is not the root object. Document and Event are the platform roots.
 
+The platform root tenant is `Organization`: The top-level tenant of the platform. An Organization can represent a Company, Sole Proprietor, Non-profit, Government, or Other tenant type. Accounting modules operate inside an Organization; accounting concepts such as Supplier and Customer are business roles, not platform roots.
+
+`Party` represents any legal or natural person that may appear in business documents. Supplier, Customer, Employee, Partner, Contractor, bank, tax authority, consultant, and subcontractor identities should first be modeled as parties and then interpreted through module-specific roles.
+
 Documents represent source material and generated artifacts. Events represent what happened to those documents and to the business objects derived from them. Invoices, bank transactions, supplier matches, payment matches, and accounting exports are downstream interpretations.
 
 ### Relationship Map
 
 ```text
+Organization -> Document -> Invoice -> Party -> SupplierRole
+Organization -> WorkflowEvent
+Organization -> KnowledgeFact
+Organization -> Party -> Supplier
+Organization -> Party -> Customer
+Organization -> Party -> Employee
+Organization -> Party -> Partner
 Document -> Invoice -> InvoiceLine
 Document -> WorkflowEvent
 Document -> ProcessingJob -> AIJob -> ExtractionResult
-Invoice -> Supplier
+Invoice -> Party
+Party -> SupplierRole
+Party -> CustomerRole
 Invoice -> PaymentMatch -> BankTransaction
 BankStatement -> BankTransaction
 UserCorrection -> LearningRule -> KnowledgeFact
-SupplierAlias -> Supplier
+SupplierAlias -> SupplierRole
 IntegrationSyncRun -> ExternalObjectMapping
 ReviewTask -> UserDecision -> WorkflowEvent
 ```
 
+Business flow example:
+
+```text
+Organization
+  -> Document
+  -> Invoice
+  -> Party
+  -> Supplier Role
+  -> Payment
+  -> Workflow
+  -> Knowledge
+```
+
 ### A. Core Domain
 
-#### Company
+#### Organization
 
-Purpose: tenant and business context for all operational data.
+Purpose: The top-level tenant of the platform.
 
-Key fields: legal name, registry code, VAT number, default currency, country, active flag, created/updated timestamps.
+Key fields: organization type, legal name, display name, registry code, VAT number, tax identifier, default currency, country, active flag, created/updated timestamps.
 
-Relationships: owns documents, invoices, suppliers, bank statements, integration accounts, users, workflow events, audit events, learning rules, and knowledge facts.
+Relationships: owns documents, parties, invoices, bank statements, integration accounts, users, workflow events, audit events, learning rules, and knowledge facts.
 
-Lifecycle: created during setup, configured with company metadata, used as the root data boundary, archived only when the company is no longer active.
+Lifecycle: created during setup, configured with tenant metadata, used as the root data boundary, archived only when the organization is no longer active.
 
-Future notes: multi-company support must be designed around Company from the beginning so accounting and banking data never leak between companies.
+Future notes: multi-organization support must be designed around Organization from the beginning so accounting, banking, workflow, and knowledge data never leak between tenants.
+
+Example organization types:
+
+- Company
+- Sole Proprietor
+- Non-profit
+- Government
+- Other
+
+#### Party
+
+Purpose: Represents any legal or natural person that may appear in business documents.
+
+Key fields: organization, party type, legal name, display name, registry code, VAT number, tax identifier, IBANs, e-mail domains, addresses, active flag, metadata, created/updated timestamps.
+
+Relationships: belongs to one Organization; can have business roles such as SupplierRole, CustomerRole, PartnerRole, ContractorRole, EmployeeRole, or authority/bank classifications; links to documents, invoices, payments, bank transactions, learning rules, and knowledge facts.
+
+Lifecycle: detected from documents, imported from integrations, confirmed by users, enriched with identifiers and aliases, merged when duplicates are found, archived when no longer active.
+
+Future notes: Party identity should be evidence-based. Role-specific accounting behavior belongs in business modules so the platform can support non-accounting modules without redefining the same person or legal entity.
+
+Examples:
+
+- supplier
+- customer
+- subcontractor
+- consultant
+- bank
+- employee
+- tax authority
+
+Future role examples:
+
+- SupplierRole
+- CustomerRole
+- PartnerRole
+- ContractorRole
 
 #### User/Profile
 
 Purpose: represents a human actor and their workflow preferences.
 
-Key fields: user account, display name, e-mail, active company, language, notification settings, approval limits, created/updated timestamps.
+Key fields: user account, display name, e-mail, active organization, language, notification settings, approval limits, created/updated timestamps.
 
-Relationships: belongs to one or more companies through roles, creates user corrections, decisions, approvals, audit events, and review task actions.
+Relationships: belongs to one or more organizations through roles, creates user corrections, decisions, approvals, audit events, and review task actions.
 
 Lifecycle: invited, activated, assigned roles, used in workflows, deactivated when access should end.
 
-Future notes: profile-level preferences can tune review queues, default filters, and notification routing without changing company-wide rules.
+Future notes: profile-level preferences can tune review queues, default filters, and notification routing without changing organization-wide rules.
 
 #### Role/Permission
 
 Purpose: controls what a user can view, correct, approve, export, or send to external systems.
 
-Key fields: role name, permission code, scope, company, active flag.
+Key fields: role name, permission code, scope, organization, active flag.
 
 Relationships: assigned to users/profiles, checked by workflow actions, admin pages, integration writes, EMTA exports, and payment operations.
 
-Lifecycle: created from default role templates, adjusted per company, reviewed periodically, retired when no longer used.
+Lifecycle: created from default role templates, adjusted per organization, reviewed periodically, retired when no longer used.
 
 Future notes: high-risk actions need explicit permissions, especially Merit writes, bank payment preparation, EMTA export approval, and learning rule activation.
 
@@ -162,9 +225,9 @@ Future notes: high-risk actions need explicit permissions, especially Merit writ
 
 Purpose: durable trace of important business and system decisions.
 
-Key fields: actor, company, event type, target object type/id, before/after values, reason, source, timestamp, request id.
+Key fields: actor, organization, event type, target object type/id, before/after values, reason, source, timestamp, request id.
 
-Relationships: linked to users, companies, documents, invoices, payments, integrations, AI jobs, and workflow events.
+Relationships: linked to users, organizations, documents, invoices, payments, integrations, AI jobs, and workflow events.
 
 Lifecycle: created automatically when important actions occur, retained long term, queried for investigation and compliance.
 
@@ -226,7 +289,7 @@ Future notes: relationship types should remain explicit: derived_from, replaces,
 
 Purpose: records a meaningful process event for a document or domain object.
 
-Key fields: company, event type, target object, actor, payload, status, created timestamp.
+Key fields: organization, event type, target object, actor, payload, status, created timestamp.
 
 Relationships: links documents, invoices, users, processing jobs, review tasks, learning rules, and audit events.
 
@@ -274,23 +337,35 @@ Future notes: status transitions should prevent invisible state changes in high-
 
 #### Supplier
 
-Purpose: known supplier or business partner.
+Purpose: business role of a Party when that party acts as a supplier, vendor, subcontractor, or purchase invoice issuer.
 
-Key fields: name, registry code, VAT number, IBANs, e-mail domains, address, active flag, metadata.
+Key fields: party, supplier number, default expense account, default VAT treatment, default payment terms, trusted payment IBANs, active flag, metadata.
 
-Relationships: has aliases, invoices, payments, learning rules, and external mappings.
+Relationships: belongs to a Party; has aliases, purchase invoices, payments, learning rules, and external mappings.
 
-Lifecycle: created from Merit sync, invoice extraction, or user review; merged when duplicates are found; archived when no longer active.
+Lifecycle: role is created from Merit sync, invoice extraction, or user review; merged through the underlying Party when duplicates are found; archived when no longer active as a supplier.
 
-Future notes: supplier identity should be evidence-based and support fuzzy matching without hiding uncertainty.
+Future notes: supplier-specific behavior should not duplicate Party identity fields. Supplier matching should first resolve the Party, then decide whether the Supplier role applies.
+
+#### Customer
+
+Purpose: business role of a Party when that party acts as a customer, sales invoice recipient, or buyer.
+
+Key fields: party, customer number, billing e-mail, default payment terms, default revenue account, credit status, active flag, metadata.
+
+Relationships: belongs to a Party; has sales invoices, payments, workflow events, learning rules, and external mappings.
+
+Lifecycle: role is created from sales invoice sync, CRM import, manual review, or integration data; archived when no longer active as a customer.
+
+Future notes: the same Party can be both Supplier and Customer. Role separation prevents accounting behavior from corrupting shared identity data.
 
 #### SupplierAlias
 
-Purpose: alternative names and identifiers that help match documents to suppliers.
+Purpose: alternative names and identifiers that help match documents to supplier roles through the underlying Party.
 
 Key fields: supplier, alias type, value, confidence, source, active flag, created timestamp.
 
-Relationships: belongs to supplier; derived from documents, corrections, Merit data, bank transactions, and learning rules.
+Relationships: belongs to a supplier role and should reference the underlying Party identity; derived from documents, corrections, Merit data, bank transactions, and learning rules.
 
 Lifecycle: proposed by AI or matching, confirmed by user or high-confidence sync, used in future matching.
 
@@ -300,9 +375,9 @@ Future notes: aliases should preserve provenance so bad aliases can be traced an
 
 Purpose: accounting interpretation of a document as a purchase or sales invoice.
 
-Key fields: document, invoice type, supplier/customer, invoice number, issue date, due date, currency, net amount, VAT amount, gross amount, status, external ids.
+Key fields: document, invoice type, party, supplier role, customer role, invoice number, issue date, due date, currency, net amount, VAT amount, gross amount, status, external ids.
 
-Relationships: references document, supplier, invoice lines, payment matches, workflow events, Merit mappings, and audit events.
+Relationships: references document, party, supplier/customer role, invoice lines, payment matches, workflow events, Merit mappings, and audit events.
 
 Lifecycle: drafted from extraction, reviewed, approved, sent/synced, paid/matched, archived, or rejected.
 
@@ -384,7 +459,7 @@ Future notes: match reasons are as important as score because users need to unde
 
 #### Project
 
-Purpose: company project, object, or job used for allocation and profitability.
+Purpose: organization project, object, or job used for allocation and profitability.
 
 Key fields: code, name, status, year, customer, start/end dates, external id, metadata.
 
@@ -532,21 +607,21 @@ Future notes: layout fingerprints and supplier invoice formats belong here.
 
 #### SupplierMemory
 
-Purpose: learned supplier-specific behavior.
+Purpose: learned supplier-role-specific behavior for a Party.
 
-Key fields: supplier, known IBANs, e-mail domains, invoice number patterns, default VAT/account/project hints, evidence count.
+Key fields: party, supplier role, known IBANs, e-mail domains, invoice number patterns, default VAT/account/project hints, evidence count.
 
-Relationships: linked to supplier, supplier aliases, learning rules, invoices, and corrections.
+Relationships: linked to party, supplier role, supplier aliases, learning rules, invoices, and corrections.
 
 Lifecycle: built from confirmed invoices and corrections, updated over time, disabled or corrected when wrong.
 
-Future notes: supplier memory should improve matching without pretending uncertain data is certain.
+Future notes: supplier memory should improve role-specific matching without pretending uncertain Party data is certain.
 
 #### AccountAssignmentMemory
 
 Purpose: learned account/category allocation behavior.
 
-Key fields: supplier, description pattern, cost category, account, VAT treatment, project/dimension hints, evidence count.
+Key fields: party, supplier role, description pattern, cost category, account, VAT treatment, project/dimension hints, evidence count.
 
 Relationships: linked to invoice lines, cost categories, learning rules, user corrections, and knowledge facts.
 
@@ -558,7 +633,7 @@ Future notes: line-level memories are important for recurring suppliers with mix
 
 #### KnowledgeFact
 
-Purpose: structured company knowledge that can support future decisions.
+Purpose: structured organization knowledge that can support future decisions.
 
 Key fields: subject, predicate, object, confidence, source, active flag, created/updated timestamps.
 
@@ -594,7 +669,7 @@ Future notes: sources allow old, low-trust, or superseded knowledge to be filter
 
 #### BusinessMemoryEntry
 
-Purpose: human-readable memory of company-specific behavior.
+Purpose: human-readable memory of organization-specific behavior.
 
 Key fields: title, text, category, scope, source, active flag, created/updated timestamps.
 
@@ -602,7 +677,7 @@ Relationships: linked to knowledge facts, learning rules, suppliers, projects, a
 
 Lifecycle: written by users or generated from confirmed patterns, reviewed, used by AI/context, archived.
 
-Future notes: business memory can make the system feel like it remembers how the company actually works.
+Future notes: business memory can make the system feel like it remembers how the organization actually works.
 
 ### I. Integration Domain
 
@@ -610,7 +685,7 @@ Future notes: business memory can make the system feel like it remembers how the
 
 Purpose: configured external system connection.
 
-Key fields: company, provider, display name, credentials reference, status, scopes, last sync timestamp, metadata.
+Key fields: organization, provider, display name, credentials reference, status, scopes, last sync timestamp, metadata.
 
 Relationships: owns sync runs, external object mappings, webhook events, and audit events.
 
@@ -660,7 +735,7 @@ Future notes: webhooks should be idempotent and signed/verified where the provid
 
 Purpose: user-facing task requiring review, correction, approval, or rejection.
 
-Key fields: company, assigned user/role, task type, target object, priority, due date, status, created/resolved timestamps.
+Key fields: organization, assigned user/role, task type, target object, priority, due date, status, created/resolved timestamps.
 
 Relationships: linked to documents, invoices, validation results, AI jobs, workflow events, and user decisions.
 
@@ -777,7 +852,8 @@ Retention/audit importance: high. AI output must be traceable because users and 
 
 Concrete examples:
 
-- `SupplierDetected`
+- `PartyDetected`
+- `SupplierRoleDetected`
 - `ConfidenceChanged`
 - `DocumentParsed`
 - `DocumentFailedParsing`
@@ -797,7 +873,8 @@ Retention/audit importance: high. Learning must be based on confirmed evidence a
 Concrete examples:
 
 - `UserCorrectionCreated`
-- `SupplierCorrected`
+- `PartyCorrected`
+- `SupplierRoleCorrected`
 - `LearningRuleCreated`
 
 #### Accounting Events
@@ -873,14 +950,15 @@ Retention/audit importance: very high. User decisions establish business respons
 Concrete examples:
 
 - `UserCorrectionCreated`
-- `SupplierCorrected`
+- `PartyCorrected`
+- `SupplierRoleCorrected`
 - `ReviewTaskResolved`
 - `InvoiceApproved`
 - `InvoiceRejected`
 
 #### Knowledge Events
 
-Purpose: record creation, update, supersession, or retirement of company knowledge.
+Purpose: record creation, update, supersession, or retirement of organization knowledge.
 
 Typical payload: knowledge fact id, source id, subject, predicate, object, confidence, source evidence, active flag.
 
@@ -900,9 +978,9 @@ Concrete examples:
 
 ```json
 {
-  "event_type": "SupplierCorrected",
+  "event_type": "SupplierRoleCorrected",
   "event_id": "evt_2026_000001",
-  "company_id": 1,
+  "organization_id": 1,
   "occurred_at": "2026-06-27T12:30:00Z",
   "actor": {
     "type": "user",
@@ -934,11 +1012,13 @@ Email attachment received
 -> DocumentReceived
 -> DocumentStored
 -> DocumentParsed
--> SupplierDetected
+-> PartyDetected
+-> SupplierRoleDetected
 -> InvoiceCandidateCreated
 -> ReviewTaskCreated
 -> UserCorrectionCreated
--> SupplierCorrected
+-> PartyCorrected
+-> SupplierRoleCorrected
 -> LearningRuleCreated
 -> InvoiceApproved
 -> InvoiceSentToMerit
@@ -965,19 +1045,20 @@ Example event chain:
 
 1. `DocumentReceived`
 2. `DocumentParsed`
-3. `SupplierMatched`
-4. `UserCorrectedSupplier`
-5. `LearningRuleCreated`
-6. `InvoiceApproved`
-7. `InvoiceSentToMerit`
-8. `PaymentMatched`
-9. `Archived`
+3. `PartyMatched`
+4. `SupplierRoleDetected`
+5. `UserCorrectedSupplierRole`
+6. `LearningRuleCreated`
+7. `InvoiceApproved`
+8. `InvoiceSentToMerit`
+9. `PaymentMatched`
+10. `Archived`
 
 Workflow events should support progress views, review queues, retries, audit trails, and future automation. They also make it easier to understand why a document is waiting, approved, blocked, sent, or archived.
 
 ## 8. Policy Layer Architecture
 
-AI does not decide business actions directly. The Cognitive Layer provides evidence, suggestions, validation results, confidence scores, and recommendations. The Policy Layer applies company rules and decides whether an action is allowed, denied, or requires review. Workflow then executes allowed transitions and the Event Store records the decision.
+AI does not decide business actions directly. The Cognitive Layer provides evidence, suggestions, validation results, confidence scores, and recommendations. The Policy Layer applies organization rules and decides whether an action is allowed, denied, or requires review. Workflow then executes allowed transitions and the Event Store records the decision.
 
 The Policy Layer sits between business process/workflow and the Cognitive Layer:
 
@@ -988,7 +1069,7 @@ Workflow -> Executes transition
 Event Store -> Records decision
 ```
 
-Policy decisions consider company rules, risk level, confidence, user permissions, amount limits, supplier trust, history, and compliance rules.
+Policy decisions consider organization rules, risk level, confidence, user permissions, amount limits, supplier trust, party history, and compliance rules.
 
 Auto-approve invoice only if:
 
@@ -1016,7 +1097,7 @@ Never allow silent high-risk accounting changes.
 
 Purpose: one explicit rule that allows, denies, requires review, or modifies an action.
 
-Inputs: action type, company, user, target object, confidence score, validation results, risk level, history, supplier trust, amount.
+Inputs: action type, organization, user, target object, confidence score, validation results, risk level, history, supplier trust, amount.
 
 Outputs: rule result, reason, severity, and evidence.
 
@@ -1038,7 +1119,7 @@ Relationship to events: risk changes can produce `ConfidenceChanged`, review, or
 
 Relationship to audit: risk classification explains why a user approval was required.
 
-Future implementation notes: risk levels should be configurable by company and workflow.
+Future implementation notes: risk levels should be configurable by organization and workflow.
 
 #### ApprovalPolicy
 
@@ -1058,7 +1139,7 @@ Future implementation notes: support single-user, role-based, and multi-step app
 
 Purpose: decide whether a low-risk action can run without manual review.
 
-Inputs: confidence, risk level, validation status, action reversibility, company settings, historical success.
+Inputs: confidence, risk level, validation status, action reversibility, organization settings, historical success.
 
 Outputs: allow automation, deny automation, or require review.
 
@@ -1072,19 +1153,19 @@ Future implementation notes: automation should start conservative and expand onl
 
 Purpose: decide whether a supplier is trusted for specific actions.
 
-Inputs: supplier history, aliases, IBAN history, VAT/registry matches, prior corrections, prior approvals, external mappings.
+Inputs: supplier role history, party aliases, IBAN history, VAT/registry matches, prior corrections, prior approvals, external mappings.
 
 Outputs: trust level, trust reasons, required review conditions.
 
-Relationship to events: supplier trust changes can produce knowledge and learning events.
+Relationship to events: supplier trust changes can produce party, knowledge, and learning events.
 
 Relationship to audit: supplier trust must explain why automation was allowed or blocked.
 
-Future implementation notes: trust is action-specific; a supplier may be trusted for recognition but not for IBAN changes.
+Future implementation notes: trust is action-specific; a Party may be recognized confidently while its Supplier role still requires review for IBAN changes.
 
 #### AmountThresholdPolicy
 
-Purpose: apply company-specific amount limits to approvals and automation.
+Purpose: apply organization-specific amount limits to approvals and automation.
 
 Inputs: gross amount, currency, invoice type, user role, supplier trust, project, cost category.
 
@@ -1126,7 +1207,7 @@ Future implementation notes: use a stable payload shape so decisions can be show
 
 ## 9. Cognitive Layer Architecture
 
-The Cognitive Layer is not only LLM/AI. It is the set of engines that turn raw documents, events, history, and company knowledge into explainable suggestions and reviewable decisions.
+The Cognitive Layer is not only LLM/AI. It is the set of engines that turn raw documents, events, history, and organization knowledge into explainable suggestions and reviewable decisions.
 
 AI is not the system center. The center is business process, append-only events, and human-approved knowledge. The Cognitive Layer supports the process; it does not replace responsibility for accounting, tax, banking, or operational decisions.
 
@@ -1143,6 +1224,18 @@ Document
 -> Learning Engine
 -> Knowledge Engine
 ```
+
+### Party Recognition Flow
+
+Earlier architecture notes may describe this as supplier recognition. The target flow is more precise:
+
+```text
+Supplier recognition
+-> Party recognition
+-> Supplier role detection
+```
+
+This separation is useful because the same legal or natural person can appear as a supplier, customer, subcontractor, consultant, employee, bank, or tax authority in different workflows. Party recognition identifies who the document refers to; role detection decides what that party is doing in the current business context. This keeps shared identity evidence, such as registry code, VAT number, IBAN, aliases, and e-mail domains, separate from accounting-specific behavior such as default accounts, payment terms, supplier trust, or customer billing rules.
 
 ### OCR Engine
 
@@ -1162,11 +1255,11 @@ What it must not do: it must not decide supplier, VAT, project, payment, or acco
 
 Purpose: extract structured candidates from document text and metadata.
 
-Inputs: OCR text, embedded PDF text, XML content, e-mail metadata, filename, document source, known supplier patterns, prompt outputs.
+Inputs: OCR text, embedded PDF text, XML content, e-mail metadata, filename, document source, known party patterns, supplier role patterns, prompt outputs.
 
-Outputs: candidate fields such as invoice number, issue date, due date, supplier, registry code, VAT number, IBAN, amounts, VAT rates, project codes, invoice lines, and raw extraction evidence.
+Outputs: candidate fields such as invoice number, issue date, due date, party, supplier/customer role, registry code, VAT number, IBAN, amounts, VAT rates, project codes, invoice lines, and raw extraction evidence.
 
-Relationship to events: produces extraction results and events such as `SupplierDetected`, `InvoiceCandidateCreated`, `DocumentParsed`, and `ConfidenceChanged`.
+Relationship to events: produces extraction results and events such as `PartyDetected`, `SupplierRoleDetected`, `InvoiceCandidateCreated`, `DocumentParsed`, and `ConfidenceChanged`.
 
 Relationship to human review: extracted fields should be shown with evidence and confidence so users can correct them quickly.
 
@@ -1176,7 +1269,7 @@ What it must not do: it must not silently create approved accounting records or 
 
 Purpose: check extracted and entered data against rules, arithmetic, registries, historical data, and accounting constraints.
 
-Inputs: extraction results, document metadata, invoice candidates, supplier data, VAT rules, line totals, bank data, Merit snapshots, company settings.
+Inputs: extraction results, document metadata, invoice candidates, party data, supplier/customer role data, VAT rules, line totals, bank data, Merit snapshots, organization settings.
 
 Outputs: validation results, warnings, blocking errors, explanations, suggested corrections.
 
@@ -1190,7 +1283,7 @@ What it must not do: it must not hide failed validations or silently adjust acco
 
 Purpose: calculate confidence from multiple evidence sources and produce explainable confidence scores.
 
-Inputs: OCR quality, extraction consistency, IBAN match, VAT number match, registry code match, supplier history, invoice number pattern, e-mail sender, previous corrections, layout similarity, amount arithmetic, duplicate checks, and validation results.
+Inputs: OCR quality, extraction consistency, IBAN match, VAT number match, registry code match, party history, supplier role history, invoice number pattern, e-mail sender, previous corrections, layout similarity, amount arithmetic, duplicate checks, and validation results.
 
 Outputs: normalized confidence score, confidence band, evidence list, negative signals, reasons, recommended review level.
 
@@ -1206,7 +1299,8 @@ Confidence is not only LLM confidence. It combines evidence such as:
 - IBAN match;
 - VAT number match;
 - registry code match;
-- supplier history;
+- party history;
+- supplier role history;
 - invoice number pattern;
 - e-mail sender;
 - previous corrections;
@@ -1218,13 +1312,13 @@ Example thresholds:
 - `90-99%`: human confirmation required.
 - `< 90%`: review required.
 
-Thresholds must be configurable later by company, workflow, action type, risk level, and integration.
+Thresholds must be configurable later by organization, workflow, action type, risk level, and integration.
 
 ### Decision Engine
 
 Purpose: choose the next proposed action based on events, confidence, validations, workflow state, permissions, and risk.
 
-Inputs: confidence scores, validation results, workflow state, user permissions, company rules, learning rules, knowledge facts, integration state.
+Inputs: confidence scores, validation results, workflow state, user permissions, organization rules, learning rules, knowledge facts, integration state.
 
 Outputs: suggested next action, required approval level, review task request, automation decision, event payload.
 
@@ -1252,11 +1346,11 @@ What it must not do: it must not bury risky actions in notification noise or res
 
 Purpose: learn from confirmed human corrections and repeated confirmed decisions.
 
-Inputs: user corrections, accepted matches, repeated approvals, rejected suggestions, supplier aliases, account assignment corrections, project allocation corrections.
+Inputs: user corrections, accepted matches, repeated approvals, rejected suggestions, party aliases, supplier role aliases, account assignment corrections, project allocation corrections.
 
-Outputs: learning rule candidates, rule activation suggestions, supplier memory updates, account assignment memory, pattern matches.
+Outputs: learning rule candidates, rule activation suggestions, party memory updates, supplier role memory updates, account assignment memory, pattern matches.
 
-Relationship to events: consumes `UserCorrectionCreated`, `SupplierCorrected`, `InvoiceApproved`, and `ReviewTaskResolved`; emits `LearningRuleCreated` when a rule candidate or approved rule is created.
+Relationship to events: consumes `UserCorrectionCreated`, `PartyCorrected`, `SupplierRoleCorrected`, `InvoiceApproved`, and `ReviewTaskResolved`; emits `LearningRuleCreated` when a rule candidate or approved rule is created.
 
 Relationship to human review: learning rules should be proposed before being applied automatically unless the rule type is explicitly configured as safe.
 
@@ -1264,9 +1358,9 @@ What it must not do: it must not learn from unverified AI guesses. It learns onl
 
 ### Knowledge Engine
 
-Purpose: store company knowledge, not just extracted data.
+Purpose: store organization knowledge, not just extracted data.
 
-Inputs: learning rules, user-approved exceptions, supplier memory, project allocation history, account assignment history, integration data, curated business notes.
+Inputs: learning rules, user-approved exceptions, party memory, supplier role memory, project allocation history, account assignment history, integration data, curated business notes.
 
 Outputs: knowledge facts, knowledge relations, business memory entries, relevant context for reasoning and prompts.
 
@@ -1274,11 +1368,12 @@ Relationship to events: consumes learning, correction, approval, and integration
 
 Relationship to human review: knowledge that can affect accounting decisions should be visible, editable, and reviewable.
 
-What it must not do: it must not turn temporary guesses into permanent company knowledge.
+What it must not do: it must not turn temporary guesses into permanent organization knowledge.
 
 Examples:
 
-- supplier recognition patterns;
+- party recognition patterns;
+- supplier role detection patterns;
 - project allocation patterns;
 - account assignment patterns;
 - recurring invoice behavior;
@@ -1288,7 +1383,7 @@ Examples:
 
 Purpose: use history, rules, and knowledge to recommend business actions in a way users can understand.
 
-Inputs: document data, invoice data, supplier history, project history, learning rules, knowledge facts, current workflow state, user permissions.
+Inputs: document data, invoice data, party history, supplier role history, project history, learning rules, knowledge facts, current workflow state, user permissions.
 
 Outputs: explainable recommendations, suggested allocations, next actions, warnings, review reasons.
 
@@ -1298,7 +1393,7 @@ Relationship to human review: recommendations should be presented with reasons a
 
 What it must not do: it must not present a recommendation without explainable evidence.
 
-Example: "This supplier's last 143 invoices were assigned to project Kanarbiku. Suggest same project?"
+Example: "This Party's Supplier role has 143 prior approved invoices assigned to project Kanarbiku. Suggest same project?"
 
 ### Prompt Engine
 
@@ -1308,7 +1403,7 @@ Inputs: prompt template, prompt version, selected document text, extracted candi
 
 Outputs: rendered prompt record, model output, parsed response, prompt/model metadata, token/context summary.
 
-Relationship to events: creates AI job records and supports AI events such as `DocumentParsed`, `SupplierDetected`, `ConfidenceChanged`, and extraction result events.
+Relationship to events: creates AI job records and supports AI events such as `DocumentParsed`, `PartyDetected`, `SupplierRoleDetected`, `ConfidenceChanged`, and extraction result events.
 
 Relationship to human review: LLM outputs should be reviewable with prompt version, source context, and resulting structured data.
 
@@ -1344,7 +1439,7 @@ A learning rule should contain evidence: what was corrected, by whom, when, how 
 
 ## 11. Knowledge Engine / Business Memory
 
-The platform should capture company knowledge, not only data.
+The platform should capture organization knowledge, not only data.
 
 This section expands the Knowledge Engine and business memory responsibilities described inside the Cognitive Layer. Knowledge is reusable context for future reasoning, matching, review, reporting, and automation.
 
@@ -1356,7 +1451,7 @@ Examples:
 - recurring invoice behavior;
 - user-approved exceptions.
 
-Knowledge facts should be reusable by AI prompts, matching algorithms, workflow decisions, and reporting. They should also be reviewable, because outdated company knowledge can become a source of systematic errors.
+Knowledge facts should be reusable by AI prompts, matching algorithms, workflow decisions, and reporting. They should also be reviewable, because outdated organization knowledge can become a source of systematic errors.
 
 ## 12. Capability Architecture
 
@@ -1418,19 +1513,19 @@ Relationship to Cognitive Layer: used by Extraction Engine.
 
 Future implementation notes: entity candidates should keep evidence spans.
 
-### Supplier Matching Capability
+### Party and Supplier Role Matching Capability
 
-Purpose: match extracted supplier evidence to known suppliers.
+Purpose: match extracted party evidence to known parties and then detect whether a supplier role applies in the current context.
 
-Typical inputs: name, IBAN, VAT number, registry code, e-mail sender, aliases, history.
+Typical inputs: name, IBAN, VAT number, registry code, e-mail sender, aliases, party history, supplier role history.
 
-Typical outputs: supplier candidates, score, reasons, conflicts.
+Typical outputs: party candidates, supplier role candidates, score, reasons, conflicts.
 
 Business modules that may use it: accounting, procurement, payments, CRM.
 
 Relationship to Cognitive Layer: contributes to Confidence and Decision engines.
 
-Future implementation notes: support merge/split workflows for supplier duplicates.
+Future implementation notes: support merge/split workflows for Party duplicates and separate review of role-specific supplier behavior.
 
 ### Duplicate Detection Capability
 
@@ -1478,7 +1573,7 @@ Future implementation notes: log prompt version, model, context summary, and out
 
 Purpose: retrieve relevant documents, facts, rules, and history by meaning.
 
-Typical inputs: query, embeddings, filters, company scope, object type.
+Typical inputs: query, embeddings, filters, organization scope, object type.
 
 Typical outputs: ranked results, snippets, references, scores.
 
@@ -1486,7 +1581,7 @@ Business modules that may use it: knowledge, CRM, quotations, project management
 
 Relationship to Cognitive Layer: feeds Knowledge and Business Reasoning engines.
 
-Future implementation notes: must respect company/user permissions.
+Future implementation notes: must respect organization/user permissions.
 
 ### Translation Capability
 
@@ -1576,7 +1671,7 @@ Future implementation notes: every match needs reasons, not only a score.
 
 Purpose: generate files or payloads for external systems and reporting.
 
-Typical inputs: approved domain objects, templates, schemas, company settings, validation results.
+Typical inputs: approved domain objects, templates, schemas, organization settings, validation results.
 
 Typical outputs: XML, CSV, JSON, PDF, API payloads, preview data, validation report.
 
@@ -1628,7 +1723,7 @@ Integrations should separate read sync from write operations. Reads can often be
 
 Security and audit requirements:
 
-- company separation must be explicit in future multi-company data models;
+- organization separation must be explicit in future multi-organization data models;
 - user roles must separate viewing, correcting, approving, exporting, and external API writing;
 - audit logs must capture important business actions;
 - sensitive data such as invoices, bank statements, API keys, and personal data must stay out of Git;

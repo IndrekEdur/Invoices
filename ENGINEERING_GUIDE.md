@@ -49,7 +49,7 @@ Every domain area should have its own Django app. App boundaries should reflect 
 
 Planned or existing apps:
 
-- `core`: shared platform primitives, company context, common utilities.
+- `core`: shared platform primitives, organization context, common utilities.
 - `documents`: document records, versions, tags, and document lifecycle.
 - `workflow`: workflow events, review routing, process state.
 - `accounting`: invoices, invoice lines, VAT, payments, accounting flows.
@@ -167,7 +167,7 @@ Policy rules should consider:
 
 - confidence;
 - risk level;
-- company settings;
+- organization settings;
 - user permissions;
 - amount thresholds;
 - supplier trust;
@@ -201,7 +201,7 @@ The Cognitive Layer must not silently change accounting data. It suggests, expla
 
 Knowledge survives model upgrades.
 
-Knowledge is independent from any single LLM, prompt, model provider, or extraction implementation. It represents company-specific understanding such as:
+Knowledge is independent from any single LLM, prompt, model provider, or extraction implementation. It represents organization-specific understanding such as:
 
 - supplier recognition rules;
 - project allocation patterns;
@@ -304,7 +304,7 @@ Exceptions:
 
 Configuration:
 
-- Put company-specific business settings in policies/configuration.
+- Put organization-specific business settings in policies/configuration.
 - Keep secrets out of Git.
 - Use environment variables for runtime secrets.
 

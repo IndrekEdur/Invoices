@@ -177,3 +177,19 @@ Reason:
 - Many future modules need the same technical abilities.
 - Reuse prevents accounting, CRM, project, BIM, and BI modules from reimplementing similar logic.
 - Capabilities should return evidence, candidates, scores, or generated output; business policy decides what can be done with them.
+
+## ADR-013: Platform Root Entity Is Organization and Business Entities Are Party Roles
+
+Date: 2026-06-28
+
+Decision:
+
+- The platform root entity is `Organization`.
+- Business entities such as Supplier and Customer are modeled as Party roles.
+- Accounting modules operate inside an Organization rather than defining the platform core.
+
+Reason:
+
+- The product is a Cognitive Business Platform, not only an accounting application.
+- Organization can represent a Company, Sole Proprietor, Non-profit, Government, or Other tenant type.
+- Party separates legal or natural person identity from module-specific roles such as supplier, customer, partner, contractor, employee, bank, or tax authority.
