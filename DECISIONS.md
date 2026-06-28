@@ -132,3 +132,18 @@ Reason:
 - Accounting, banking, tax, integration, and AI decisions must remain traceable.
 - Learning from corrections requires reliable historical evidence.
 - Append-only events preserve what happened even when a later correction changes business state.
+
+## ADR-010: Use Cognitive Layer Instead of Generic AI Engine
+
+Date: 2026-06-28
+
+Decision:
+
+- Replace the generic AI Engine concept with a broader Cognitive Layer architecture.
+- Include OCR, extraction, validation, confidence, decision support, review, learning, knowledge, business reasoning, and prompt management as separate responsibilities.
+
+Reason:
+
+- The platform needs more than LLM calls.
+- Accounting and operational decisions require evidence, validation, confidence scoring, human review, and auditability.
+- AI should support business process, events, and human-approved knowledge rather than becoming the center of the system.

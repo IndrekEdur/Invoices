@@ -33,9 +33,9 @@ Documents are the root layer for all imported and generated files. A file enters
 
 Workflow stores event-driven process state. It records what happened, who or what caused it, what needs review, and which step should happen next.
 
-### AI Engine
+### Cognitive Layer
 
-The AI Engine performs OCR, parsing, extraction, matching, classification, duplicate detection, confidence scoring, prompt execution, and AI job logging.
+The Cognitive Layer performs OCR, extraction, validation, confidence scoring, decision support, review routing, learning, knowledge retrieval, business reasoning, prompt execution, and AI job logging. It includes AI/LLM capabilities, but it is not limited to AI.
 
 ### Learning Engine
 
@@ -674,7 +674,7 @@ Typical payload: document id, source, filename, checksum, MIME type, size, parsi
 
 Producer: document upload/import services, e-mail import, bank import, EMTA/Merit export generators, parsing jobs.
 
-Consumers: workflow engine, AI engine, review queues, audit log, knowledge engine, downstream accounting/banking modules.
+Consumers: workflow engine, Cognitive Layer, review queues, audit log, knowledge engine, downstream accounting/banking modules.
 
 Retention/audit importance: high. Documents are evidence for later invoices, bank statements, exports, and user decisions.
 
@@ -711,7 +711,7 @@ Purpose: record AI/OCR/parsing/matching activity and changes in confidence.
 
 Typical payload: AI job id, model/provider, prompt template version, input document/version, output reference, confidence, reasons, errors.
 
-Producer: AI engine, OCR jobs, extraction services, matching services, validation services.
+Producer: Cognitive Layer, OCR jobs, extraction services, matching services, validation services.
 
 Consumers: review UI, learning engine, audit log, knowledge engine, validation reporting.
 
@@ -828,7 +828,7 @@ Typical payload: knowledge fact id, source id, subject, predicate, object, confi
 
 Producer: learning engine, knowledge curation UI, AI-assisted rule generation, integration imports.
 
-Consumers: AI engine, learning engine, matching services, reporting, future AI agents.
+Consumers: Cognitive Layer, learning engine, matching services, reporting, future AI agents.
 
 Retention/audit importance: medium to high. Knowledge affects future suggestions and automation, so provenance matters.
 
@@ -933,24 +933,203 @@ Example event chain:
 
 Workflow events should support progress views, review queues, retries, audit trails, and future automation. They also make it easier to understand why a document is waiting, approved, blocked, sent, or archived.
 
-## 8. AI Engine
+## 8. Cognitive Layer Architecture
 
-The AI Engine supports:
+The Cognitive Layer is not only LLM/AI. It is the set of engines that turn raw documents, events, history, and company knowledge into explainable suggestions and reviewable decisions.
 
-- OCR for scanned documents and low-quality PDFs;
-- parsing of PDF, XML, Excel, e-mail, and text;
-- supplier detection;
-- duplicate detection;
-- VAT validation;
-- project detection;
-- payment matching;
-- confidence scoring;
-- prompt templates;
-- AI job logging.
+AI is not the system center. The center is business process, append-only events, and human-approved knowledge. The Cognitive Layer supports the process; it does not replace responsibility for accounting, tax, banking, or operational decisions.
 
-AI outputs must be stored with context: input reference, prompt/template version, model/provider if relevant, output payload, confidence, reasons, and errors. A user should be able to see why an AI result was proposed and whether it was accepted, corrected, or rejected.
+### Processing Flow Example
 
-AI should make low-risk automation faster and high-risk decisions clearer, but it should not silently create accounting consequences.
+```text
+Document
+-> OCR Engine
+-> Extraction Engine
+-> Validation Engine
+-> Confidence Engine
+-> Decision Engine
+-> Review Engine if needed
+-> Learning Engine
+-> Knowledge Engine
+```
+
+### OCR Engine
+
+Purpose: turn scanned documents, image PDFs, and low-quality attachments into machine-readable text and layout data.
+
+Inputs: document file, document version, file type, image pages, PDF pages, prior OCR settings, language hints.
+
+Outputs: OCR text, page-level layout, OCR quality metrics, extracted blocks, warnings, processing events.
+
+Relationship to events: produces or supports `DocumentParsed`, `DocumentFailedParsing`, `ConfidenceChanged`, and processing job events.
+
+Relationship to human review: low OCR quality should route the document to review or show extracted text beside the original file.
+
+What it must not do: it must not decide supplier, VAT, project, payment, or accounting status by itself.
+
+### Extraction Engine
+
+Purpose: extract structured candidates from document text and metadata.
+
+Inputs: OCR text, embedded PDF text, XML content, e-mail metadata, filename, document source, known supplier patterns, prompt outputs.
+
+Outputs: candidate fields such as invoice number, issue date, due date, supplier, registry code, VAT number, IBAN, amounts, VAT rates, project codes, invoice lines, and raw extraction evidence.
+
+Relationship to events: produces extraction results and events such as `SupplierDetected`, `InvoiceCandidateCreated`, `DocumentParsed`, and `ConfidenceChanged`.
+
+Relationship to human review: extracted fields should be shown with evidence and confidence so users can correct them quickly.
+
+What it must not do: it must not silently create approved accounting records or overwrite user-confirmed values.
+
+### Validation Engine
+
+Purpose: check extracted and entered data against rules, arithmetic, registries, historical data, and accounting constraints.
+
+Inputs: extraction results, document metadata, invoice candidates, supplier data, VAT rules, line totals, bank data, Merit snapshots, company settings.
+
+Outputs: validation results, warnings, blocking errors, explanations, suggested corrections.
+
+Relationship to events: emits validation-related workflow events and can cause `ReviewTaskCreated`, `ConfidenceChanged`, or status transition events.
+
+Relationship to human review: blocking errors and important warnings should be visible before approval or external API writes.
+
+What it must not do: it must not hide failed validations or silently adjust accounting data without traceable user approval.
+
+### Confidence Engine
+
+Purpose: calculate confidence from multiple evidence sources and produce explainable confidence scores.
+
+Inputs: OCR quality, extraction consistency, IBAN match, VAT number match, registry code match, supplier history, invoice number pattern, e-mail sender, previous corrections, layout similarity, amount arithmetic, duplicate checks, and validation results.
+
+Outputs: normalized confidence score, confidence band, evidence list, negative signals, reasons, recommended review level.
+
+Relationship to events: emits `ConfidenceChanged` and supports AI, workflow, learning, and review events.
+
+Relationship to human review: confidence determines whether the user sees a fast confirmation, a full review task, or a warning that automation is not safe.
+
+What it must not do: it must not treat LLM confidence as the whole truth. Confidence is evidence aggregation, not a model's self-assessment.
+
+Confidence is not only LLM confidence. It combines evidence such as:
+
+- OCR quality;
+- IBAN match;
+- VAT number match;
+- registry code match;
+- supplier history;
+- invoice number pattern;
+- e-mail sender;
+- previous corrections;
+- layout similarity.
+
+Example thresholds:
+
+- `> 99%`: automatic low-risk action may be allowed if the action is reversible and configured as low risk.
+- `90-99%`: human confirmation required.
+- `< 90%`: review required.
+
+Thresholds must be configurable later by company, workflow, action type, risk level, and integration.
+
+### Decision Engine
+
+Purpose: choose the next proposed action based on events, confidence, validations, workflow state, permissions, and risk.
+
+Inputs: confidence scores, validation results, workflow state, user permissions, company rules, learning rules, knowledge facts, integration state.
+
+Outputs: suggested next action, required approval level, review task request, automation decision, event payload.
+
+Relationship to events: all decisions emit events. A decision can produce `ReviewTaskCreated`, `InvoiceApproved`, `InvoiceRejected`, `InvoiceSentToMerit`, or a blocked/waiting state.
+
+Relationship to human review: high-risk actions require confirmation; medium-confidence actions request review; low-risk actions can be batched or auto-applied only when configured.
+
+What it must not do: it must not make silent accounting changes. AI suggests, workflow decides, and all decisions must be traceable.
+
+### Review Engine
+
+Purpose: route uncertain, high-risk, conflicting, or user-required items into human review.
+
+Inputs: decision outputs, validation warnings, confidence bands, user roles, review queues, due dates, workflow state.
+
+Outputs: review tasks, notifications, user decision records, correction prompts, status transitions.
+
+Relationship to events: produces `ReviewTaskCreated`, `ReviewTaskResolved`, `UserCorrectionCreated`, status transitions, and audit events.
+
+Relationship to human review: this engine is the human-in-the-loop surface of the platform.
+
+What it must not do: it must not bury risky actions in notification noise or resolve review tasks without an explicit decision.
+
+### Learning Engine
+
+Purpose: learn from confirmed human corrections and repeated confirmed decisions.
+
+Inputs: user corrections, accepted matches, repeated approvals, rejected suggestions, supplier aliases, account assignment corrections, project allocation corrections.
+
+Outputs: learning rule candidates, rule activation suggestions, supplier memory updates, account assignment memory, pattern matches.
+
+Relationship to events: consumes `UserCorrectionCreated`, `SupplierCorrected`, `InvoiceApproved`, and `ReviewTaskResolved`; emits `LearningRuleCreated` when a rule candidate or approved rule is created.
+
+Relationship to human review: learning rules should be proposed before being applied automatically unless the rule type is explicitly configured as safe.
+
+What it must not do: it must not learn from unverified AI guesses. It learns only from confirmed human corrections or repeated confirmed decisions.
+
+### Knowledge Engine
+
+Purpose: store company knowledge, not just extracted data.
+
+Inputs: learning rules, user-approved exceptions, supplier memory, project allocation history, account assignment history, integration data, curated business notes.
+
+Outputs: knowledge facts, knowledge relations, business memory entries, relevant context for reasoning and prompts.
+
+Relationship to events: consumes learning, correction, approval, and integration events; emits `KnowledgeFactCreated` when confirmed knowledge is stored.
+
+Relationship to human review: knowledge that can affect accounting decisions should be visible, editable, and reviewable.
+
+What it must not do: it must not turn temporary guesses into permanent company knowledge.
+
+Examples:
+
+- supplier recognition patterns;
+- project allocation patterns;
+- account assignment patterns;
+- recurring invoice behavior;
+- approved exceptions.
+
+### Business Reasoning Engine
+
+Purpose: use history, rules, and knowledge to recommend business actions in a way users can understand.
+
+Inputs: document data, invoice data, supplier history, project history, learning rules, knowledge facts, current workflow state, user permissions.
+
+Outputs: explainable recommendations, suggested allocations, next actions, warnings, review reasons.
+
+Relationship to events: consumes domain and workflow events; emits recommendation events or decision-support payloads that can create review tasks.
+
+Relationship to human review: recommendations should be presented with reasons and evidence, especially when they affect accounting, project allocation, or external writes.
+
+What it must not do: it must not present a recommendation without explainable evidence.
+
+Example: "This supplier's last 143 invoices were assigned to project Kanarbiku. Suggest same project?"
+
+### Prompt Engine
+
+Purpose: manage prompt templates and make LLM behavior auditable and reproducible.
+
+Inputs: prompt template, prompt version, selected document text, extracted candidates, relevant knowledge facts, task schema, model configuration.
+
+Outputs: rendered prompt record, model output, parsed response, prompt/model metadata, token/context summary.
+
+Relationship to events: creates AI job records and supports AI events such as `DocumentParsed`, `SupplierDetected`, `ConfidenceChanged`, and extraction result events.
+
+Relationship to human review: LLM outputs should be reviewable with prompt version, source context, and resulting structured data.
+
+What it must not do: it must not send unnecessary sensitive context to an LLM or make unlogged calls that cannot be audited.
+
+The Prompt Engine should:
+
+- manage prompt templates;
+- limit context sent to the LLM;
+- inject only relevant document text, candidates, and knowledge;
+- log prompt version and model output;
+- make LLM behavior auditable and reproducible.
 
 ## 9. Learning Engine
 
