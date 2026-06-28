@@ -161,6 +161,8 @@ Events support audit, learning, debugging, automation, progress views, and futur
 
 `AuditEvent` is not the same thing as `DomainEvent`. `DomainEvent` describes something that happened inside the domain and may drive workflow, learning, integration handlers, or automation. `AuditEvent` exists for compliance and traceability: it records human and system actions in an append-only audit log so important decisions can be reviewed later.
 
+Workflow models define process structure: definitions, states, and transitions. Workflow instances execute process for a specific business object. Keep those concepts separate so reusable workflow structure does not become coupled to invoices, documents, payments, or any other domain object.
+
 ## 8. Policies
 
 Policies decide.
