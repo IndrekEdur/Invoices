@@ -1,6 +1,7 @@
 import uuid
 
 from django.core.exceptions import ValidationError
+from django.conf import settings
 from django.db import models
 from django.db.models import Q
 from django.utils import timezone
@@ -122,3 +123,46 @@ class WorkflowInstance(models.Model):
 
     def __str__(self) -> str:
         return f"{self.workflow.code}:{self.entity_type}:{self.entity_uuid}"
+
+
+class WorkflowEvent(models.Model):
+    class Type(models.TextChoices):
+        WORKFLOW_STARTED = "workflow_started", "Workflow started"
+        STATE_ENTERED = "state_entered", "State entered"
+        STATE_EXITED = "state_exited", "State exited"
+        TRANSITION_EXECUTED = "transition_executed", "Transition executed"
+        MANUAL_OVERRIDE = "manual_override", "Manual override"
+        POLICY_DENIED = "policy_denied", "Policy denied"
+        POLICY_APPROVED = "policy_approved", "Policy approved"
+        RETRY = "retry", "Retry"
+        TIMEOUT = "timeout", "Timeout"
+        WORKFLOW_COMPLETED = "workflow_completed", "Workflow completed"
+        WORKFLOW_CANCELLED = "workflow_cancelled", "Workflow cancelled"
+
+    uuid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
+    workflow_instance = models.ForeignKey(WorkflowInstance, on_delete=models.CASCADE, related_name="events")
+    transition = models.ForeignKey(
+        WorkflowTransition,
+        on_delete=models.SET_NULL,
+        related_name="workflow_events",
+        blank=True,
+        null=True,
+    )
+    state = models.ForeignKey(WorkflowState, on_delete=models.PROTECT, related_name="workflow_events")
+    event_type = models.CharField(max_length=64, choices=Type.choices)
+    message = models.TextField(blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="workflow_events",
+        blank=True,
+        null=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+
+    def __str__(self) -> str:
+        return f"{self.workflow_instance}:{self.event_type}"

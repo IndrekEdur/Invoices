@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import WorkflowDefinition, WorkflowInstance, WorkflowState, WorkflowTransition
+from .models import WorkflowDefinition, WorkflowEvent, WorkflowInstance, WorkflowState, WorkflowTransition
 
 
 class WorkflowStateInline(admin.TabularInline):
@@ -46,3 +46,11 @@ class WorkflowInstanceAdmin(admin.ModelAdmin):
     list_filter = ("workflow", "current_state", "entity_type", "organization")
     search_fields = ("workflow__code", "entity_type", "entity_uuid", "organization__name")
     readonly_fields = ("uuid", "created_at", "updated_at")
+
+
+@admin.register(WorkflowEvent)
+class WorkflowEventAdmin(admin.ModelAdmin):
+    list_display = ("workflow_instance", "event_type", "state", "transition", "created_by", "created_at")
+    list_filter = ("event_type", "state", "transition")
+    search_fields = ("workflow_instance__entity_type", "workflow_instance__entity_uuid", "message")
+    readonly_fields = ("uuid", "created_at")

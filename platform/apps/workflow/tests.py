@@ -1,16 +1,31 @@
 import uuid
 
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 from django.test import TestCase
 
 from apps.core.services import CreateOrganizationCommand, OrganizationService
 
-from .models import WorkflowDefinition, WorkflowInstance, WorkflowState, WorkflowTransition
+from .models import WorkflowDefinition, WorkflowEvent, WorkflowInstance, WorkflowState, WorkflowTransition
 
 
 def create_organization(name="Workflow Org"):
     return OrganizationService.create(CreateOrganizationCommand(name=name))
+
+
+def create_workflow_instance():
+    organization = create_organization()
+    workflow = WorkflowDefinition.objects.create(code=f"workflow-{uuid.uuid4()}", name="Workflow")
+    initial_state = WorkflowState.objects.create(workflow=workflow, code="new", name="New", is_initial=True)
+    instance = WorkflowInstance.objects.create(
+        organization=organization,
+        workflow=workflow,
+        current_state=initial_state,
+        entity_type="ExampleEntity",
+        entity_uuid=uuid.uuid4(),
+    )
+    return instance, initial_state
 
 
 class WorkflowStateMachineModelTests(TestCase):
@@ -159,3 +174,68 @@ class WorkflowInstanceModelTests(TestCase):
         )
 
         self.assertEqual(str(instance), f"instance-string:ExampleEntity:{entity_uuid}")
+
+
+class WorkflowEventModelTests(TestCase):
+    def test_create_workflow_event(self):
+        instance, state = create_workflow_instance()
+
+        event = WorkflowEvent.objects.create(
+            workflow_instance=instance,
+            state=state,
+            event_type=WorkflowEvent.Type.WORKFLOW_STARTED,
+            message="Workflow started.",
+        )
+
+        self.assertIsNotNone(event.id)
+        self.assertIsNotNone(event.uuid)
+        self.assertEqual(event.workflow_instance, instance)
+        self.assertEqual(event.state, state)
+
+    def test_transition_nullable(self):
+        instance, state = create_workflow_instance()
+
+        event = WorkflowEvent.objects.create(
+            workflow_instance=instance,
+            state=state,
+            event_type=WorkflowEvent.Type.STATE_ENTERED,
+        )
+
+        self.assertIsNone(event.transition)
+
+    def test_created_by_nullable(self):
+        instance, state = create_workflow_instance()
+
+        event = WorkflowEvent.objects.create(
+            workflow_instance=instance,
+            state=state,
+            event_type=WorkflowEvent.Type.STATE_ENTERED,
+        )
+
+        self.assertIsNone(event.created_by)
+
+    def test_metadata_stored(self):
+        instance, state = create_workflow_instance()
+
+        event = WorkflowEvent.objects.create(
+            workflow_instance=instance,
+            state=state,
+            event_type=WorkflowEvent.Type.POLICY_APPROVED,
+            metadata={"policy": "auto_approval", "result": "approved"},
+        )
+
+        self.assertEqual(event.metadata["policy"], "auto_approval")
+        self.assertEqual(event.metadata["result"], "approved")
+
+    def test_str(self):
+        instance, state = create_workflow_instance()
+        user = get_user_model().objects.create_user(username="workflow-user")
+
+        event = WorkflowEvent.objects.create(
+            workflow_instance=instance,
+            state=state,
+            event_type=WorkflowEvent.Type.MANUAL_OVERRIDE,
+            created_by=user,
+        )
+
+        self.assertEqual(str(event), f"{instance}:manual_override")
