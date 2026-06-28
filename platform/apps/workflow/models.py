@@ -3,6 +3,9 @@ import uuid
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
+from django.utils import timezone
+
+from apps.core.models import Organization
 
 
 class WorkflowDefinition(models.Model):
@@ -89,3 +92,33 @@ class WorkflowTransition(models.Model):
 
     def __str__(self) -> str:
         return f"{self.workflow.code}:{self.code}"
+
+
+class WorkflowInstance(models.Model):
+    uuid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="workflow_instances")
+    workflow = models.ForeignKey(WorkflowDefinition, on_delete=models.CASCADE, related_name="instances")
+    current_state = models.ForeignKey(WorkflowState, on_delete=models.PROTECT, related_name="workflow_instances")
+    entity_type = models.CharField(max_length=128)
+    entity_uuid = models.UUIDField()
+    started_at = models.DateTimeField(default=timezone.now)
+    completed_at = models.DateTimeField(blank=True, null=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+
+    def clean(self):
+        super().clean()
+
+        if self.current_state_id and self.workflow_id and self.current_state.workflow_id != self.workflow_id:
+            raise ValidationError({"current_state": "Current state must belong to the instance workflow."})
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        return f"{self.workflow.code}:{self.entity_type}:{self.entity_uuid}"

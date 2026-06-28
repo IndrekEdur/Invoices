@@ -1,8 +1,16 @@
+import uuid
+
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 from django.test import TestCase
 
-from .models import WorkflowDefinition, WorkflowState, WorkflowTransition
+from apps.core.services import CreateOrganizationCommand, OrganizationService
+
+from .models import WorkflowDefinition, WorkflowInstance, WorkflowState, WorkflowTransition
+
+
+def create_organization(name="Workflow Org"):
+    return OrganizationService.create(CreateOrganizationCommand(name=name))
 
 
 class WorkflowStateMachineModelTests(TestCase):
@@ -83,3 +91,71 @@ class WorkflowStateMachineModelTests(TestCase):
         self.assertEqual(str(workflow), "String test")
         self.assertEqual(str(new_state), "string-test:new")
         self.assertEqual(str(transition), "string-test:complete")
+
+
+class WorkflowInstanceModelTests(TestCase):
+    def test_create_instance(self):
+        organization = create_organization()
+        workflow = WorkflowDefinition.objects.create(code="instance-test", name="Instance test")
+        initial_state = WorkflowState.objects.create(workflow=workflow, code="new", name="New", is_initial=True)
+        entity_uuid = uuid.uuid4()
+
+        instance = WorkflowInstance.objects.create(
+            organization=organization,
+            workflow=workflow,
+            current_state=initial_state,
+            entity_type="ExampleEntity",
+            entity_uuid=entity_uuid,
+            metadata={"source": "test"},
+        )
+
+        self.assertIsNotNone(instance.id)
+        self.assertIsNotNone(instance.uuid)
+        self.assertEqual(instance.organization, organization)
+        self.assertEqual(instance.metadata, {"source": "test"})
+
+    def test_current_state_validation(self):
+        organization = create_organization()
+        workflow = WorkflowDefinition.objects.create(code="instance-workflow-a", name="Workflow A")
+        other_workflow = WorkflowDefinition.objects.create(code="instance-workflow-b", name="Workflow B")
+        initial_state = WorkflowState.objects.create(workflow=other_workflow, code="new", name="New", is_initial=True)
+
+        with self.assertRaises(ValidationError):
+            WorkflowInstance.objects.create(
+                organization=organization,
+                workflow=workflow,
+                current_state=initial_state,
+                entity_type="ExampleEntity",
+                entity_uuid=uuid.uuid4(),
+            )
+
+    def test_completed_at_nullable(self):
+        organization = create_organization()
+        workflow = WorkflowDefinition.objects.create(code="nullable-completed", name="Nullable completed")
+        initial_state = WorkflowState.objects.create(workflow=workflow, code="new", name="New", is_initial=True)
+
+        instance = WorkflowInstance.objects.create(
+            organization=organization,
+            workflow=workflow,
+            current_state=initial_state,
+            entity_type="ExampleEntity",
+            entity_uuid=uuid.uuid4(),
+        )
+
+        self.assertIsNone(instance.completed_at)
+
+    def test_str(self):
+        organization = create_organization()
+        workflow = WorkflowDefinition.objects.create(code="instance-string", name="Instance string")
+        initial_state = WorkflowState.objects.create(workflow=workflow, code="new", name="New", is_initial=True)
+        entity_uuid = uuid.uuid4()
+
+        instance = WorkflowInstance.objects.create(
+            organization=organization,
+            workflow=workflow,
+            current_state=initial_state,
+            entity_type="ExampleEntity",
+            entity_uuid=entity_uuid,
+        )
+
+        self.assertEqual(str(instance), f"instance-string:ExampleEntity:{entity_uuid}")
