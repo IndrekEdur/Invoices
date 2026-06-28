@@ -2,6 +2,7 @@ from django.contrib.auth import get_user_model
 from django.test import SimpleTestCase, TestCase
 
 from .models import AppUserProfile, AuditEvent, Organization
+from .services import AuditService
 
 
 class HealthCheckTests(SimpleTestCase):
@@ -142,3 +143,45 @@ class AuditEventModelTests(TestCase):
         )
 
         self.assertEqual(str(event), "document.parsed Document:789")
+
+
+class AuditServiceTests(TestCase):
+    def test_record_creates_audit_event(self):
+        event = AuditService.record(
+            event_type="invoice.approved",
+            object_type="Invoice",
+            object_id="123",
+            message="Approved from review screen.",
+        )
+
+        self.assertIsInstance(event, AuditEvent)
+        self.assertEqual(AuditEvent.objects.count(), 1)
+        self.assertEqual(event.event_type, "invoice.approved")
+        self.assertEqual(event.message, "Approved from review screen.")
+
+    def test_record_defaults_metadata_to_empty_dict(self):
+        event = AuditService.record(event_type="system.started")
+
+        self.assertEqual(event.metadata, {})
+
+    def test_record_does_not_mutate_caller_metadata(self):
+        metadata = {"provider": "merit"}
+
+        event = AuditService.record(event_type="invoice.sent", metadata=metadata)
+        event.metadata["status"] = "ok"
+
+        self.assertEqual(metadata, {"provider": "merit"})
+
+    def test_record_accepts_organization(self):
+        organization = Organization.objects.create(name="Erlin")
+
+        event = AuditService.record(event_type="document.received", organization=organization)
+
+        self.assertEqual(event.organization, organization)
+
+    def test_record_accepts_actor(self):
+        user = get_user_model().objects.create_user(username="service-user")
+
+        event = AuditService.record(event_type="document.received", actor=user)
+
+        self.assertEqual(event.actor, user)
