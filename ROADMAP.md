@@ -8,6 +8,8 @@ Current architecture phase: Policy and Capability architecture.
 
 Current engineering phase: Engineering Standards.
 
+Current implementation phase: Platform Core.
+
 ## Phase 0: Preserve the Working Prototype
 
 - Keep the current local Python application working.
@@ -25,7 +27,7 @@ Current engineering phase: Engineering Standards.
 ## Phase 2: Start the Target Django Stack
 
 - Add a Django project beside the current application. Initial skeleton exists in `platform/`.
-- Current foundation step: build the Document Engine as the root layer for uploaded, imported, and generated files.
+- Current foundation step: build the Platform Core tenant model, starting with Organization, before expanding documents, workflow, policy, knowledge, and accounting around it.
 - Use PostgreSQL as the target database.
 - Use HTMX for server-rendered interactive workflows.
 - Add initial models for invoices, documents, bank transactions, imports, Merit operations, and reconciliation runs.
