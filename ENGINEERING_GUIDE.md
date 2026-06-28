@@ -157,6 +157,8 @@ Event rules:
 
 Events support audit, learning, debugging, automation, progress views, and future cognitive agents.
 
+`AuditEvent` is not the same thing as `DomainEvent`. `DomainEvent` describes something that happened inside the domain and may drive workflow, learning, integration handlers, or automation. `AuditEvent` exists for compliance and traceability: it records human and system actions in an append-only audit log so important decisions can be reviewed later.
+
 ## 8. Policies
 
 Policies decide.

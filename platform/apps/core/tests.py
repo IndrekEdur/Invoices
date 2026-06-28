@@ -1,7 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.test import SimpleTestCase, TestCase
 
-from .models import AppUserProfile, Organization
+from .models import AppUserProfile, AuditEvent, Organization
 
 
 class HealthCheckTests(SimpleTestCase):
@@ -81,3 +81,64 @@ class AppUserProfileModelTests(TestCase):
         profile = AppUserProfile.objects.create(user=user)
 
         self.assertIn("readable-user", str(profile))
+
+
+class AuditEventModelTests(TestCase):
+    def test_can_create_audit_event(self):
+        organization = Organization.objects.create(name="Erlin")
+        user = get_user_model().objects.create_user(username="audit-user")
+
+        event = AuditEvent.objects.create(
+            organization=organization,
+            actor=user,
+            event_type="invoice.approved",
+            object_type="Invoice",
+            object_id="123",
+            message="Invoice approved.",
+        )
+
+        self.assertIsNotNone(event.id)
+        self.assertIsNotNone(event.uuid)
+        self.assertEqual(event.organization, organization)
+        self.assertEqual(event.actor, user)
+
+    def test_organization_nullable(self):
+        event = AuditEvent.objects.create(
+            event_type="system.started",
+            object_type="System",
+            object_id="platform",
+        )
+
+        self.assertIsNone(event.organization)
+
+    def test_actor_nullable(self):
+        organization = Organization.objects.create(name="Erlin")
+
+        event = AuditEvent.objects.create(
+            organization=organization,
+            event_type="integration.sync",
+            object_type="IntegrationSyncRun",
+            object_id="sync-1",
+        )
+
+        self.assertIsNone(event.actor)
+
+    def test_metadata_stored(self):
+        event = AuditEvent.objects.create(
+            event_type="invoice.sent",
+            object_type="Invoice",
+            object_id="456",
+            metadata={"provider": "merit", "status": "ok"},
+        )
+
+        self.assertEqual(event.metadata["provider"], "merit")
+        self.assertEqual(event.metadata["status"], "ok")
+
+    def test_str_works(self):
+        event = AuditEvent.objects.create(
+            event_type="document.parsed",
+            object_type="Document",
+            object_id="789",
+        )
+
+        self.assertEqual(str(event), "document.parsed Document:789")

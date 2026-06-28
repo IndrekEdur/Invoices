@@ -51,3 +51,37 @@ class AppUserProfile(models.Model):
 
     def __str__(self) -> str:
         return f"Profile for {self.user.username}"
+
+
+class AuditEvent(models.Model):
+    """Append-only audit record for compliance and traceability."""
+
+    uuid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.SET_NULL,
+        related_name="audit_events",
+        blank=True,
+        null=True,
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="audit_events",
+        blank=True,
+        null=True,
+    )
+    event_type = models.CharField(max_length=128)
+    object_type = models.CharField(max_length=128)
+    object_id = models.CharField(max_length=128)
+    message = models.TextField(blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    ip_address = models.GenericIPAddressField(blank=True, null=True)
+    user_agent = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+
+    def __str__(self) -> str:
+        return f"{self.event_type} {self.object_type}:{self.object_id}"

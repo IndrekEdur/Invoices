@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import AppUserProfile, Organization
+from .models import AppUserProfile, AuditEvent, Organization
 
 
 @admin.register(Organization)
@@ -17,3 +17,11 @@ class AppUserProfileAdmin(admin.ModelAdmin):
     list_filter = ("active_organization",)
     search_fields = ("user__username", "user__email", "active_organization__name")
     readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(AuditEvent)
+class AuditEventAdmin(admin.ModelAdmin):
+    list_display = ("event_type", "organization", "actor", "object_type", "object_id", "created_at")
+    list_filter = ("event_type", "organization", "object_type")
+    search_fields = ("event_type", "object_type", "object_id", "message", "actor__username")
+    readonly_fields = ("uuid", "created_at")
