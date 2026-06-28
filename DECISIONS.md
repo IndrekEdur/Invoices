@@ -147,3 +147,33 @@ Reason:
 - The platform needs more than LLM calls.
 - Accounting and operational decisions require evidence, validation, confidence scoring, human review, and auditability.
 - AI should support business process, events, and human-approved knowledge rather than becoming the center of the system.
+
+## ADR-011: Add Policy Layer Between Business Workflow and Automation
+
+Date: 2026-06-28
+
+Decision:
+
+- Add a Policy Layer between business workflow and automation.
+- Let the Cognitive Layer provide evidence, while the Policy Layer decides whether an action is allowed, denied, or requires review.
+
+Reason:
+
+- AI and confidence scores should not directly perform business actions.
+- Company rules, risk, permissions, amount limits, supplier trust, and compliance checks must govern automation.
+- High-risk accounting, banking, tax, and integration changes must never happen silently.
+
+## ADR-012: Treat Technical Abilities as Reusable Capabilities
+
+Date: 2026-06-28
+
+Decision:
+
+- Treat OCR, LLM prompting, BIM/IFC analysis, semantic search, reconciliation, export generation, and similar technical abilities as reusable capabilities.
+- Keep capabilities separate from business modules and policy decisions.
+
+Reason:
+
+- Many future modules need the same technical abilities.
+- Reuse prevents accounting, CRM, project, BIM, and BI modules from reimplementing similar logic.
+- Capabilities should return evidence, candidates, scores, or generated output; business policy decides what can be done with them.

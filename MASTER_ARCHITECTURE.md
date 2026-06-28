@@ -33,6 +33,10 @@ Documents are the root layer for all imported and generated files. A file enters
 
 Workflow stores event-driven process state. It records what happened, who or what caused it, what needs review, and which step should happen next.
 
+### Policy Layer
+
+The Policy Layer decides what actions are allowed based on company rules, risk, confidence, permissions, thresholds, trust, history, and compliance rules.
+
 ### Cognitive Layer
 
 The Cognitive Layer performs OCR, extraction, validation, confidence scoring, decision support, review routing, learning, knowledge retrieval, business reasoning, prompt execution, and AI job logging. It includes AI/LLM capabilities, but it is not limited to AI.
@@ -56,6 +60,22 @@ Accounting contains purchase invoices, sales invoices, invoice lines, VAT handli
 ### Future Business Modules
 
 Future modules can use the same document, workflow, AI, learning, knowledge, and integration foundations for quotations, projects, BIM/IFC, procurement, inventory, CRM, fleet management, and business intelligence.
+
+The platform should be policy-driven, event-driven, knowledge-aware, and capability-based.
+
+### Platform Layering Diagram
+
+```text
+Business Modules
+  -> Business Processes
+  -> Policy Layer
+  -> Workflow Layer
+  -> Event Layer
+  -> Cognitive Layer
+  -> Knowledge Layer
+  -> Platform Core
+  -> Storage
+```
 
 ## 4. Domain Model Overview
 
@@ -1131,7 +1151,384 @@ The Prompt Engine should:
 - log prompt version and model output;
 - make LLM behavior auditable and reproducible.
 
-## 9. Learning Engine
+## 9. Policy Layer Architecture
+
+AI does not decide business actions directly. The Cognitive Layer provides evidence, suggestions, validation results, confidence scores, and recommendations. The Policy Layer applies company rules and decides whether an action is allowed, denied, or requires review. Workflow then executes allowed transitions and the Event Store records the decision.
+
+The Policy Layer sits between business process/workflow and the Cognitive Layer:
+
+```text
+Cognitive Layer -> Evidence
+Policy Layer -> Allowed/Denied/Needs Review
+Workflow -> Executes transition
+Event Store -> Records decision
+```
+
+Policy decisions consider company rules, risk level, confidence, user permissions, amount limits, supplier trust, history, and compliance rules.
+
+Auto-approve invoice only if:
+
+- confidence is greater than 99%;
+- amount is below configured threshold;
+- supplier is trusted;
+- no VAT anomaly exists;
+- no IBAN change exists;
+- no duplicate risk exists.
+
+Require human approval if:
+
+- supplier is new;
+- IBAN changed;
+- amount is high;
+- confidence is low;
+- VAT is unusual;
+- project is missing.
+
+Never allow silent high-risk accounting changes.
+
+### Policy Concepts
+
+#### PolicyRule
+
+Purpose: one explicit rule that allows, denies, requires review, or modifies an action.
+
+Inputs: action type, company, user, target object, confidence score, validation results, risk level, history, supplier trust, amount.
+
+Outputs: rule result, reason, severity, and evidence.
+
+Relationship to events: policy evaluation emits decision-support events and can contribute to `PolicyDecision` audit payloads.
+
+Relationship to audit: each rule that affected a high-risk decision should be traceable.
+
+Future implementation notes: rules can begin as Django services and later become configurable records.
+
+#### RiskLevel
+
+Purpose: classify action risk so automation and review thresholds can differ by impact.
+
+Inputs: action type, amount, external write flag, tax impact, bank impact, supplier trust, confidence, validation status.
+
+Outputs: low, medium, high, or blocked risk classification.
+
+Relationship to events: risk changes can produce `ConfidenceChanged`, review, or policy decision events.
+
+Relationship to audit: risk classification explains why a user approval was required.
+
+Future implementation notes: risk levels should be configurable by company and workflow.
+
+#### ApprovalPolicy
+
+Purpose: decide who must approve a proposed action.
+
+Inputs: user role, amount, action type, risk level, supplier status, project presence, compliance checks.
+
+Outputs: approval required/not required, required role, required user count, reason.
+
+Relationship to events: creates review tasks and approval workflow events.
+
+Relationship to audit: approval requirements and final approver decisions must be retained.
+
+Future implementation notes: support single-user, role-based, and multi-step approvals later.
+
+#### AutomationPolicy
+
+Purpose: decide whether a low-risk action can run without manual review.
+
+Inputs: confidence, risk level, validation status, action reversibility, company settings, historical success.
+
+Outputs: allow automation, deny automation, or require review.
+
+Relationship to events: emits policy decision events before automation transitions.
+
+Relationship to audit: every automated action should state which policy allowed it.
+
+Future implementation notes: automation should start conservative and expand only after enough evidence exists.
+
+#### SupplierTrustPolicy
+
+Purpose: decide whether a supplier is trusted for specific actions.
+
+Inputs: supplier history, aliases, IBAN history, VAT/registry matches, prior corrections, prior approvals, external mappings.
+
+Outputs: trust level, trust reasons, required review conditions.
+
+Relationship to events: supplier trust changes can produce knowledge and learning events.
+
+Relationship to audit: supplier trust must explain why automation was allowed or blocked.
+
+Future implementation notes: trust is action-specific; a supplier may be trusted for recognition but not for IBAN changes.
+
+#### AmountThresholdPolicy
+
+Purpose: apply company-specific amount limits to approvals and automation.
+
+Inputs: gross amount, currency, invoice type, user role, supplier trust, project, cost category.
+
+Outputs: below threshold, above threshold, required approval level.
+
+Relationship to events: threshold decisions can create review tasks or approval events.
+
+Relationship to audit: amount thresholds explain approval requirements for high-value invoices and payments.
+
+Future implementation notes: support currency conversion and category-specific thresholds later.
+
+#### CompliancePolicy
+
+Purpose: prevent or route actions that may violate tax, accounting, privacy, or integration rules.
+
+Inputs: VAT validation, required fields, country rules, document status, user permissions, external API constraints.
+
+Outputs: allowed, blocked, needs review, compliance message.
+
+Relationship to events: compliance blocks produce validation and workflow events.
+
+Relationship to audit: compliance results should remain visible in invoice, payment, and export history.
+
+Future implementation notes: compliance policies should be explicit and tested before EMTA or bank API actions.
+
+#### PolicyDecision
+
+Purpose: final explainable result of policy evaluation for a proposed action.
+
+Inputs: evaluated policy rules, risk level, confidence, user context, target object, proposed action.
+
+Outputs: allowed, denied, needs review, required approver, reasons, evidence.
+
+Relationship to events: policy decisions should be recorded as events and may trigger workflow transitions.
+
+Relationship to audit: high-risk policy decisions are audit records.
+
+Future implementation notes: use a stable payload shape so decisions can be shown in UI and replayed for debugging.
+
+## 10. Capability Architecture
+
+Capabilities are reusable technical abilities, not business modules. A business module such as accounting, project management, procurement, BIM, CRM, or reporting can use many capabilities. A capability should not contain business policy by itself; it performs a technical function and returns evidence, candidates, scores, or generated output.
+
+### OCR Capability
+
+Purpose: convert images and scanned PDFs to text and layout.
+
+Typical inputs: document file, page images, language hints.
+
+Typical outputs: text, blocks, coordinates, OCR quality metrics.
+
+Business modules that may use it: accounting, procurement, CRM, project files, BIM document intake.
+
+Relationship to Cognitive Layer: used by OCR Engine.
+
+Future implementation notes: support multiple OCR providers and quality comparison.
+
+### Document Parsing Capability
+
+Purpose: parse PDFs, XML, Excel, e-mail bodies, and generated files.
+
+Typical inputs: document file, MIME type, raw bytes, OCR text.
+
+Typical outputs: normalized text, tables, metadata, attachments, structured fragments.
+
+Business modules that may use it: accounting, bank import, EMTA export review, project management, procurement.
+
+Relationship to Cognitive Layer: feeds Extraction and Validation engines.
+
+Future implementation notes: preserve raw parser output for debugging.
+
+### Classification Capability
+
+Purpose: classify document or object type.
+
+Typical inputs: filename, text, sender, metadata, source, prior tags.
+
+Typical outputs: class candidates, confidence, reasons.
+
+Business modules that may use it: accounting, workflow, CRM, document archive, procurement.
+
+Relationship to Cognitive Layer: supports Decision and Review engines.
+
+Future implementation notes: keep classification separate from final workflow status.
+
+### Entity Extraction Capability
+
+Purpose: extract names, dates, amounts, IBANs, VAT numbers, registry codes, project codes, and references.
+
+Typical inputs: text, layout, XML fields, known patterns, knowledge facts.
+
+Typical outputs: entity candidates, source spans, confidence, normalized values.
+
+Business modules that may use it: accounting, CRM, procurement, project management, integrations.
+
+Relationship to Cognitive Layer: used by Extraction Engine.
+
+Future implementation notes: entity candidates should keep evidence spans.
+
+### Supplier Matching Capability
+
+Purpose: match extracted supplier evidence to known suppliers.
+
+Typical inputs: name, IBAN, VAT number, registry code, e-mail sender, aliases, history.
+
+Typical outputs: supplier candidates, score, reasons, conflicts.
+
+Business modules that may use it: accounting, procurement, payments, CRM.
+
+Relationship to Cognitive Layer: contributes to Confidence and Decision engines.
+
+Future implementation notes: support merge/split workflows for supplier duplicates.
+
+### Duplicate Detection Capability
+
+Purpose: detect duplicate documents, invoices, transactions, or exports.
+
+Typical inputs: checksum, invoice number, supplier, amount, dates, external ids, text similarity.
+
+Typical outputs: duplicate candidates, score, reasons, recommended handling.
+
+Business modules that may use it: accounting, document archive, integrations, bank import.
+
+Relationship to Cognitive Layer: feeds Validation and Policy layers.
+
+Future implementation notes: duplicate risk should block silent approval.
+
+### Confidence Scoring Capability
+
+Purpose: combine evidence into explainable confidence scores.
+
+Typical inputs: OCR quality, matches, validation results, history, layout similarity, prior corrections.
+
+Typical outputs: confidence score, band, reasons, negative signals.
+
+Business modules that may use it: accounting, reconciliation, procurement, CRM, reporting.
+
+Relationship to Cognitive Layer: used by Confidence Engine.
+
+Future implementation notes: thresholds belong in Policy Layer, not inside this capability.
+
+### LLM Prompting Capability
+
+Purpose: execute managed LLM prompts against limited and relevant context.
+
+Typical inputs: prompt template, selected text, candidates, schema, relevant knowledge.
+
+Typical outputs: model response, parsed payload, prompt metadata, errors.
+
+Business modules that may use it: accounting, quotations, CRM, project management, BI.
+
+Relationship to Cognitive Layer: used by Prompt Engine and Business Reasoning Engine.
+
+Future implementation notes: log prompt version, model, context summary, and output.
+
+### Semantic Search Capability
+
+Purpose: retrieve relevant documents, facts, rules, and history by meaning.
+
+Typical inputs: query, embeddings, filters, company scope, object type.
+
+Typical outputs: ranked results, snippets, references, scores.
+
+Business modules that may use it: knowledge, CRM, quotations, project management, reporting.
+
+Relationship to Cognitive Layer: feeds Knowledge and Business Reasoning engines.
+
+Future implementation notes: must respect company/user permissions.
+
+### Translation Capability
+
+Purpose: translate foreign invoices, e-mails, product descriptions, and support text.
+
+Typical inputs: text, source language, target language, glossary.
+
+Typical outputs: translated text, detected language, confidence, warnings.
+
+Business modules that may use it: accounting, procurement, CRM, project management.
+
+Relationship to Cognitive Layer: supports extraction, review, and prompt context preparation.
+
+Future implementation notes: retain original text as source of truth.
+
+### Vision/Image Understanding Capability
+
+Purpose: interpret images beyond OCR, such as photographed receipts, diagrams, damage photos, or visual document cues.
+
+Typical inputs: image, page screenshot, document context, task prompt.
+
+Typical outputs: visual observations, extracted visual fields, quality warnings.
+
+Business modules that may use it: accounting, fleet, inventory, BIM/project documentation, CRM.
+
+Relationship to Cognitive Layer: supports OCR, extraction, and review.
+
+Future implementation notes: image-derived conclusions need evidence and review for high-risk actions.
+
+### BIM/IFC Analysis Capability
+
+Purpose: inspect BIM/IFC files and extract project, quantity, object, or model metadata.
+
+Typical inputs: IFC/BIM file, object filters, project context.
+
+Typical outputs: object lists, quantities, classifications, conflicts, references.
+
+Business modules that may use it: BIM tools, project management, procurement, quotations.
+
+Relationship to Cognitive Layer: future specialized capability feeding business reasoning.
+
+Future implementation notes: keep BIM logic modular so accounting does not depend on it.
+
+### Spreadsheet Understanding Capability
+
+Purpose: interpret Excel/CSV/TSV files with tables, statements, price lists, budgets, or reports.
+
+Typical inputs: spreadsheet file, sheet names, table ranges, formulas, headers.
+
+Typical outputs: normalized tables, detected schemas, validation warnings.
+
+Business modules that may use it: accounting, banking, procurement, inventory, BI.
+
+Relationship to Cognitive Layer: supports extraction, validation, and export review.
+
+Future implementation notes: preserve sheet/cell references as evidence.
+
+### E-mail Understanding Capability
+
+Purpose: understand e-mail sender, thread, body, signatures, attachments, and intent.
+
+Typical inputs: e-mail headers, body, sender, recipients, attachments, thread metadata.
+
+Typical outputs: document candidates, intent, sender classification, attachment relationships.
+
+Business modules that may use it: accounting, CRM, procurement, project communication.
+
+Relationship to Cognitive Layer: supports document intake and classification.
+
+Future implementation notes: separate e-mail metadata from attachment-derived facts.
+
+### Reconciliation Capability
+
+Purpose: match records across domains such as invoices, bank transactions, Merit records, and documents.
+
+Typical inputs: invoices, transactions, external records, amounts, dates, references, parties.
+
+Typical outputs: match candidates, scores, reasons, unmatched lists.
+
+Business modules that may use it: accounting, banking, integrations, reporting.
+
+Relationship to Cognitive Layer: supports Confidence, Decision, and Review engines.
+
+Future implementation notes: every match needs reasons, not only a score.
+
+### Export Generation Capability
+
+Purpose: generate files or payloads for external systems and reporting.
+
+Typical inputs: approved domain objects, templates, schemas, company settings, validation results.
+
+Typical outputs: XML, CSV, JSON, PDF, API payloads, preview data, validation report.
+
+Business modules that may use it: EMTA, Merit, bank payments, reporting, procurement.
+
+Relationship to Cognitive Layer: may use validation and reasoning, but final permission comes from Policy Layer.
+
+Future implementation notes: exported artifacts should become documents and be linked to events.
+
+## 11. Learning Engine
 
 The system learns from confirmed user actions and repeated high-confidence outcomes.
 
@@ -1149,7 +1546,7 @@ Learning outputs can include supplier aliases, extraction hints, project allocat
 
 A learning rule should contain evidence: what was corrected, by whom, when, how often it repeated, and which future cases it applies to.
 
-## 10. Knowledge Engine
+## 12. Knowledge Engine
 
 The platform should capture company knowledge, not only data.
 
@@ -1163,7 +1560,7 @@ Examples:
 
 Knowledge facts should be reusable by AI prompts, matching algorithms, workflow decisions, and reporting. They should also be reviewable, because outdated company knowledge can become a source of systematic errors.
 
-## 11. Accounting Module
+## 13. Accounting Module
 
 The accounting module will build on the document, workflow, AI, learning, and integration layers.
 
@@ -1188,7 +1585,7 @@ Accounting objects must preserve enough evidence to answer:
 - Which bank transaction paid it?
 - What is included in an EMTA preview?
 
-## 12. Integrations
+## 14. Integrations
 
 Planned integrations include:
 
@@ -1201,7 +1598,7 @@ Planned integrations include:
 
 Integrations should separate read sync from write operations. Reads can often be automated. Writes to accounting, banking, or tax systems need previews, confirmation, audit logs, and stored request/response records.
 
-## 13. Security and Audit
+## 15. Security and Audit
 
 Security and audit requirements:
 
@@ -1213,7 +1610,7 @@ Security and audit requirements:
 
 The system should treat accounting and banking data as sensitive by default.
 
-## 14. Migration Strategy
+## 16. Migration Strategy
 
 The legacy app remains working while the Django platform grows in parallel. Migration happens module by module, not through a large rewrite.
 
@@ -1232,7 +1629,7 @@ Reusable code should be extracted into framework-light services where practical.
 
 The legacy UI can remain the daily tool until replacement workflows are stable in Django.
 
-## 15. Future Modules
+## 17. Future Modules
 
 Future business modules can reuse the same platform foundations:
 
@@ -1247,7 +1644,7 @@ Future business modules can reuse the same platform foundations:
 
 These modules should not start from scratch. They should use documents, workflows, AI jobs, learning rules, knowledge facts, integrations, notifications, and audit events.
 
-## 16. Engineering Rules
+## 18. Engineering Rules
 
 - Work in small tasks.
 - Use one commit per task.
@@ -1259,7 +1656,7 @@ These modules should not start from scratch. They should use documents, workflow
 - Add migrations only when domain models change.
 - Keep external API writes explicit, logged, and confirmed.
 
-## 17. Roadmap Alignment
+## 19. Roadmap Alignment
 
 Current phase:
 
