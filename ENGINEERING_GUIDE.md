@@ -163,6 +163,8 @@ Events support audit, learning, debugging, automation, progress views, and futur
 
 Workflow models define process structure: definitions, states, and transitions. Workflow instances execute process for a specific business object. Workflow events record what happened while an instance moved through the process. Keep `WorkflowDefinition`, `WorkflowInstance`, and `WorkflowEvent` separate so reusable workflow structure does not become coupled to invoices, documents, payments, or any other domain object.
 
+`WorkflowEngine` orchestrates workflow execution. Workflow models never execute business logic, and business modules must not manipulate `WorkflowInstance` directly. Always use `WorkflowEngine` for starting, transitioning, completing, or cancelling workflow instances so validation, workflow events, transactions, and audit records stay centralized.
+
 ## 8. Policies
 
 Policies decide.

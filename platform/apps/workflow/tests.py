@@ -1,13 +1,16 @@
 import uuid
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 from django.test import TestCase
 
+from apps.core.models import AuditEvent
 from apps.core.services import CreateOrganizationCommand, OrganizationService
 
 from .models import WorkflowDefinition, WorkflowEvent, WorkflowInstance, WorkflowState, WorkflowTransition
+from .services import StartWorkflowCommand, TransitionWorkflowCommand, WorkflowEngine
 
 
 def create_organization(name="Workflow Org"):
@@ -26,6 +29,29 @@ def create_workflow_instance():
         entity_uuid=uuid.uuid4(),
     )
     return instance, initial_state
+
+
+def create_workflow_with_transition():
+    organization = create_organization()
+    workflow = WorkflowDefinition.objects.create(code=f"engine-{uuid.uuid4()}", name="Engine workflow")
+    initial_state = WorkflowState.objects.create(workflow=workflow, code="new", name="New", is_initial=True)
+    review_state = WorkflowState.objects.create(workflow=workflow, code="review", name="Review")
+    done_state = WorkflowState.objects.create(workflow=workflow, code="done", name="Done", is_terminal=True)
+    submit_transition = WorkflowTransition.objects.create(
+        workflow=workflow,
+        from_state=initial_state,
+        to_state=review_state,
+        code="submit",
+        name="Submit",
+    )
+    complete_transition = WorkflowTransition.objects.create(
+        workflow=workflow,
+        from_state=review_state,
+        to_state=done_state,
+        code="complete",
+        name="Complete",
+    )
+    return organization, workflow, initial_state, review_state, done_state, submit_transition, complete_transition
 
 
 class WorkflowStateMachineModelTests(TestCase):
@@ -239,3 +265,155 @@ class WorkflowEventModelTests(TestCase):
         )
 
         self.assertEqual(str(event), f"{instance}:manual_override")
+
+
+class WorkflowEngineTests(TestCase):
+    def test_start_creates_instance_events_and_audit(self):
+        organization, workflow, initial_state, *_ = create_workflow_with_transition()
+        entity_uuid = uuid.uuid4()
+
+        instance = WorkflowEngine.start(
+            StartWorkflowCommand(
+                organization=organization,
+                workflow=workflow,
+                entity_type="ExampleEntity",
+                entity_uuid=entity_uuid,
+                metadata={"source": "engine-test"},
+            )
+        )
+
+        self.assertEqual(instance.organization, organization)
+        self.assertEqual(instance.workflow, workflow)
+        self.assertEqual(instance.current_state, initial_state)
+        self.assertEqual(instance.metadata, {"source": "engine-test"})
+        self.assertEqual(
+            list(instance.events.values_list("event_type", flat=True)),
+            [WorkflowEvent.Type.WORKFLOW_STARTED, WorkflowEvent.Type.STATE_ENTERED],
+        )
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                event_type="workflow.started",
+                object_type="WorkflowInstance",
+                object_id=str(instance.uuid),
+            ).exists()
+        )
+
+    def test_can_transition(self):
+        organization, workflow, _, _, _, submit_transition, complete_transition = create_workflow_with_transition()
+        instance = WorkflowEngine.start(
+            StartWorkflowCommand(
+                organization=organization,
+                workflow=workflow,
+                entity_type="ExampleEntity",
+                entity_uuid=uuid.uuid4(),
+            )
+        )
+
+        self.assertTrue(WorkflowEngine.can_transition(instance, submit_transition))
+        self.assertFalse(WorkflowEngine.can_transition(instance, complete_transition))
+
+    def test_transition_updates_state_and_records_events_and_audit(self):
+        organization, workflow, _, review_state, _, submit_transition, _ = create_workflow_with_transition()
+        user = get_user_model().objects.create_user(username="transition-user")
+        instance = WorkflowEngine.start(
+            StartWorkflowCommand(
+                organization=organization,
+                workflow=workflow,
+                entity_type="ExampleEntity",
+                entity_uuid=uuid.uuid4(),
+            )
+        )
+
+        updated_instance = WorkflowEngine.transition(
+            TransitionWorkflowCommand(
+                workflow_instance=instance,
+                transition=submit_transition,
+                actor=user,
+                metadata={"reason": "test"},
+            )
+        )
+
+        self.assertEqual(updated_instance.current_state, review_state)
+        self.assertEqual(
+            list(updated_instance.events.order_by("created_at", "id").values_list("event_type", flat=True)),
+            [
+                WorkflowEvent.Type.WORKFLOW_STARTED,
+                WorkflowEvent.Type.STATE_ENTERED,
+                WorkflowEvent.Type.STATE_EXITED,
+                WorkflowEvent.Type.TRANSITION_EXECUTED,
+                WorkflowEvent.Type.STATE_ENTERED,
+            ],
+        )
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                event_type="workflow.transitioned",
+                actor=user,
+                object_id=str(updated_instance.uuid),
+            ).exists()
+        )
+
+    def test_complete_sets_completed_at_and_records_event_and_audit(self):
+        organization, workflow, *_ = create_workflow_with_transition()
+        instance = WorkflowEngine.start(
+            StartWorkflowCommand(
+                organization=organization,
+                workflow=workflow,
+                entity_type="ExampleEntity",
+                entity_uuid=uuid.uuid4(),
+            )
+        )
+
+        completed_instance = WorkflowEngine.complete(instance)
+
+        self.assertIsNotNone(completed_instance.completed_at)
+        self.assertTrue(
+            completed_instance.events.filter(event_type=WorkflowEvent.Type.WORKFLOW_COMPLETED).exists()
+        )
+        self.assertTrue(
+            AuditEvent.objects.filter(event_type="workflow.completed", object_id=str(instance.uuid)).exists()
+        )
+
+    def test_cancel_records_event_and_audit(self):
+        organization, workflow, *_ = create_workflow_with_transition()
+        instance = WorkflowEngine.start(
+            StartWorkflowCommand(
+                organization=organization,
+                workflow=workflow,
+                entity_type="ExampleEntity",
+                entity_uuid=uuid.uuid4(),
+            )
+        )
+
+        cancelled_instance = WorkflowEngine.cancel(instance)
+
+        self.assertTrue(
+            cancelled_instance.events.filter(event_type=WorkflowEvent.Type.WORKFLOW_CANCELLED).exists()
+        )
+        self.assertTrue(
+            AuditEvent.objects.filter(event_type="workflow.cancelled", object_id=str(instance.uuid)).exists()
+        )
+
+    def test_transition_rolls_back_when_audit_fails(self):
+        organization, workflow, initial_state, _, _, submit_transition, _ = create_workflow_with_transition()
+        instance = WorkflowEngine.start(
+            StartWorkflowCommand(
+                organization=organization,
+                workflow=workflow,
+                entity_type="ExampleEntity",
+                entity_uuid=uuid.uuid4(),
+            )
+        )
+        event_count = WorkflowEvent.objects.count()
+
+        with patch("apps.workflow.services.engine.AuditService.record", side_effect=RuntimeError("audit failed")):
+            with self.assertRaises(RuntimeError):
+                WorkflowEngine.transition(
+                    TransitionWorkflowCommand(
+                        workflow_instance=instance,
+                        transition=submit_transition,
+                    )
+                )
+
+        instance.refresh_from_db()
+        self.assertEqual(instance.current_state, initial_state)
+        self.assertEqual(WorkflowEvent.objects.count(), event_count)
