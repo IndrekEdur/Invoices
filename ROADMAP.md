@@ -6,6 +6,8 @@ This roadmap describes the intended direction for the invoice automation project
 
 Current architecture phase: Policy and Capability architecture.
 
+Current engineering phase: Engineering Standards.
+
 ## Phase 0: Preserve the Working Prototype
 
 - Keep the current local Python application working.
