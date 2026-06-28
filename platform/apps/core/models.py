@@ -1,5 +1,6 @@
 import uuid
 
+from django.conf import settings
 from django.db import models
 
 
@@ -30,3 +31,23 @@ class Organization(models.Model):
 
     def __str__(self) -> str:
         return self.name
+
+
+class AppUserProfile(models.Model):
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="app_profile")
+    active_organization = models.ForeignKey(
+        Organization,
+        on_delete=models.SET_NULL,
+        related_name="active_user_profiles",
+        blank=True,
+        null=True,
+    )
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["user__username", "id"]
+
+    def __str__(self) -> str:
+        return f"Profile for {self.user.username}"

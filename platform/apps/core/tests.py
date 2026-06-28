@@ -1,6 +1,7 @@
+from django.contrib.auth import get_user_model
 from django.test import SimpleTestCase, TestCase
 
-from .models import Organization
+from .models import AppUserProfile, Organization
 
 
 class HealthCheckTests(SimpleTestCase):
@@ -41,3 +42,42 @@ class OrganizationModelTests(TestCase):
         organization = Organization.objects.create(name="Readable name")
 
         self.assertEqual(str(organization), "Readable name")
+
+
+class AppUserProfileModelTests(TestCase):
+    def test_can_create_profile(self):
+        user = get_user_model().objects.create_user(username="profile-user")
+
+        profile = AppUserProfile.objects.create(user=user, metadata={"theme": "light"})
+
+        self.assertIsNotNone(profile.id)
+        self.assertEqual(profile.metadata, {"theme": "light"})
+
+    def test_profile_links_to_user(self):
+        user = get_user_model().objects.create_user(username="linked-user")
+
+        profile = AppUserProfile.objects.create(user=user)
+
+        self.assertEqual(profile.user, user)
+        self.assertEqual(user.app_profile, profile)
+
+    def test_active_organization_can_be_null(self):
+        user = get_user_model().objects.create_user(username="no-org-user")
+
+        profile = AppUserProfile.objects.create(user=user)
+
+        self.assertIsNone(profile.active_organization)
+
+    def test_active_organization_can_be_set(self):
+        user = get_user_model().objects.create_user(username="org-user")
+        organization = Organization.objects.create(name="Erlin")
+
+        profile = AppUserProfile.objects.create(user=user, active_organization=organization)
+
+        self.assertEqual(profile.active_organization, organization)
+
+    def test_str_includes_username(self):
+        user = get_user_model().objects.create_user(username="readable-user")
+        profile = AppUserProfile.objects.create(user=user)
+
+        self.assertIn("readable-user", str(profile))
