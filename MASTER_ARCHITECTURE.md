@@ -2,9 +2,31 @@
 
 This document is the central long-term architecture reference for the project. More specific documents can expand on individual areas, but product direction, domain boundaries, and engineering rules should align with this file.
 
+## Table of Contents
+
+1. [Vision](#1-vision)
+2. [Product Principles](#2-product-principles)
+3. [Platform Layering](#3-platform-layering)
+4. [Domain Model Overview](#4-domain-model-overview)
+5. [Document Engine](#5-document-engine)
+6. [Event Model](#6-event-model)
+7. [Workflow Engine](#7-workflow-engine)
+8. [Policy Layer Architecture](#8-policy-layer-architecture)
+9. [Cognitive Layer Architecture](#9-cognitive-layer-architecture)
+10. [Learning Engine](#10-learning-engine)
+11. [Knowledge Engine / Business Memory](#11-knowledge-engine--business-memory)
+12. [Capability Architecture](#12-capability-architecture)
+13. [Accounting Module](#13-accounting-module)
+14. [Integrations](#14-integrations)
+15. [Security and Audit](#15-security-and-audit)
+16. [Migration Strategy](#16-migration-strategy)
+17. [Future Modules](#17-future-modules)
+18. [Engineering Rules](#18-engineering-rules)
+19. [Roadmap Alignment](#19-roadmap-alignment)
+
 ## 1. Vision
 
-The product is an AI Business Operating System: a practical internal platform that helps a company receive information, understand it, route it through review workflows, learn from corrections, and execute approved business actions.
+The product is a Cognitive Business Platform: a practical internal platform that helps a company receive information, understand it, route it through review workflows, learn from corrections, and execute approved business actions.
 
 Accounting and invoice automation is the first real module because it has immediate value and clear data flows: documents, invoices, suppliers, bank transactions, Merit, and EMTA. It is not the whole product. The platform must later support wider business workflows such as quotations, projects, procurement, BIM/IFC tooling, CRM, fleet management, inventory, reporting, and business intelligence.
 
@@ -13,13 +35,13 @@ The goal is not to replace human responsibility. The goal is to reduce repetitiv
 ## 2. Product Principles
 
 - Human-in-the-loop by default.
-- AI can suggest, classify, extract, and match, but high-risk changes need confirmation.
-- Every important decision must be traceable to input data, user action, AI reasoning, API response, or business rule.
+- The Cognitive Layer can suggest, classify, extract, and match, but high-risk changes need confirmation.
+- Every important decision must be traceable to input data, user action, Cognitive Layer reasoning, API response, or business rule.
 - Learning happens from confirmed corrections, not from unverified guesses.
 - External system writes must be explicit, previewed, logged, and reversible where possible.
 - The system should explain why it proposed a match, status, account, project, VAT treatment, or workflow action.
 
-## 3. Platform Layers
+## 3. Platform Layering
 
 ### Core
 
@@ -59,7 +81,7 @@ Accounting contains purchase invoices, sales invoices, invoice lines, VAT handli
 
 ### Future Business Modules
 
-Future modules can use the same document, workflow, AI, learning, knowledge, and integration foundations for quotations, projects, BIM/IFC, procurement, inventory, CRM, fleet management, and business intelligence.
+Future modules can use the same document, workflow, Cognitive Layer, learning, knowledge, and integration foundations for quotations, projects, BIM/IFC, procurement, inventory, CRM, fleet management, and business intelligence.
 
 The platform should be policy-driven, event-driven, knowledge-aware, and capability-based.
 
@@ -222,7 +244,7 @@ Relationships: emitted by domain services and consumed by workflow, learning, no
 
 Lifecycle: emitted after business state changes, processed by handlers, stored for retry and observability.
 
-Future notes: domain events should be introduced carefully so simple Django flows do not become over-engineered too early.
+Future notes: `DomainEvent` should be introduced carefully so simple Django flows do not become over-engineered too early.
 
 #### ProcessingJob
 
@@ -408,7 +430,7 @@ Lifecycle: configured by accounting/business rules, suggested by AI, confirmed b
 
 Future notes: cost categories should bridge operational language and accounting accounts.
 
-### F. AI Domain
+### F. Cognitive Domain
 
 #### AIJob
 
@@ -626,7 +648,7 @@ Purpose: stores incoming external notifications.
 
 Key fields: integration account, event type, payload, received timestamp, processed timestamp, status, error.
 
-Relationships: may trigger sync runs, workflow events, notifications, or domain events.
+Relationships: may trigger sync runs, workflow events, notifications, or `DomainEvent` records.
 
 Lifecycle: received, validated, processed, retried, archived or marked failed.
 
@@ -670,7 +692,23 @@ Lifecycle: requested, submitted, applied by workflow, retained for audit and lea
 
 Future notes: user decisions are the bridge between AI suggestions and business responsibility.
 
-## 5. Event Model
+## 5. Document Engine
+
+`Document` is the root object because everything important starts as a file or generated artifact:
+
+- e-mail attachment;
+- PDF invoice;
+- XML e-invoice;
+- bank statement;
+- Merit import;
+- EMTA export;
+- manual upload.
+
+The document layer gives every file a stable identity before domain interpretation. It stores source, status, original filename, file location, checksum, MIME type, size, metadata, versions, tags, and timestamps.
+
+This prevents later modules from duplicating file metadata. An invoice, bank statement, EMTA export, or Merit import should reference a document rather than reinventing file identity and storage fields.
+
+## 6. Event Model
 
 The platform is event-driven. Important changes are recorded as events so the system can explain what happened, learn from confirmed actions, debug long-running processing, automate later steps, and provide future AI agents with trustworthy operational memory.
 
@@ -752,7 +790,7 @@ Typical payload: correction id, target object, field corrected, old value, new v
 
 Producer: review UI, learning engine, user correction services, rule activation services.
 
-Consumers: learning engine, knowledge engine, AI prompt context builder, audit log, future automation.
+Consumers: learning engine, knowledge engine, Cognitive prompt context builder, audit log, future automation.
 
 Retention/audit importance: high. Learning must be based on confirmed evidence and must remain explainable.
 
@@ -846,9 +884,9 @@ Purpose: record creation, update, supersession, or retirement of company knowled
 
 Typical payload: knowledge fact id, source id, subject, predicate, object, confidence, source evidence, active flag.
 
-Producer: learning engine, knowledge curation UI, AI-assisted rule generation, integration imports.
+Producer: learning engine, knowledge curation UI, cognitive-assisted rule generation, integration imports.
 
-Consumers: Cognitive Layer, learning engine, matching services, reporting, future AI agents.
+Consumers: Cognitive Layer, learning engine, matching services, reporting, future cognitive agents.
 
 Retention/audit importance: medium to high. Knowledge affects future suggestions and automation, so provenance matters.
 
@@ -917,23 +955,7 @@ This flow shows how the system moves from raw input to accounting action without
 
 `AuditEvent` records durable accountability for important actions, especially high-risk or externally visible actions. It answers "who or what changed this, when, from what, to what, and why?"
 
-These may refer to the same underlying action but serve different purposes. For example, approving an invoice can create a domain event (`InvoiceApproved`), a workflow event (review task resolved and invoice status changed), and an audit event (user approved invoice X with amount Y).
-
-## 6. Document Engine
-
-`Document` is the root object because everything important starts as a file or generated artifact:
-
-- e-mail attachment;
-- PDF invoice;
-- XML e-invoice;
-- bank statement;
-- Merit import;
-- EMTA export;
-- manual upload.
-
-The document layer gives every file a stable identity before domain interpretation. It stores source, status, original filename, file location, checksum, MIME type, size, metadata, versions, tags, and timestamps.
-
-This prevents later modules from duplicating file metadata. An invoice, bank statement, EMTA export, or Merit import should reference a document rather than reinventing file identity and storage fields.
+These may refer to the same underlying action but serve different purposes. For example, approving an invoice can create a `DomainEvent` (`InvoiceApproved`), a workflow event (review task resolved and invoice status changed), and an audit event (user approved invoice X with amount Y).
 
 ## 7. Workflow Engine
 
@@ -953,7 +975,156 @@ Example event chain:
 
 Workflow events should support progress views, review queues, retries, audit trails, and future automation. They also make it easier to understand why a document is waiting, approved, blocked, sent, or archived.
 
-## 8. Cognitive Layer Architecture
+## 8. Policy Layer Architecture
+
+AI does not decide business actions directly. The Cognitive Layer provides evidence, suggestions, validation results, confidence scores, and recommendations. The Policy Layer applies company rules and decides whether an action is allowed, denied, or requires review. Workflow then executes allowed transitions and the Event Store records the decision.
+
+The Policy Layer sits between business process/workflow and the Cognitive Layer:
+
+```text
+Cognitive Layer -> Evidence
+Policy Layer -> Allowed/Denied/Needs Review
+Workflow -> Executes transition
+Event Store -> Records decision
+```
+
+Policy decisions consider company rules, risk level, confidence, user permissions, amount limits, supplier trust, history, and compliance rules.
+
+Auto-approve invoice only if:
+
+- confidence is greater than 99%;
+- amount is below configured threshold;
+- supplier is trusted;
+- no VAT anomaly exists;
+- no IBAN change exists;
+- no duplicate risk exists.
+
+Require human approval if:
+
+- supplier is new;
+- IBAN changed;
+- amount is high;
+- confidence is low;
+- VAT is unusual;
+- project is missing.
+
+Never allow silent high-risk accounting changes.
+
+### Policy Concepts
+
+#### PolicyRule
+
+Purpose: one explicit rule that allows, denies, requires review, or modifies an action.
+
+Inputs: action type, company, user, target object, confidence score, validation results, risk level, history, supplier trust, amount.
+
+Outputs: rule result, reason, severity, and evidence.
+
+Relationship to events: policy evaluation emits decision-support events and can contribute to `PolicyDecision` audit payloads.
+
+Relationship to audit: each rule that affected a high-risk decision should be traceable.
+
+Future implementation notes: rules can begin as Django services and later become configurable records.
+
+#### RiskLevel
+
+Purpose: classify action risk so automation and review thresholds can differ by impact.
+
+Inputs: action type, amount, external write flag, tax impact, bank impact, supplier trust, confidence, validation status.
+
+Outputs: low, medium, high, or blocked risk classification.
+
+Relationship to events: risk changes can produce `ConfidenceChanged`, review, or policy decision events.
+
+Relationship to audit: risk classification explains why a user approval was required.
+
+Future implementation notes: risk levels should be configurable by company and workflow.
+
+#### ApprovalPolicy
+
+Purpose: decide who must approve a proposed action.
+
+Inputs: user role, amount, action type, risk level, supplier status, project presence, compliance checks.
+
+Outputs: approval required/not required, required role, required user count, reason.
+
+Relationship to events: creates review tasks and approval workflow events.
+
+Relationship to audit: approval requirements and final approver decisions must be retained.
+
+Future implementation notes: support single-user, role-based, and multi-step approvals later.
+
+#### AutomationPolicy
+
+Purpose: decide whether a low-risk action can run without manual review.
+
+Inputs: confidence, risk level, validation status, action reversibility, company settings, historical success.
+
+Outputs: allow automation, deny automation, or require review.
+
+Relationship to events: emits policy decision events before automation transitions.
+
+Relationship to audit: every automated action should state which policy allowed it.
+
+Future implementation notes: automation should start conservative and expand only after enough evidence exists.
+
+#### SupplierTrustPolicy
+
+Purpose: decide whether a supplier is trusted for specific actions.
+
+Inputs: supplier history, aliases, IBAN history, VAT/registry matches, prior corrections, prior approvals, external mappings.
+
+Outputs: trust level, trust reasons, required review conditions.
+
+Relationship to events: supplier trust changes can produce knowledge and learning events.
+
+Relationship to audit: supplier trust must explain why automation was allowed or blocked.
+
+Future implementation notes: trust is action-specific; a supplier may be trusted for recognition but not for IBAN changes.
+
+#### AmountThresholdPolicy
+
+Purpose: apply company-specific amount limits to approvals and automation.
+
+Inputs: gross amount, currency, invoice type, user role, supplier trust, project, cost category.
+
+Outputs: below threshold, above threshold, required approval level.
+
+Relationship to events: threshold decisions can create review tasks or approval events.
+
+Relationship to audit: amount thresholds explain approval requirements for high-value invoices and payments.
+
+Future implementation notes: support currency conversion and category-specific thresholds later.
+
+#### CompliancePolicy
+
+Purpose: prevent or route actions that may violate tax, accounting, privacy, or integration rules.
+
+Inputs: VAT validation, required fields, country rules, document status, user permissions, external API constraints.
+
+Outputs: allowed, blocked, needs review, compliance message.
+
+Relationship to events: compliance blocks produce validation and workflow events.
+
+Relationship to audit: compliance results should remain visible in invoice, payment, and export history.
+
+Future implementation notes: compliance policies should be explicit and tested before EMTA or bank API actions.
+
+#### PolicyDecision
+
+Purpose: final explainable result of policy evaluation for a proposed action.
+
+Inputs: evaluated policy rules, risk level, confidence, user context, target object, proposed action.
+
+Outputs: allowed, denied, needs review, required approver, reasons, evidence.
+
+Relationship to events: policy decisions should be recorded as events and may trigger workflow transitions.
+
+Relationship to audit: high-risk policy decisions are audit records.
+
+Future implementation notes: use a stable payload shape so decisions can be shown in UI and replayed for debugging.
+
+## 9. Cognitive Layer Architecture
 
 The Cognitive Layer is not only LLM/AI. It is the set of engines that turn raw documents, events, history, and company knowledge into explainable suggestions and reviewable decisions.
 
@@ -1151,156 +1322,43 @@ The Prompt Engine should:
 - log prompt version and model output;
 - make LLM behavior auditable and reproducible.
 
-## 9. Policy Layer Architecture
+## 10. Learning Engine
 
-AI does not decide business actions directly. The Cognitive Layer provides evidence, suggestions, validation results, confidence scores, and recommendations. The Policy Layer applies company rules and decides whether an action is allowed, denied, or requires review. Workflow then executes allowed transitions and the Event Store records the decision.
+The system learns from confirmed user actions and repeated high-confidence outcomes.
 
-The Policy Layer sits between business process/workflow and the Cognitive Layer:
+This section expands the Learning Engine responsibilities described inside the Cognitive Layer. The Cognitive Layer can propose learning candidates, but learning becomes durable only through confirmed corrections or repeated confirmed decisions.
 
-```text
-Cognitive Layer -> Evidence
-Policy Layer -> Allowed/Denied/Needs Review
-Workflow -> Executes transition
-Event Store -> Records decision
-```
+Learning sources include:
 
-Policy decisions consider company rules, risk level, confidence, user permissions, amount limits, supplier trust, history, and compliance rules.
+- supplier corrections;
+- IBAN matches;
+- VAT number matches;
+- invoice layout patterns;
+- project code corrections;
+- account/category corrections;
+- repeated user confirmations.
 
-Auto-approve invoice only if:
+Learning outputs can include supplier aliases, extraction hints, project allocation rules, account selection defaults, invoice layout fingerprints, and payment matching rules.
 
-- confidence is greater than 99%;
-- amount is below configured threshold;
-- supplier is trusted;
-- no VAT anomaly exists;
-- no IBAN change exists;
-- no duplicate risk exists.
+A learning rule should contain evidence: what was corrected, by whom, when, how often it repeated, and which future cases it applies to.
 
-Require human approval if:
+## 11. Knowledge Engine / Business Memory
 
-- supplier is new;
-- IBAN changed;
-- amount is high;
-- confidence is low;
-- VAT is unusual;
-- project is missing.
+The platform should capture company knowledge, not only data.
 
-Never allow silent high-risk accounting changes.
+This section expands the Knowledge Engine and business memory responsibilities described inside the Cognitive Layer. Knowledge is reusable context for future reasoning, matching, review, reporting, and automation.
 
-### Policy Concepts
+Examples:
 
-#### PolicyRule
+- supplier recognition rules;
+- project allocation patterns;
+- account selection patterns;
+- recurring invoice behavior;
+- user-approved exceptions.
 
-Purpose: one explicit rule that allows, denies, requires review, or modifies an action.
+Knowledge facts should be reusable by AI prompts, matching algorithms, workflow decisions, and reporting. They should also be reviewable, because outdated company knowledge can become a source of systematic errors.
 
-Inputs: action type, company, user, target object, confidence score, validation results, risk level, history, supplier trust, amount.
-
-Outputs: rule result, reason, severity, and evidence.
-
-Relationship to events: policy evaluation emits decision-support events and can contribute to `PolicyDecision` audit payloads.
-
-Relationship to audit: each rule that affected a high-risk decision should be traceable.
-
-Future implementation notes: rules can begin as Django services and later become configurable records.
-
-#### RiskLevel
-
-Purpose: classify action risk so automation and review thresholds can differ by impact.
-
-Inputs: action type, amount, external write flag, tax impact, bank impact, supplier trust, confidence, validation status.
-
-Outputs: low, medium, high, or blocked risk classification.
-
-Relationship to events: risk changes can produce `ConfidenceChanged`, review, or policy decision events.
-
-Relationship to audit: risk classification explains why a user approval was required.
-
-Future implementation notes: risk levels should be configurable by company and workflow.
-
-#### ApprovalPolicy
-
-Purpose: decide who must approve a proposed action.
-
-Inputs: user role, amount, action type, risk level, supplier status, project presence, compliance checks.
-
-Outputs: approval required/not required, required role, required user count, reason.
-
-Relationship to events: creates review tasks and approval workflow events.
-
-Relationship to audit: approval requirements and final approver decisions must be retained.
-
-Future implementation notes: support single-user, role-based, and multi-step approvals later.
-
-#### AutomationPolicy
-
-Purpose: decide whether a low-risk action can run without manual review.
-
-Inputs: confidence, risk level, validation status, action reversibility, company settings, historical success.
-
-Outputs: allow automation, deny automation, or require review.
-
-Relationship to events: emits policy decision events before automation transitions.
-
-Relationship to audit: every automated action should state which policy allowed it.
-
-Future implementation notes: automation should start conservative and expand only after enough evidence exists.
-
-#### SupplierTrustPolicy
-
-Purpose: decide whether a supplier is trusted for specific actions.
-
-Inputs: supplier history, aliases, IBAN history, VAT/registry matches, prior corrections, prior approvals, external mappings.
-
-Outputs: trust level, trust reasons, required review conditions.
-
-Relationship to events: supplier trust changes can produce knowledge and learning events.
-
-Relationship to audit: supplier trust must explain why automation was allowed or blocked.
-
-Future implementation notes: trust is action-specific; a supplier may be trusted for recognition but not for IBAN changes.
-
-#### AmountThresholdPolicy
-
-Purpose: apply company-specific amount limits to approvals and automation.
-
-Inputs: gross amount, currency, invoice type, user role, supplier trust, project, cost category.
-
-Outputs: below threshold, above threshold, required approval level.
-
-Relationship to events: threshold decisions can create review tasks or approval events.
-
-Relationship to audit: amount thresholds explain approval requirements for high-value invoices and payments.
-
-Future implementation notes: support currency conversion and category-specific thresholds later.
-
-#### CompliancePolicy
-
-Purpose: prevent or route actions that may violate tax, accounting, privacy, or integration rules.
-
-Inputs: VAT validation, required fields, country rules, document status, user permissions, external API constraints.
-
-Outputs: allowed, blocked, needs review, compliance message.
-
-Relationship to events: compliance blocks produce validation and workflow events.
-
-Relationship to audit: compliance results should remain visible in invoice, payment, and export history.
-
-Future implementation notes: compliance policies should be explicit and tested before EMTA or bank API actions.
-
-#### PolicyDecision
-
-Purpose: final explainable result of policy evaluation for a proposed action.
-
-Inputs: evaluated policy rules, risk level, confidence, user context, target object, proposed action.
-
-Outputs: allowed, denied, needs review, required approver, reasons, evidence.
-
-Relationship to events: policy decisions should be recorded as events and may trigger workflow transitions.
-
-Relationship to audit: high-risk policy decisions are audit records.
-
-Future implementation notes: use a stable payload shape so decisions can be shown in UI and replayed for debugging.
-
-## 10. Capability Architecture
+## 12. Capability Architecture
 
 Capabilities are reusable technical abilities, not business modules. A business module such as accounting, project management, procurement, BIM, CRM, or reporting can use many capabilities. A capability should not contain business policy by itself; it performs a technical function and returns evidence, candidates, scores, or generated output.
 
@@ -1528,41 +1586,9 @@ Relationship to Cognitive Layer: may use validation and reasoning, but final per
 
 Future implementation notes: exported artifacts should become documents and be linked to events.
 
-## 11. Learning Engine
-
-The system learns from confirmed user actions and repeated high-confidence outcomes.
-
-Learning sources include:
-
-- supplier corrections;
-- IBAN matches;
-- VAT number matches;
-- invoice layout patterns;
-- project code corrections;
-- account/category corrections;
-- repeated user confirmations.
-
-Learning outputs can include supplier aliases, extraction hints, project allocation rules, account selection defaults, invoice layout fingerprints, and payment matching rules.
-
-A learning rule should contain evidence: what was corrected, by whom, when, how often it repeated, and which future cases it applies to.
-
-## 12. Knowledge Engine
-
-The platform should capture company knowledge, not only data.
-
-Examples:
-
-- supplier recognition rules;
-- project allocation patterns;
-- account selection patterns;
-- recurring invoice behavior;
-- user-approved exceptions.
-
-Knowledge facts should be reusable by AI prompts, matching algorithms, workflow decisions, and reporting. They should also be reviewable, because outdated company knowledge can become a source of systematic errors.
-
 ## 13. Accounting Module
 
-The accounting module will build on the document, workflow, AI, learning, and integration layers.
+The accounting module will build on the document, workflow, Cognitive Layer, learning, knowledge, policy, and integration layers.
 
 Future accounting flows include:
 
@@ -1579,7 +1605,7 @@ Accounting objects must preserve enough evidence to answer:
 
 - Where did this invoice come from?
 - Which document and version produced this data?
-- What did AI extract?
+- What did the Cognitive Layer extract?
 - What did the user correct?
 - What was sent to Merit?
 - Which bank transaction paid it?
@@ -1606,7 +1632,7 @@ Security and audit requirements:
 - user roles must separate viewing, correcting, approving, exporting, and external API writing;
 - audit logs must capture important business actions;
 - sensitive data such as invoices, bank statements, API keys, and personal data must stay out of Git;
-- AI decision traceability must show source data, prompt/job context, confidence, and user confirmation status.
+- Cognitive/AI decision traceability must show source data, prompt/job context, confidence, and user confirmation status.
 
 The system should treat accounting and banking data as sensitive by default.
 
@@ -1633,7 +1659,7 @@ The legacy UI can remain the daily tool until replacement workflows are stable i
 
 Future business modules can reuse the same platform foundations:
 
-- quotation AI;
+- quotation intelligence;
 - project management;
 - BIM/IFC tools;
 - procurement;
@@ -1665,4 +1691,4 @@ Current phase:
 - TASK-003 Document Engine foundation done.
 - Next planned: Workflow Engine foundation.
 
-This document should guide future tasks so the accounting module grows as the first module of a larger AI Business Operating System, not as a narrow one-off invoice script.
+This document should guide future tasks so the accounting module grows as the first module of the broader Cognitive Business Platform, not as a narrow one-off invoice script.
