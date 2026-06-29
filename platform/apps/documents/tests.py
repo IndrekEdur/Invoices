@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from django.db import IntegrityError, transaction
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.exceptions import ValidationError
 from django.test import override_settings
 from django.test import TestCase
 
@@ -13,7 +14,7 @@ from apps.core.services import CreateOrganizationCommand, OrganizationService
 from apps.workflow.models import WorkflowDefinition, WorkflowEvent, WorkflowInstance, WorkflowState
 
 from .models import Document, DocumentTag, DocumentVersion
-from .services import DocumentStorageService, StoreDocumentCommand
+from .services import ChangeDocumentStatusCommand, DocumentStatusService, DocumentStorageService, StoreDocumentCommand
 
 
 def create_organization(name="Documents Org"):
@@ -371,3 +372,110 @@ class DocumentStorageServiceTests(TestCase):
         self.assertEqual(Document.objects.count(), 0)
         self.assertEqual(DocumentVersion.objects.count(), 0)
         self.assertEqual(WorkflowInstance.objects.count(), 0)
+
+
+class DocumentStatusServiceTests(TestCase):
+    def create_document(self):
+        organization = create_organization()
+        return Document.objects.create(
+            organization=organization,
+            title="Status document",
+            original_filename="status.pdf",
+            source=Document.Source.MANUAL_UPLOAD,
+        )
+
+    def test_changes_status(self):
+        document = self.create_document()
+
+        changed_document = DocumentStatusService.change_status(
+            ChangeDocumentStatusCommand(
+                document=document,
+                new_status=Document.Status.APPROVED,
+            )
+        )
+
+        changed_document.refresh_from_db()
+        self.assertEqual(changed_document.status, Document.Status.APPROVED)
+
+    def test_invalid_status_raises_validation_error(self):
+        document = self.create_document()
+
+        with self.assertRaises(ValidationError):
+            DocumentStatusService.change_status(
+                ChangeDocumentStatusCommand(
+                    document=document,
+                    new_status="not-a-status",
+                )
+            )
+
+    def test_creates_audit_event(self):
+        document = self.create_document()
+
+        DocumentStatusService.change_status(
+            ChangeDocumentStatusCommand(
+                document=document,
+                new_status=Document.Status.NEEDS_REVIEW,
+                message="Needs manual review.",
+            )
+        )
+
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                event_type="document.status_changed",
+                object_type="Document",
+                object_id=str(document.uuid),
+                message="Needs manual review.",
+            ).exists()
+        )
+
+    def test_metadata_is_not_mutated(self):
+        document = self.create_document()
+        metadata = {"reason": "manual-review"}
+
+        DocumentStatusService.change_status(
+            ChangeDocumentStatusCommand(
+                document=document,
+                new_status=Document.Status.NEEDS_REVIEW,
+                metadata=metadata,
+            )
+        )
+
+        self.assertEqual(metadata, {"reason": "manual-review"})
+
+    def test_does_not_create_workflow_event(self):
+        organization = create_organization()
+        workflow = create_document_workflow()
+        uploaded_file = SimpleUploadedFile("invoice.pdf", b"invoice content", content_type="application/pdf")
+        document = DocumentStorageService.store(
+            StoreDocumentCommand(
+                organization=organization,
+                file=uploaded_file,
+                original_filename="invoice.pdf",
+                workflow=workflow,
+            )
+        )
+        event_count = WorkflowEvent.objects.count()
+
+        DocumentStatusService.change_status(
+            ChangeDocumentStatusCommand(
+                document=document,
+                new_status=Document.Status.PROCESSING,
+            )
+        )
+
+        self.assertEqual(WorkflowEvent.objects.count(), event_count)
+
+    def test_transaction_rolls_back_when_audit_fails(self):
+        document = self.create_document()
+
+        with patch("apps.documents.services.status.AuditService.record", side_effect=RuntimeError("audit failed")):
+            with self.assertRaises(RuntimeError):
+                DocumentStatusService.change_status(
+                    ChangeDocumentStatusCommand(
+                        document=document,
+                        new_status=Document.Status.APPROVED,
+                    )
+                )
+
+        document.refresh_from_db()
+        self.assertEqual(document.status, Document.Status.NEW)

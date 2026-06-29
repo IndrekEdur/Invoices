@@ -165,6 +165,8 @@ Workflow models define process structure: definitions, states, and transitions. 
 
 `WorkflowEngine` orchestrates workflow execution. Workflow models never execute business logic, and business modules must not manipulate `WorkflowInstance` directly. Always use `WorkflowEngine` for starting, transitioning, completing, or cancelling workflow instances so validation, workflow events, transactions, and audit records stay centralized.
 
+`Document.status` is a document-level summary status. `WorkflowInstance.current_state` is workflow execution state. They are related but not interchangeable, and business code must change both concepts through services rather than updating model fields directly.
+
 ## 8. Policies
 
 Policies decide.
