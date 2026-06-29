@@ -193,3 +193,18 @@ Reason:
 - The product is a Cognitive Business Platform, not only an accounting application.
 - Organization can represent a Company, Sole Proprietor, Non-profit, Government, or Other tenant type.
 - Party separates legal or natural person identity from module-specific roles such as supplier, customer, partner, contractor, employee, bank, or tax authority.
+
+## ADR-014: Enterprise Domain Map Becomes a First-Class Project Document
+
+Date: 2026-06-29
+
+Decision:
+
+- Add `ENTERPRISE_DOMAIN_MAP.md` as a first-class project document.
+- Use it to describe the business-level domain map: what the organization knows, remembers, communicates, and acts on.
+
+Reason:
+
+- The platform is broader than invoice automation or technical architecture.
+- Business memory, communication, decisions, projects, parties, and knowledge need a shared vocabulary understandable to non-programmers.
+- Separating the business domain map from technical architecture keeps implementation documents focused while preserving the broader product vision.

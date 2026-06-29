@@ -1,5 +1,9 @@
 # PST Invoice Finder MVP
 
+## Architecture Documents
+
+`ENTERPRISE_DOMAIN_MAP.md` describes the business domain vision: what the organization should know, remember, communicate, and act on.
+
 ## Testide käivitamine
 
 Käivita testid repo juurkaustast:
