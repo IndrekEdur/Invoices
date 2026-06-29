@@ -17,9 +17,18 @@ class DocumentTagInline(admin.TabularInline):
 
 @admin.register(Document)
 class DocumentAdmin(admin.ModelAdmin):
-    list_display = ["title", "source", "status", "original_filename", "mime_type", "size_bytes", "created_at"]
-    list_filter = ["source", "status", "mime_type", "created_at"]
-    search_fields = ["title", "original_filename", "sha256", "uuid"]
+    list_display = [
+        "title",
+        "organization",
+        "source",
+        "status",
+        "original_filename",
+        "mime_type",
+        "size_bytes",
+        "created_at",
+    ]
+    list_filter = ["organization", "source", "status", "mime_type", "created_at"]
+    search_fields = ["title", "organization__name", "original_filename", "sha256", "uuid"]
     readonly_fields = ["uuid", "created_at", "updated_at"]
     inlines = [DocumentVersionInline, DocumentTagInline]
 

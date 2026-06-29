@@ -2,6 +2,8 @@ import uuid
 
 from django.db import models
 
+from apps.core.models import Organization
+
 
 class Document(models.Model):
     class Source(models.TextChoices):
@@ -23,6 +25,7 @@ class Document(models.Model):
         ERROR = "error", "Error"
 
     uuid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="documents")
     title = models.CharField(max_length=255)
     original_filename = models.CharField(max_length=255)
     source = models.CharField(max_length=32, choices=Source.choices, default=Source.OTHER)
