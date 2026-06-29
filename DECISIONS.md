@@ -208,3 +208,18 @@ Reason:
 - The platform is broader than invoice automation or technical architecture.
 - Business memory, communication, decisions, projects, parties, and knowledge need a shared vocabulary understandable to non-programmers.
 - Separating the business domain map from technical architecture keeps implementation documents focused while preserving the broader product vision.
+
+## ADR-015: Communication Is a First-Class Business Domain
+
+Date: 2026-06-29
+
+Decision:
+
+- Treat communication as a first-class business domain, not only an e-mail integration.
+- Create `COMMUNICATION_ARCHITECTURE.md` to define how e-mails, meetings, calls, chats, questions, answer drafts, and communication learning fit into organization memory.
+
+Reason:
+
+- Important business context often lives in mailboxes, meeting notes, calls, and chat messages.
+- Attachments alone are not enough; the message, thread, participants, project context, questions, and answers are business memory.
+- Communication needs its own domain vocabulary before implementation begins.

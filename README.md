@@ -4,6 +4,8 @@
 
 `ENTERPRISE_DOMAIN_MAP.md` describes the business domain vision: what the organization should know, remember, communicate, and act on.
 
+`COMMUNICATION_ARCHITECTURE.md` describes how business communication, especially e-mails, becomes part of organization memory.
+
 ## Testide käivitamine
 
 Käivita testid repo juurkaustast:
