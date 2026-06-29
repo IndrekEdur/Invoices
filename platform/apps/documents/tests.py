@@ -10,6 +10,7 @@ from django.test import TestCase
 
 from apps.core.models import AuditEvent
 from apps.core.services import CreateOrganizationCommand, OrganizationService
+from apps.workflow.models import WorkflowDefinition, WorkflowEvent, WorkflowInstance, WorkflowState
 
 from .models import Document, DocumentTag, DocumentVersion
 from .services import DocumentStorageService, StoreDocumentCommand
@@ -17,6 +18,12 @@ from .services import DocumentStorageService, StoreDocumentCommand
 
 def create_organization(name="Documents Org"):
     return OrganizationService.create(CreateOrganizationCommand(name=name))
+
+
+def create_document_workflow():
+    workflow = WorkflowDefinition.objects.create(code="document-processing", name="Document processing")
+    WorkflowState.objects.create(workflow=workflow, code="received", name="Received", is_initial=True)
+    return workflow
 
 
 class DocumentModelTests(TestCase):
@@ -142,6 +149,21 @@ class DocumentStorageServiceTests(TestCase):
         self.assertEqual(document.original_filename, "invoice.pdf")
         self.assertEqual(document.source, Document.Source.MANUAL_UPLOAD)
         self.assertTrue(document.file.name)
+
+    def test_store_without_workflow_still_works(self):
+        organization = create_organization()
+        uploaded_file = SimpleUploadedFile("invoice.pdf", b"invoice content", content_type="application/pdf")
+
+        document = DocumentStorageService.store(
+            StoreDocumentCommand(
+                organization=organization,
+                file=uploaded_file,
+                original_filename="invoice.pdf",
+            )
+        )
+
+        self.assertIsNotNone(document.id)
+        self.assertEqual(WorkflowInstance.objects.count(), 0)
 
     def test_creates_document_version_number_one(self):
         organization = create_organization()
@@ -274,3 +296,78 @@ class DocumentStorageServiceTests(TestCase):
 
         self.assertEqual(Document.objects.count(), 0)
         self.assertEqual(DocumentVersion.objects.count(), 0)
+
+    def test_store_with_workflow_creates_workflow_instance(self):
+        organization = create_organization()
+        workflow = create_document_workflow()
+        uploaded_file = SimpleUploadedFile("invoice.pdf", b"invoice content", content_type="application/pdf")
+
+        document = DocumentStorageService.store(
+            StoreDocumentCommand(
+                organization=organization,
+                file=uploaded_file,
+                original_filename="invoice.pdf",
+                workflow=workflow,
+            )
+        )
+
+        instance = WorkflowInstance.objects.get(entity_uuid=document.uuid)
+        self.assertEqual(instance.workflow, workflow)
+
+    def test_workflow_instance_links_to_document_identity(self):
+        organization = create_organization()
+        workflow = create_document_workflow()
+        uploaded_file = SimpleUploadedFile("invoice.pdf", b"invoice content", content_type="application/pdf")
+
+        document = DocumentStorageService.store(
+            StoreDocumentCommand(
+                organization=organization,
+                file=uploaded_file,
+                original_filename="invoice.pdf",
+                workflow=workflow,
+            )
+        )
+
+        instance = WorkflowInstance.objects.get()
+        self.assertEqual(instance.entity_type, "document")
+        self.assertEqual(instance.entity_uuid, document.uuid)
+
+    def test_workflow_start_creates_workflow_events(self):
+        organization = create_organization()
+        workflow = create_document_workflow()
+        uploaded_file = SimpleUploadedFile("invoice.pdf", b"invoice content", content_type="application/pdf")
+
+        document = DocumentStorageService.store(
+            StoreDocumentCommand(
+                organization=organization,
+                file=uploaded_file,
+                original_filename="invoice.pdf",
+                workflow=workflow,
+            )
+        )
+
+        instance = WorkflowInstance.objects.get(entity_uuid=document.uuid)
+        self.assertEqual(
+            list(instance.events.values_list("event_type", flat=True)),
+            [WorkflowEvent.Type.WORKFLOW_STARTED, WorkflowEvent.Type.STATE_ENTERED],
+        )
+
+    def test_transaction_rolls_back_when_workflow_start_fails(self):
+        organization = create_organization()
+        workflow = create_document_workflow()
+        uploaded_file = SimpleUploadedFile("invoice.pdf", b"invoice content", content_type="application/pdf")
+
+        with patch("apps.documents.services.storage.WorkflowEngine.start", side_effect=RuntimeError("workflow failed")):
+            with self.assertRaises(RuntimeError):
+                DocumentStorageService.store(
+                    StoreDocumentCommand(
+                        organization=organization,
+                        file=uploaded_file,
+                        original_filename="invoice.pdf",
+                        workflow=workflow,
+                    )
+                )
+
+        self.assertEqual(Document.objects.count(), 0)
+        self.assertEqual(DocumentVersion.objects.count(), 0)
+        self.assertEqual(WorkflowInstance.objects.count(), 0)

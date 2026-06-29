@@ -10,3 +10,4 @@ class StoreDocumentCommand:
     source: str = "manual_upload"
     metadata: dict | None = None
     actor: object = None
+    workflow: object = None

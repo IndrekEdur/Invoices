@@ -5,6 +5,7 @@ from django.core.files.base import ContentFile
 from django.db import transaction
 
 from apps.core.services import AuditService
+from apps.workflow.services import StartWorkflowCommand, WorkflowEngine
 
 from ..models import Document, DocumentVersion
 
@@ -56,6 +57,17 @@ class DocumentStorageService:
                     "mime_type": document.mime_type,
                 },
             )
+
+            if command.workflow is not None:
+                WorkflowEngine.start(
+                    StartWorkflowCommand(
+                        organization=command.organization,
+                        workflow=command.workflow,
+                        entity_type="document",
+                        entity_uuid=document.uuid,
+                        metadata={"document_uuid": str(document.uuid)},
+                    )
+                )
 
             return document
 
