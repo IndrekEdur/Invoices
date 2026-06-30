@@ -9,6 +9,7 @@ from .commands import (
     SuggestEmailProjectLinksCommand,
     SyncEmailAccountCommand,
 )
+from .imports import EmailImportService
 from .processing import EmailProcessingService
 from .question_detection import EmailQuestionDetectionService
 from .project_links import EmailProjectLinkService
@@ -21,6 +22,7 @@ __all__ = [
     "CorrectEmailProjectLinkCommand",
     "DetectEmailQuestionsCommand",
     "EmailAttachmentDocumentService",
+    "EmailImportService",
     "EmailProcessingService",
     "EmailProjectLinkService",
     "EmailProjectSuggestionService",

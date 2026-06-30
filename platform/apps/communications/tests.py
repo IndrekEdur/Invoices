@@ -8,6 +8,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError
 from django.test import override_settings
 from django.test import TestCase
+from django.utils import timezone
 
 from apps.core.models import AuditEvent
 from apps.core.services import CreateOrganizationCommand, OrganizationService
@@ -16,6 +17,7 @@ from apps.projects.models import Project
 from apps.workflow.models import WorkflowDefinition, WorkflowInstance, WorkflowState
 
 from .connectors import IMAPEmailConnector
+from .dto import RawEmailMessage
 from .models import EmailAccount, EmailAttachment, EmailMessage, EmailProjectLink, EmailQuestion, EmailThread
 from .services import (
     ConfirmEmailProjectLinkCommand,
@@ -23,6 +25,7 @@ from .services import (
     CorrectEmailProjectLinkCommand,
     DetectEmailQuestionsCommand,
     EmailAttachmentDocumentService,
+    EmailImportService,
     EmailProcessingService,
     EmailProjectLinkService,
     EmailProjectSuggestionService,
@@ -112,6 +115,27 @@ def create_document_workflow():
     workflow = WorkflowDefinition.objects.create(code="email-attachment-document", name="Email attachment document")
     WorkflowState.objects.create(workflow=workflow, code="received", name="Received", is_initial=True)
     return workflow
+
+
+def create_raw_email(**overrides):
+    data = {
+        "external_message_id": "raw-message-1",
+        "internet_message_id": "<raw-message-1@example.com>",
+        "external_thread_id": "raw-thread-1",
+        "subject": "Raw imported message",
+        "body_text": "Raw body",
+        "body_html": "<p>Raw body</p>",
+        "sender_email": "sender@example.com",
+        "sender_name": "Sender",
+        "recipients": [{"email": "recipient@example.com"}],
+        "cc": [],
+        "bcc": [],
+        "direction": EmailMessage.Direction.INBOUND,
+        "received_at": timezone.now(),
+        "metadata": {"provider": "imap"},
+    }
+    data.update(overrides)
+    return RawEmailMessage(**data)
 
 
 class EmailAccountModelTests(TestCase):
@@ -359,6 +383,112 @@ class EmailSyncServiceTests(TestCase):
             EmailSyncService.sync(SyncEmailAccountCommand(email_account=account, limit=7))
 
         connector.fetch_messages.assert_called_once_with(limit=7)
+
+
+class EmailImportServiceTests(TestCase):
+    def test_imports_new_email_message(self):
+        account = create_email_account()
+        raw_message = create_raw_email()
+
+        message = EmailImportService.import_message(account, raw_message)
+
+        self.assertIsNotNone(message.id)
+        self.assertEqual(message.account, account)
+        self.assertEqual(message.external_message_id, "raw-message-1")
+        self.assertEqual(message.subject, "Raw imported message")
+        self.assertEqual(message.sender_email, "sender@example.com")
+
+    def test_creates_email_thread_when_external_thread_id_exists(self):
+        account = create_email_account()
+        raw_message = create_raw_email(external_thread_id="thread-from-provider")
+
+        message = EmailImportService.import_message(account, raw_message)
+
+        self.assertIsNotNone(message.thread)
+        self.assertEqual(message.thread.external_thread_id, "thread-from-provider")
+        self.assertEqual(message.thread.organization, account.organization)
+
+    def test_imports_email_message_without_thread(self):
+        account = create_email_account()
+        raw_message = create_raw_email(external_thread_id="")
+
+        message = EmailImportService.import_message(account, raw_message)
+
+        self.assertIsNone(message.thread)
+        self.assertEqual(EmailThread.objects.count(), 0)
+
+    def test_duplicate_external_message_id_updates_existing_message(self):
+        account = create_email_account()
+        EmailImportService.import_message(account, create_raw_email(subject="First subject"))
+
+        message = EmailImportService.import_message(account, create_raw_email(subject="Updated subject"))
+
+        self.assertEqual(EmailMessage.objects.count(), 1)
+        self.assertEqual(message.subject, "Updated subject")
+
+    def test_thread_message_count_updates(self):
+        account = create_email_account()
+
+        EmailImportService.import_message(account, create_raw_email(external_message_id="raw-1"))
+        message = EmailImportService.import_message(account, create_raw_email(external_message_id="raw-2"))
+
+        message.thread.refresh_from_db()
+        self.assertEqual(message.thread.message_count, 2)
+
+    def test_thread_last_message_at_updates(self):
+        account = create_email_account()
+        older = timezone.now() - timezone.timedelta(days=1)
+        newer = timezone.now()
+
+        EmailImportService.import_message(account, create_raw_email(external_message_id="raw-1", received_at=older))
+        message = EmailImportService.import_message(
+            account,
+            create_raw_email(external_message_id="raw-2", received_at=newer),
+        )
+
+        message.thread.refresh_from_db()
+        self.assertEqual(message.thread.last_message_at, newer)
+
+    def test_organization_copied_from_account(self):
+        account = create_email_account()
+
+        message = EmailImportService.import_message(account, create_raw_email())
+
+        self.assertEqual(message.organization, account.organization)
+
+    def test_audit_event_created(self):
+        account = create_email_account()
+
+        message = EmailImportService.import_message(account, create_raw_email())
+
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                event_type="email.message_imported",
+                object_type="EmailMessage",
+                object_id=str(message.id),
+            ).exists()
+        )
+
+    def test_metadata_is_not_mutated(self):
+        account = create_email_account()
+        metadata = {"source": "manual-import"}
+
+        EmailImportService.import_message(account, create_raw_email(), metadata=metadata)
+        metadata["source"] = "caller-changed"
+
+        audit_event = AuditEvent.objects.get(event_type="email.message_imported")
+        self.assertEqual(audit_event.metadata["import_metadata"], {"source": "manual-import"})
+
+    def test_raw_message_metadata_is_not_mutated(self):
+        account = create_email_account()
+        raw_metadata = {"provider": "imap"}
+        raw_message = create_raw_email(metadata=raw_metadata)
+
+        message = EmailImportService.import_message(account, raw_message)
+        raw_metadata["provider"] = "caller-changed"
+
+        message.refresh_from_db()
+        self.assertEqual(message.metadata, {"provider": "imap"})
 
 
 class EmailThreadModelTests(TestCase):
