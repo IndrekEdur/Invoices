@@ -33,3 +33,68 @@ class EmailAccount(models.Model):
 
     def __str__(self) -> str:
         return f"{self.display_name} <{self.email_address}>"
+
+
+class EmailThread(models.Model):
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="email_threads")
+    account = models.ForeignKey(EmailAccount, on_delete=models.CASCADE, related_name="threads")
+    external_thread_id = models.CharField(max_length=255)
+    subject = models.CharField(max_length=998, blank=True)
+    normalized_subject = models.CharField(max_length=998, blank=True)
+    message_count = models.PositiveIntegerField(default=0)
+    last_message_at = models.DateTimeField(blank=True, null=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-last_message_at", "-created_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(fields=["account", "external_thread_id"], name="unique_thread_per_account"),
+        ]
+
+    def __str__(self) -> str:
+        return self.subject or self.external_thread_id
+
+
+class EmailMessage(models.Model):
+    class Direction(models.TextChoices):
+        INBOUND = "inbound", "Inbound"
+        OUTBOUND = "outbound", "Outbound"
+        INTERNAL = "internal", "Internal"
+        UNKNOWN = "unknown", "Unknown"
+
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="email_messages")
+    account = models.ForeignKey(EmailAccount, on_delete=models.CASCADE, related_name="messages")
+    thread = models.ForeignKey(
+        EmailThread,
+        on_delete=models.SET_NULL,
+        related_name="messages",
+        blank=True,
+        null=True,
+    )
+    external_message_id = models.CharField(max_length=255)
+    internet_message_id = models.CharField(max_length=998, blank=True)
+    subject = models.CharField(max_length=998, blank=True)
+    body_text = models.TextField(blank=True)
+    body_html = models.TextField(blank=True)
+    sender_email = models.EmailField(blank=True)
+    sender_name = models.CharField(max_length=255, blank=True)
+    recipients = models.JSONField(default=list, blank=True)
+    cc = models.JSONField(default=list, blank=True)
+    bcc = models.JSONField(default=list, blank=True)
+    direction = models.CharField(max_length=32, choices=Direction.choices, default=Direction.UNKNOWN)
+    sent_at = models.DateTimeField(blank=True, null=True)
+    received_at = models.DateTimeField(blank=True, null=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-received_at", "-sent_at", "-created_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(fields=["account", "external_message_id"], name="unique_message_per_account"),
+        ]
+
+    def __str__(self) -> str:
+        return self.subject or self.external_message_id
