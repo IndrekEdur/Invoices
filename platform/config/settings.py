@@ -17,6 +17,7 @@ INSTALLED_APPS = [
     "apps.core",
     "apps.communications",
     "apps.documents",
+    "apps.projects",
     "apps.accounting",
     "apps.integrations",
     "apps.learning",
