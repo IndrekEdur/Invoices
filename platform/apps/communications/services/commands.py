@@ -53,3 +53,11 @@ class ProcessEmailCommand:
     email_message: object
     actor: object = None
     metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class SyncEmailAccountCommand:
+    email_account: object
+    limit: int = 50
+    actor: object = None
+    metadata: dict | None = None

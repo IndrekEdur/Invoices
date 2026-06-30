@@ -30,6 +30,8 @@ from .services import (
     ProcessEmailCommand,
     RejectEmailProjectLinkCommand,
     SuggestEmailProjectLinksCommand,
+    SyncEmailAccountCommand,
+    EmailSyncService,
 )
 
 
@@ -257,6 +259,106 @@ class IMAPEmailConnectorTests(TestCase):
         connector.connect()
         connector.disconnect()
         self.assertFalse(connector.connected)
+
+
+class EmailSyncServiceTests(TestCase):
+    def test_sync_imap_account_returns_structured_result(self):
+        account = create_imap_email_account()
+
+        with patch("apps.communications.services.sync.IMAPEmailConnector") as connector_class:
+            connector = connector_class.return_value
+            connector.fetch_messages.return_value = [{"subject": "Message"}]
+
+            result = EmailSyncService.sync(SyncEmailAccountCommand(email_account=account))
+
+        self.assertEqual(result["email_account"], account)
+        self.assertEqual(result["fetched_count"], 1)
+        self.assertEqual(result["messages"], [{"subject": "Message"}])
+        self.assertTrue(result["synced"])
+
+    def test_unsupported_provider_raises_error(self):
+        account = create_imap_email_account(provider=EmailAccount.Provider.GMAIL)
+
+        with self.assertRaises(ValueError):
+            EmailSyncService.sync(SyncEmailAccountCommand(email_account=account))
+
+    def test_connector_connect_fetch_disconnect_are_called(self):
+        account = create_imap_email_account()
+
+        with patch("apps.communications.services.sync.IMAPEmailConnector") as connector_class:
+            connector = connector_class.return_value
+            connector.fetch_messages.return_value = []
+
+            EmailSyncService.sync(SyncEmailAccountCommand(email_account=account, limit=25))
+
+        connector_class.assert_called_once_with(account)
+        connector.connect.assert_called_once_with()
+        connector.fetch_messages.assert_called_once_with(limit=25)
+        connector.disconnect.assert_called_once_with()
+
+    def test_disconnect_called_if_fetch_fails(self):
+        account = create_imap_email_account()
+
+        with patch("apps.communications.services.sync.IMAPEmailConnector") as connector_class:
+            connector = connector_class.return_value
+            connector.fetch_messages.side_effect = RuntimeError("fetch failed")
+
+            with self.assertRaises(RuntimeError):
+                EmailSyncService.sync(SyncEmailAccountCommand(email_account=account))
+
+        connector.disconnect.assert_called_once_with()
+
+    def test_audit_event_created_for_started_and_completed(self):
+        account = create_imap_email_account()
+
+        with patch("apps.communications.services.sync.IMAPEmailConnector") as connector_class:
+            connector_class.return_value.fetch_messages.return_value = []
+
+            EmailSyncService.sync(SyncEmailAccountCommand(email_account=account))
+
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                event_type="email.sync_started",
+                object_type="EmailAccount",
+                object_id=str(account.id),
+            ).exists()
+        )
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                event_type="email.sync_completed",
+                object_type="EmailAccount",
+                object_id=str(account.id),
+            ).exists()
+        )
+
+    def test_metadata_is_not_mutated(self):
+        account = create_imap_email_account()
+        metadata = {"source": "manual-sync"}
+
+        with patch("apps.communications.services.sync.IMAPEmailConnector") as connector_class:
+            connector_class.return_value.fetch_messages.return_value = []
+
+            EmailSyncService.sync(
+                SyncEmailAccountCommand(
+                    email_account=account,
+                    metadata=metadata,
+                )
+            )
+        metadata["source"] = "caller-changed"
+
+        audit_event = AuditEvent.objects.get(event_type="email.sync_completed")
+        self.assertEqual(audit_event.metadata["sync_metadata"], {"source": "manual-sync"})
+
+    def test_limit_passed_to_fetch_messages(self):
+        account = create_imap_email_account()
+
+        with patch("apps.communications.services.sync.IMAPEmailConnector") as connector_class:
+            connector = connector_class.return_value
+            connector.fetch_messages.return_value = []
+
+            EmailSyncService.sync(SyncEmailAccountCommand(email_account=account, limit=7))
+
+        connector.fetch_messages.assert_called_once_with(limit=7)
 
 
 class EmailThreadModelTests(TestCase):
