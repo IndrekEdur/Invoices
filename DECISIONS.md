@@ -223,3 +223,18 @@ Reason:
 - Important business context often lives in mailboxes, meeting notes, calls, and chat messages.
 - Attachments alone are not enough; the message, thread, participants, project context, questions, and answers are business memory.
 - Communication needs its own domain vocabulary before implementation begins.
+
+## ADR-016: Project Becomes the Primary Business Context of the Platform
+
+Date: 2026-06-30
+
+Decision:
+
+- Treat Project as the primary business context of the platform.
+- Create `PROJECT_ARCHITECTURE.md` to describe how projects connect people, communications, documents, workflows, accounting, knowledge, and AI reasoning.
+
+Reason:
+
+- Many business objects need project context to be understood correctly.
+- Projects act as organizational memory containers for evidence, decisions, tasks, timelines, and relationships.
+- A shared Project Domain architecture is needed before implementation introduces project models or project-based automation.

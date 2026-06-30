@@ -6,6 +6,8 @@
 
 `COMMUNICATION_ARCHITECTURE.md` describes how business communication, especially e-mails, becomes part of organization memory.
 
+`PROJECT_ARCHITECTURE.md` describes Project as the primary business context connecting people, documents, communication, workflows, accounting, and knowledge.
+
 ## Testide käivitamine
 
 Käivita testid repo juurkaustast:
