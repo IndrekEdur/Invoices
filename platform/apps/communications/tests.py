@@ -3,6 +3,7 @@ import tempfile
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError
 from django.test import override_settings
@@ -14,6 +15,7 @@ from apps.documents.models import Document, DocumentVersion
 from apps.projects.models import Project
 from apps.workflow.models import WorkflowDefinition, WorkflowInstance, WorkflowState
 
+from .connectors import IMAPEmailConnector
 from .models import EmailAccount, EmailAttachment, EmailMessage, EmailProjectLink, EmailQuestion, EmailThread
 from .services import (
     ConfirmEmailProjectLinkCommand,
@@ -43,6 +45,22 @@ def create_email_account(organization=None, email_address="mail@example.com"):
         display_name="Mailbox",
         email_address=email_address,
     )
+
+
+def create_imap_email_account(**overrides):
+    organization = overrides.pop("organization", None) or create_organization()
+    data = {
+        "organization": organization,
+        "provider": EmailAccount.Provider.IMAP,
+        "display_name": "IMAP mailbox",
+        "email_address": "imap@example.com",
+        "username": "imap@example.com",
+        "host": "imap.example.com",
+        "port": 993,
+        "encrypted_secret_placeholder": "secret-placeholder",
+    }
+    data.update(overrides)
+    return EmailAccount.objects.create(**data)
 
 
 def create_email_message(organization=None, subject="Message with attachment", body_text=""):
@@ -174,6 +192,71 @@ class EmailAccountModelTests(TestCase):
         )
 
         self.assertEqual(str(account), "Gmail account <gmail@example.com>")
+
+
+class IMAPEmailConnectorTests(TestCase):
+    def test_imap_connector_accepts_imap_account(self):
+        account = create_imap_email_account()
+
+        connector = IMAPEmailConnector(account)
+        result = connector.connect()
+
+        self.assertEqual(result, connector)
+        self.assertTrue(connector.connected)
+
+    def test_rejects_non_imap_account(self):
+        account = create_imap_email_account(provider=EmailAccount.Provider.GMAIL)
+        connector = IMAPEmailConnector(account)
+
+        with self.assertRaises(ValidationError):
+            connector.connect()
+
+    def test_rejects_missing_host(self):
+        account = create_imap_email_account(host="")
+        connector = IMAPEmailConnector(account)
+
+        with self.assertRaises(ValidationError):
+            connector.connect()
+
+    def test_rejects_missing_port(self):
+        account = create_imap_email_account(port=None)
+        connector = IMAPEmailConnector(account)
+
+        with self.assertRaises(ValidationError):
+            connector.connect()
+
+    def test_rejects_missing_username(self):
+        account = create_imap_email_account(username="")
+        connector = IMAPEmailConnector(account)
+
+        with self.assertRaises(ValidationError):
+            connector.connect()
+
+    def test_rejects_missing_secret_placeholder(self):
+        account = create_imap_email_account(encrypted_secret_placeholder="")
+        connector = IMAPEmailConnector(account)
+
+        with self.assertRaises(ValidationError):
+            connector.connect()
+
+    def test_fetch_messages_returns_list(self):
+        account = create_imap_email_account()
+        connector = IMAPEmailConnector(account)
+
+        messages = connector.fetch_messages()
+
+        self.assertEqual(messages, [])
+
+    def test_disconnect_safe_before_and_after_connect(self):
+        account = create_imap_email_account()
+        connector = IMAPEmailConnector(account)
+
+        connector.disconnect()
+        self.assertFalse(connector.connected)
+
+        connector.connect()
+        connector.disconnect()
+        self.assertFalse(connector.connected)
 
 
 class EmailThreadModelTests(TestCase):
