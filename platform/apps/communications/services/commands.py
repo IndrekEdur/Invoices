@@ -32,3 +32,10 @@ class CorrectEmailProjectLinkCommand:
     actor: object
     reason: str = ""
     metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class SuggestEmailProjectLinksCommand:
+    email_message: object
+    actor: object = None
+    metadata: dict | None = None

@@ -4,8 +4,10 @@ from .commands import (
     ConvertEmailAttachmentToDocumentCommand,
     CorrectEmailProjectLinkCommand,
     RejectEmailProjectLinkCommand,
+    SuggestEmailProjectLinksCommand,
 )
 from .project_links import EmailProjectLinkService
+from .project_suggestions import EmailProjectSuggestionService
 
 __all__ = [
     "ConfirmEmailProjectLinkCommand",
@@ -13,5 +15,7 @@ __all__ = [
     "CorrectEmailProjectLinkCommand",
     "EmailAttachmentDocumentService",
     "EmailProjectLinkService",
+    "EmailProjectSuggestionService",
     "RejectEmailProjectLinkCommand",
+    "SuggestEmailProjectLinksCommand",
 ]

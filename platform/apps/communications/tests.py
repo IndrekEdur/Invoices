@@ -21,7 +21,9 @@ from .services import (
     CorrectEmailProjectLinkCommand,
     EmailAttachmentDocumentService,
     EmailProjectLinkService,
+    EmailProjectSuggestionService,
     RejectEmailProjectLinkCommand,
+    SuggestEmailProjectLinksCommand,
 )
 
 
@@ -39,14 +41,15 @@ def create_email_account(organization=None, email_address="mail@example.com"):
     )
 
 
-def create_email_message(organization=None):
+def create_email_message(organization=None, subject="Message with attachment", body_text=""):
     organization = organization or create_organization()
     account = create_email_account(organization=organization)
     return EmailMessage.objects.create(
         organization=organization,
         account=account,
         external_message_id="message-attachment-test",
-        subject="Message with attachment",
+        subject=subject,
+        body_text=body_text,
     )
 
 
@@ -866,3 +869,171 @@ class EmailProjectLinkServiceTests(TestCase):
         self.assertEqual(link.status, EmailProjectLink.Status.SUGGESTED)
         self.assertIsNone(link.confirmed_by)
         self.assertIsNone(link.confirmed_at)
+
+
+class EmailProjectSuggestionServiceTests(TestCase):
+    def test_suggests_by_project_code_in_subject(self):
+        organization = create_organization()
+        project = create_project(organization=organization, code="26090", name="Code subject project")
+        message = create_email_message(organization=organization, subject="Question about 26090 invoice")
+
+        suggestions = EmailProjectSuggestionService.suggest(
+            SuggestEmailProjectLinksCommand(email_message=message)
+        )
+
+        self.assertEqual(len(suggestions), 1)
+        self.assertEqual(suggestions[0].project, project)
+        self.assertEqual(suggestions[0].confidence, 90)
+        self.assertEqual(suggestions[0].status, EmailProjectLink.Status.SUGGESTED)
+
+    def test_suggests_by_project_code_in_body(self):
+        organization = create_organization()
+        project = create_project(organization=organization, code="26091", name="Code body project")
+        message = create_email_message(organization=organization, body_text="Please check project 26091 today.")
+
+        suggestions = EmailProjectSuggestionService.suggest(
+            SuggestEmailProjectLinksCommand(email_message=message)
+        )
+
+        self.assertEqual(len(suggestions), 1)
+        self.assertEqual(suggestions[0].project, project)
+        self.assertEqual(suggestions[0].confidence, 90)
+
+    def test_suggests_by_project_name_in_subject(self):
+        organization = create_organization()
+        project = create_project(organization=organization, code="26092", name="Kanarbiku")
+        message = create_email_message(organization=organization, subject="Kanarbiku weekly update")
+
+        suggestions = EmailProjectSuggestionService.suggest(
+            SuggestEmailProjectLinksCommand(email_message=message)
+        )
+
+        self.assertEqual(len(suggestions), 1)
+        self.assertEqual(suggestions[0].project, project)
+        self.assertEqual(suggestions[0].confidence, 75)
+
+    def test_no_match_returns_empty_list(self):
+        organization = create_organization()
+        create_project(organization=organization, code="26093", name="No Match Project")
+        message = create_email_message(organization=organization, subject="Unrelated message")
+
+        suggestions = EmailProjectSuggestionService.suggest(
+            SuggestEmailProjectLinksCommand(email_message=message)
+        )
+
+        self.assertEqual(suggestions, [])
+        self.assertEqual(EmailProjectLink.objects.count(), 0)
+
+    def test_does_not_overwrite_confirmed_link(self):
+        organization = create_organization()
+        project = create_project(organization=organization, code="26094", name="Confirmed project")
+        message = create_email_message(organization=organization, subject="26094 update")
+        link = EmailProjectLink.objects.create(
+            organization=organization,
+            email_message=message,
+            project=project,
+            status=EmailProjectLink.Status.CONFIRMED,
+            confidence=100,
+            evidence={"confirmed": True},
+        )
+
+        suggestions = EmailProjectSuggestionService.suggest(
+            SuggestEmailProjectLinksCommand(email_message=message)
+        )
+
+        link.refresh_from_db()
+        self.assertEqual(suggestions, [])
+        self.assertEqual(link.status, EmailProjectLink.Status.CONFIRMED)
+        self.assertEqual(link.confidence, 100)
+        self.assertEqual(link.evidence, {"confirmed": True})
+
+    def test_does_not_overwrite_rejected_link(self):
+        organization = create_organization()
+        project = create_project(organization=organization, code="26095", name="Rejected project")
+        message = create_email_message(organization=organization, subject="26095 update")
+        link = EmailProjectLink.objects.create(
+            organization=organization,
+            email_message=message,
+            project=project,
+            status=EmailProjectLink.Status.REJECTED,
+            confidence=20,
+            evidence={"rejected": True},
+        )
+
+        suggestions = EmailProjectSuggestionService.suggest(
+            SuggestEmailProjectLinksCommand(email_message=message)
+        )
+
+        link.refresh_from_db()
+        self.assertEqual(suggestions, [])
+        self.assertEqual(link.status, EmailProjectLink.Status.REJECTED)
+        self.assertEqual(link.confidence, 20)
+        self.assertEqual(link.evidence, {"rejected": True})
+
+    def test_evidence_is_stored(self):
+        organization = create_organization()
+        create_project(organization=organization, code="26096", name="Evidence project")
+        message = create_email_message(organization=organization, subject="26096 Evidence project")
+
+        suggestions = EmailProjectSuggestionService.suggest(
+            SuggestEmailProjectLinksCommand(email_message=message)
+        )
+
+        evidence_matches = suggestions[0].evidence["matches"]
+        self.assertIn(
+            {"matched_field": "subject", "matched_project_code": "26096", "confidence": 90},
+            evidence_matches,
+        )
+        self.assertIn(
+            {"matched_field": "subject", "matched_project_name": "Evidence project", "confidence": 75},
+            evidence_matches,
+        )
+
+    def test_audit_event_created(self):
+        organization = create_organization()
+        project = create_project(organization=organization, code="26097", name="Audit suggestion")
+        message = create_email_message(organization=organization, subject="26097 update")
+
+        suggestions = EmailProjectSuggestionService.suggest(
+            SuggestEmailProjectLinksCommand(email_message=message)
+        )
+
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                event_type="email_project_link.suggested",
+                object_id=str(suggestions[0].id),
+                metadata__project_id=project.id,
+            ).exists()
+        )
+
+    def test_metadata_is_not_mutated(self):
+        organization = create_organization()
+        create_project(organization=organization, code="26098", name="Metadata project")
+        message = create_email_message(organization=organization, subject="26098 update")
+        metadata = {"source": "rules"}
+
+        EmailProjectSuggestionService.suggest(
+            SuggestEmailProjectLinksCommand(
+                email_message=message,
+                metadata=metadata,
+            )
+        )
+        metadata["source"] = "caller-changed"
+
+        link = EmailProjectLink.objects.get()
+        audit_event = AuditEvent.objects.get(event_type="email_project_link.suggested")
+        self.assertEqual(link.metadata, {"source": "rules"})
+        self.assertEqual(audit_event.metadata["suggestion_metadata"], {"source": "rules"})
+
+    def test_organization_scoping_works(self):
+        organization = create_organization(name="Message Org")
+        other_organization = create_organization(name="Other Org")
+        create_project(organization=other_organization, code="26099", name="Other org project")
+        message = create_email_message(organization=organization, subject="26099 update")
+
+        suggestions = EmailProjectSuggestionService.suggest(
+            SuggestEmailProjectLinksCommand(email_message=message)
+        )
+
+        self.assertEqual(suggestions, [])
+        self.assertEqual(EmailProjectLink.objects.count(), 0)
