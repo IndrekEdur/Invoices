@@ -10,9 +10,10 @@ from django.test import TestCase
 from apps.core.models import AuditEvent
 from apps.core.services import CreateOrganizationCommand, OrganizationService
 from apps.documents.models import Document, DocumentVersion
+from apps.projects.models import Project
 from apps.workflow.models import WorkflowDefinition, WorkflowInstance, WorkflowState
 
-from .models import EmailAccount, EmailAttachment, EmailMessage, EmailThread
+from .models import EmailAccount, EmailAttachment, EmailMessage, EmailProjectLink, EmailThread
 from .services import ConvertEmailAttachmentToDocumentCommand, EmailAttachmentDocumentService
 
 
@@ -48,6 +49,15 @@ def create_email_attachment():
         email_message=message,
         original_filename="invoice.pdf",
         content_type="application/pdf",
+    )
+
+
+def create_project(organization=None, code="26070", name="Kanarbiku"):
+    organization = organization or create_organization()
+    return Project.objects.create(
+        organization=organization,
+        code=code,
+        name=name,
     )
 
 
@@ -526,3 +536,125 @@ class EmailAttachmentDocumentServiceTests(TestCase):
         self.assertIsNone(attachment.document)
         self.assertEqual(Document.objects.count(), 0)
         self.assertEqual(DocumentVersion.objects.count(), 0)
+
+
+class EmailProjectLinkModelTests(TestCase):
+    def test_can_create_email_project_link(self):
+        message = create_email_message()
+        project = create_project(organization=message.organization)
+
+        link = EmailProjectLink.objects.create(
+            organization=message.organization,
+            email_message=message,
+            project=project,
+            status=EmailProjectLink.Status.CONFIRMED,
+            confidence=95,
+            evidence={"subject": "matched project code"},
+            metadata={"source": "test"},
+        )
+
+        self.assertIsNotNone(link.id)
+        self.assertEqual(link.organization, message.organization)
+        self.assertEqual(link.email_message, message)
+        self.assertEqual(link.project, project)
+        self.assertEqual(link.evidence, {"subject": "matched project code"})
+
+    def test_default_status_is_suggested(self):
+        message = create_email_message()
+        project = create_project(organization=message.organization)
+
+        link = EmailProjectLink.objects.create(
+            organization=message.organization,
+            email_message=message,
+            project=project,
+        )
+
+        self.assertEqual(link.status, EmailProjectLink.Status.SUGGESTED)
+
+    def test_default_confidence_is_zero(self):
+        message = create_email_message()
+        project = create_project(organization=message.organization)
+
+        link = EmailProjectLink.objects.create(
+            organization=message.organization,
+            email_message=message,
+            project=project,
+        )
+
+        self.assertEqual(link.confidence, 0)
+
+    def test_evidence_defaults_to_empty_dict(self):
+        message = create_email_message()
+        project = create_project(organization=message.organization)
+
+        link = EmailProjectLink.objects.create(
+            organization=message.organization,
+            email_message=message,
+            project=project,
+        )
+
+        self.assertEqual(link.evidence, {})
+
+    def test_metadata_defaults_to_empty_dict(self):
+        message = create_email_message()
+        project = create_project(organization=message.organization)
+
+        link = EmailProjectLink.objects.create(
+            organization=message.organization,
+            email_message=message,
+            project=project,
+        )
+
+        self.assertEqual(link.metadata, {})
+
+    def test_confirmed_by_can_be_null(self):
+        message = create_email_message()
+        project = create_project(organization=message.organization)
+
+        link = EmailProjectLink.objects.create(
+            organization=message.organization,
+            email_message=message,
+            project=project,
+        )
+
+        self.assertIsNone(link.confirmed_by)
+
+    def test_confirmed_at_can_be_null(self):
+        message = create_email_message()
+        project = create_project(organization=message.organization)
+
+        link = EmailProjectLink.objects.create(
+            organization=message.organization,
+            email_message=message,
+            project=project,
+        )
+
+        self.assertIsNone(link.confirmed_at)
+
+    def test_unique_email_message_project(self):
+        message = create_email_message()
+        project = create_project(organization=message.organization)
+        EmailProjectLink.objects.create(
+            organization=message.organization,
+            email_message=message,
+            project=project,
+        )
+
+        with self.assertRaises(IntegrityError):
+            EmailProjectLink.objects.create(
+                organization=message.organization,
+                email_message=message,
+                project=project,
+            )
+
+    def test_str_includes_email_subject_and_project_code(self):
+        message = create_email_message()
+        project = create_project(organization=message.organization, code="26080")
+
+        link = EmailProjectLink.objects.create(
+            organization=message.organization,
+            email_message=message,
+            project=project,
+        )
+
+        self.assertEqual(str(link), "Message with attachment -> 26080")

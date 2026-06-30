@@ -1,7 +1,9 @@
+from django.conf import settings
 from django.db import models
 
 from apps.core.models import Organization
 from apps.documents.models import Document
+from apps.projects.models import Project
 
 
 class EmailAccount(models.Model):
@@ -126,3 +128,38 @@ class EmailAttachment(models.Model):
 
     def __str__(self) -> str:
         return self.original_filename
+
+
+class EmailProjectLink(models.Model):
+    class Status(models.TextChoices):
+        SUGGESTED = "suggested", "Suggested"
+        CONFIRMED = "confirmed", "Confirmed"
+        REJECTED = "rejected", "Rejected"
+        CORRECTED = "corrected", "Corrected"
+
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="email_project_links")
+    email_message = models.ForeignKey(EmailMessage, on_delete=models.CASCADE, related_name="project_links")
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="email_links")
+    status = models.CharField(max_length=32, choices=Status.choices, default=Status.SUGGESTED)
+    confidence = models.PositiveSmallIntegerField(default=0)
+    evidence = models.JSONField(default=dict, blank=True)
+    confirmed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="confirmed_email_project_links",
+        blank=True,
+        null=True,
+    )
+    confirmed_at = models.DateTimeField(blank=True, null=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["email_message_id", "project__code", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["email_message", "project"], name="unique_email_project_link"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.email_message} -> {self.project.code}"
