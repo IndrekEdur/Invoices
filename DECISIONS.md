@@ -238,3 +238,18 @@ Reason:
 - Many business objects need project context to be understood correctly.
 - Projects act as organizational memory containers for evidence, decisions, tasks, timelines, and relationships.
 - A shared Project Domain architecture is needed before implementation introduces project models or project-based automation.
+
+## ADR-017: Implement Complete Business Scenarios Before Isolated Technical Modules
+
+Date: 2026-06-30
+
+Decision:
+
+- The platform shall be implemented using complete business scenarios rather than isolated technical modules.
+- Use `EMAIL_PROCESSING_EPIC.md` as the first scenario-level reference for incoming business e-mail processing.
+
+Reason:
+
+- The platform's value comes from end-to-end business outcomes, not separate disconnected features.
+- E-mail processing connects communication, projects, documents, workflows, AI reasoning, accounting, learning, and business memory.
+- Scenario-level epics help future implementation tasks stay aligned with real user workflows.

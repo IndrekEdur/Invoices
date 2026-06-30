@@ -8,6 +8,8 @@
 
 `PROJECT_ARCHITECTURE.md` describes Project as the primary business context connecting people, documents, communication, workflows, accounting, and knowledge.
 
+`EMAIL_PROCESSING_EPIC.md` describes the end-to-end lifecycle of an incoming business e-mail from arrival to accounting, learning, and business memory.
+
 ## Testide käivitamine
 
 Käivita testid repo juurkaustast:
