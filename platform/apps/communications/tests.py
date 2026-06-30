@@ -1,10 +1,19 @@
+import shutil
+import tempfile
+from unittest.mock import patch
+
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError
+from django.test import override_settings
 from django.test import TestCase
 
+from apps.core.models import AuditEvent
 from apps.core.services import CreateOrganizationCommand, OrganizationService
-from apps.documents.models import Document
+from apps.documents.models import Document, DocumentVersion
+from apps.workflow.models import WorkflowDefinition, WorkflowInstance, WorkflowState
 
 from .models import EmailAccount, EmailAttachment, EmailMessage, EmailThread
+from .services import ConvertEmailAttachmentToDocumentCommand, EmailAttachmentDocumentService
 
 
 def create_organization(name="Communications Org"):
@@ -30,6 +39,22 @@ def create_email_message(organization=None):
         external_message_id="message-attachment-test",
         subject="Message with attachment",
     )
+
+
+def create_email_attachment():
+    message = create_email_message()
+    return EmailAttachment.objects.create(
+        organization=message.organization,
+        email_message=message,
+        original_filename="invoice.pdf",
+        content_type="application/pdf",
+    )
+
+
+def create_document_workflow():
+    workflow = WorkflowDefinition.objects.create(code="email-attachment-document", name="Email attachment document")
+    WorkflowState.objects.create(workflow=workflow, code="received", name="Received", is_initial=True)
+    return workflow
 
 
 class EmailAccountModelTests(TestCase):
@@ -375,3 +400,129 @@ class EmailAttachmentModelTests(TestCase):
         )
 
         self.assertEqual(str(attachment), "invoice.pdf")
+
+
+class EmailAttachmentDocumentServiceTests(TestCase):
+    def setUp(self):
+        self.media_root = tempfile.mkdtemp()
+        self.override = override_settings(MEDIA_ROOT=self.media_root)
+        self.override.enable()
+        self.addCleanup(self.override.disable)
+        self.addCleanup(shutil.rmtree, self.media_root, ignore_errors=True)
+
+    def test_converts_attachment_to_document(self):
+        attachment = create_email_attachment()
+        uploaded_file = SimpleUploadedFile("invoice.pdf", b"invoice content", content_type="application/pdf")
+
+        document = EmailAttachmentDocumentService.convert(
+            ConvertEmailAttachmentToDocumentCommand(
+                attachment=attachment,
+                file=uploaded_file,
+            )
+        )
+
+        self.assertIsNotNone(document.id)
+        self.assertEqual(document.organization, attachment.organization)
+        self.assertEqual(document.original_filename, attachment.original_filename)
+        self.assertEqual(document.source, Document.Source.EMAIL_ATTACHMENT)
+
+    def test_links_document_to_email_attachment(self):
+        attachment = create_email_attachment()
+        uploaded_file = SimpleUploadedFile("invoice.pdf", b"invoice content", content_type="application/pdf")
+
+        document = EmailAttachmentDocumentService.convert(
+            ConvertEmailAttachmentToDocumentCommand(
+                attachment=attachment,
+                file=uploaded_file,
+            )
+        )
+
+        attachment.refresh_from_db()
+        self.assertEqual(attachment.document, document)
+
+    def test_creates_document_version(self):
+        attachment = create_email_attachment()
+        uploaded_file = SimpleUploadedFile("invoice.pdf", b"invoice content", content_type="application/pdf")
+
+        document = EmailAttachmentDocumentService.convert(
+            ConvertEmailAttachmentToDocumentCommand(
+                attachment=attachment,
+                file=uploaded_file,
+            )
+        )
+
+        version = document.versions.get()
+        self.assertEqual(version.version_number, 1)
+        self.assertEqual(version.sha256, document.sha256)
+
+    def test_creates_audit_event(self):
+        attachment = create_email_attachment()
+        uploaded_file = SimpleUploadedFile("invoice.pdf", b"invoice content", content_type="application/pdf")
+
+        document = EmailAttachmentDocumentService.convert(
+            ConvertEmailAttachmentToDocumentCommand(
+                attachment=attachment,
+                file=uploaded_file,
+            )
+        )
+
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                event_type="email_attachment.converted_to_document",
+                organization=attachment.organization,
+                object_type="EmailAttachment",
+                object_id=str(attachment.id),
+                metadata__document_uuid=str(document.uuid),
+            ).exists()
+        )
+
+    def test_metadata_is_not_mutated(self):
+        attachment = create_email_attachment()
+        metadata = {"source": "email"}
+        uploaded_file = SimpleUploadedFile("invoice.pdf", b"invoice content", content_type="application/pdf")
+
+        document = EmailAttachmentDocumentService.convert(
+            ConvertEmailAttachmentToDocumentCommand(
+                attachment=attachment,
+                file=uploaded_file,
+                metadata=metadata,
+            )
+        )
+        document.metadata["source"] = "changed"
+
+        self.assertEqual(metadata, {"source": "email"})
+
+    def test_optional_workflow_creates_workflow_instance(self):
+        attachment = create_email_attachment()
+        workflow = create_document_workflow()
+        uploaded_file = SimpleUploadedFile("invoice.pdf", b"invoice content", content_type="application/pdf")
+
+        document = EmailAttachmentDocumentService.convert(
+            ConvertEmailAttachmentToDocumentCommand(
+                attachment=attachment,
+                file=uploaded_file,
+                workflow=workflow,
+            )
+        )
+
+        instance = WorkflowInstance.objects.get(entity_uuid=document.uuid)
+        self.assertEqual(instance.workflow, workflow)
+        self.assertEqual(instance.entity_type, "document")
+
+    def test_transaction_rolls_back_when_attachment_audit_fails(self):
+        attachment = create_email_attachment()
+        uploaded_file = SimpleUploadedFile("invoice.pdf", b"invoice content", content_type="application/pdf")
+
+        with patch("apps.communications.services.attachments.AuditService.record", side_effect=RuntimeError("audit failed")):
+            with self.assertRaises(RuntimeError):
+                EmailAttachmentDocumentService.convert(
+                    ConvertEmailAttachmentToDocumentCommand(
+                        attachment=attachment,
+                        file=uploaded_file,
+                    )
+                )
+
+        attachment.refresh_from_db()
+        self.assertIsNone(attachment.document)
+        self.assertEqual(Document.objects.count(), 0)
+        self.assertEqual(DocumentVersion.objects.count(), 0)

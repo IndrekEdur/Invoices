@@ -8,6 +8,7 @@ from apps.core.models import Organization
 class Document(models.Model):
     class Source(models.TextChoices):
         MAIL = "mail", "Mail"
+        EMAIL_ATTACHMENT = "email_attachment", "Email attachment"
         MANUAL_UPLOAD = "manual_upload", "Manual upload"
         BANK_IMPORT = "bank_import", "Bank import"
         MERIT_IMPORT = "merit_import", "Merit import"
