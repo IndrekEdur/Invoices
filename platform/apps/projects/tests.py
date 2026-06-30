@@ -3,7 +3,7 @@ from django.test import TestCase
 
 from apps.core.services import CreateOrganizationCommand, OrganizationService
 
-from .models import Project, ProjectParty
+from .models import Project, ProjectAddress, ProjectParty
 
 
 def create_organization(name="Projects Org"):
@@ -181,3 +181,106 @@ class ProjectPartyModelTests(TestCase):
         )
 
         self.assertEqual(str(party), "Owner Supervisor (owner_supervisor)")
+
+
+class ProjectAddressModelTests(TestCase):
+    def test_can_create_project_address(self):
+        project = create_project()
+
+        address = ProjectAddress.objects.create(
+            organization=project.organization,
+            project=project,
+            address_type=ProjectAddress.Type.SITE,
+            label="Main site",
+            country="EE",
+            city="Tallinn",
+            street="Example street 1",
+            postal_code="10111",
+            latitude=59.437000,
+            longitude=24.753600,
+            is_primary=True,
+            metadata={"source": "test"},
+        )
+
+        self.assertIsNotNone(address.id)
+        self.assertEqual(address.project, project)
+        self.assertEqual(address.organization, project.organization)
+        self.assertEqual(address.city, "Tallinn")
+        self.assertEqual(address.metadata, {"source": "test"})
+
+    def test_default_address_type_is_site(self):
+        project = create_project()
+
+        address = ProjectAddress.objects.create(
+            organization=project.organization,
+            project=project,
+        )
+
+        self.assertEqual(address.address_type, ProjectAddress.Type.SITE)
+
+    def test_default_country_is_ee(self):
+        project = create_project()
+
+        address = ProjectAddress.objects.create(
+            organization=project.organization,
+            project=project,
+        )
+
+        self.assertEqual(address.country, "EE")
+
+    def test_default_is_primary_is_false(self):
+        project = create_project()
+
+        address = ProjectAddress.objects.create(
+            organization=project.organization,
+            project=project,
+        )
+
+        self.assertFalse(address.is_primary)
+
+    def test_links_to_project(self):
+        project = create_project()
+
+        address = ProjectAddress.objects.create(
+            organization=project.organization,
+            project=project,
+            street="Project street 1",
+        )
+
+        self.assertEqual(address.project, project)
+        self.assertEqual(project.addresses.get(), address)
+
+    def test_links_to_organization(self):
+        project = create_project()
+
+        address = ProjectAddress.objects.create(
+            organization=project.organization,
+            project=project,
+            street="Organization street 1",
+        )
+
+        self.assertEqual(address.organization, project.organization)
+        self.assertEqual(project.organization.project_addresses.get(), address)
+
+    def test_latitude_and_longitude_can_be_null(self):
+        project = create_project()
+
+        address = ProjectAddress.objects.create(
+            organization=project.organization,
+            project=project,
+        )
+
+        self.assertIsNone(address.latitude)
+        self.assertIsNone(address.longitude)
+
+    def test_str_includes_project_code_and_address_type(self):
+        project = create_project(code="26080")
+
+        address = ProjectAddress.objects.create(
+            organization=project.organization,
+            project=project,
+            address_type=ProjectAddress.Type.BILLING,
+            label="Billing address",
+        )
+
+        self.assertEqual(str(address), "26080 billing: Billing address")

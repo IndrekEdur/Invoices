@@ -78,3 +78,34 @@ class ProjectParty(models.Model):
 
     def __str__(self) -> str:
         return f"{self.name} ({self.role})"
+
+
+class ProjectAddress(models.Model):
+    class Type(models.TextChoices):
+        SITE = "site", "Site"
+        BILLING = "billing", "Billing"
+        POSTAL = "postal", "Postal"
+        WAREHOUSE = "warehouse", "Warehouse"
+        TEMPORARY = "temporary", "Temporary"
+        OTHER = "other", "Other"
+
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="project_addresses")
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="addresses")
+    address_type = models.CharField(max_length=32, choices=Type.choices, default=Type.SITE)
+    label = models.CharField(max_length=255, blank=True)
+    country = models.CharField(max_length=2, default="EE")
+    city = models.CharField(max_length=255, blank=True)
+    street = models.CharField(max_length=255, blank=True)
+    postal_code = models.CharField(max_length=32, blank=True)
+    latitude = models.DecimalField(max_digits=9, decimal_places=6, blank=True, null=True)
+    longitude = models.DecimalField(max_digits=9, decimal_places=6, blank=True, null=True)
+    is_primary = models.BooleanField(default=False)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["project__code", "address_type", "id"]
+
+    def __str__(self) -> str:
+        return f"{self.project.code} {self.address_type}: {self.label or self.street}"
