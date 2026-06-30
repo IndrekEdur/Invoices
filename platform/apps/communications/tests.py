@@ -2,6 +2,7 @@ import shutil
 import tempfile
 from unittest.mock import patch
 
+from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError
 from django.test import override_settings
@@ -14,7 +15,14 @@ from apps.projects.models import Project
 from apps.workflow.models import WorkflowDefinition, WorkflowInstance, WorkflowState
 
 from .models import EmailAccount, EmailAttachment, EmailMessage, EmailProjectLink, EmailThread
-from .services import ConvertEmailAttachmentToDocumentCommand, EmailAttachmentDocumentService
+from .services import (
+    ConfirmEmailProjectLinkCommand,
+    ConvertEmailAttachmentToDocumentCommand,
+    CorrectEmailProjectLinkCommand,
+    EmailAttachmentDocumentService,
+    EmailProjectLinkService,
+    RejectEmailProjectLinkCommand,
+)
 
 
 def create_organization(name="Communications Org"):
@@ -58,6 +66,18 @@ def create_project(organization=None, code="26070", name="Kanarbiku"):
         organization=organization,
         code=code,
         name=name,
+    )
+
+
+def create_email_project_link():
+    message = create_email_message()
+    project = create_project(organization=message.organization)
+    return EmailProjectLink.objects.create(
+        organization=message.organization,
+        email_message=message,
+        project=project,
+        confidence=72,
+        evidence={"subject": "possible project match"},
     )
 
 
@@ -658,3 +678,191 @@ class EmailProjectLinkModelTests(TestCase):
         )
 
         self.assertEqual(str(link), "Message with attachment -> 26080")
+
+
+class EmailProjectLinkServiceTests(TestCase):
+    def create_actor(self):
+        return get_user_model().objects.create_user(username="project-reviewer")
+
+    def test_confirm_changes_status(self):
+        link = create_email_project_link()
+        actor = self.create_actor()
+
+        confirmed_link = EmailProjectLinkService.confirm(
+            ConfirmEmailProjectLinkCommand(
+                link=link,
+                actor=actor,
+            )
+        )
+
+        self.assertEqual(confirmed_link.status, EmailProjectLink.Status.CONFIRMED)
+
+    def test_confirm_sets_confirmed_by_and_confirmed_at(self):
+        link = create_email_project_link()
+        actor = self.create_actor()
+
+        confirmed_link = EmailProjectLinkService.confirm(
+            ConfirmEmailProjectLinkCommand(
+                link=link,
+                actor=actor,
+            )
+        )
+
+        self.assertEqual(confirmed_link.confirmed_by, actor)
+        self.assertIsNotNone(confirmed_link.confirmed_at)
+
+    def test_confirm_preserves_evidence(self):
+        link = create_email_project_link()
+        actor = self.create_actor()
+
+        confirmed_link = EmailProjectLinkService.confirm(
+            ConfirmEmailProjectLinkCommand(
+                link=link,
+                actor=actor,
+            )
+        )
+
+        self.assertEqual(confirmed_link.evidence, {"subject": "possible project match"})
+
+    def test_reject_changes_status(self):
+        link = create_email_project_link()
+        actor = self.create_actor()
+
+        rejected_link = EmailProjectLinkService.reject(
+            RejectEmailProjectLinkCommand(
+                link=link,
+                actor=actor,
+                reason="Wrong project.",
+            )
+        )
+
+        self.assertEqual(rejected_link.status, EmailProjectLink.Status.REJECTED)
+
+    def test_reject_stores_reason_and_audit_metadata(self):
+        link = create_email_project_link()
+        actor = self.create_actor()
+
+        rejected_link = EmailProjectLinkService.reject(
+            RejectEmailProjectLinkCommand(
+                link=link,
+                actor=actor,
+                reason="Wrong project.",
+            )
+        )
+
+        self.assertEqual(rejected_link.metadata["rejection_reason"], "Wrong project.")
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                event_type="email_project_link.rejected",
+                object_id=str(link.id),
+                metadata__reason="Wrong project.",
+            ).exists()
+        )
+
+    def test_correct_marks_original_as_corrected(self):
+        link = create_email_project_link()
+        new_project = create_project(organization=link.organization, code="26081", name="Correct project")
+        actor = self.create_actor()
+
+        EmailProjectLinkService.correct(
+            CorrectEmailProjectLinkCommand(
+                link=link,
+                new_project=new_project,
+                actor=actor,
+                reason="User selected another project.",
+            )
+        )
+
+        link.refresh_from_db()
+        self.assertEqual(link.status, EmailProjectLink.Status.CORRECTED)
+        self.assertEqual(link.metadata["correction_reason"], "User selected another project.")
+
+    def test_correct_creates_confirmed_link_for_new_project(self):
+        link = create_email_project_link()
+        new_project = create_project(organization=link.organization, code="26082", name="Confirmed project")
+        actor = self.create_actor()
+
+        confirmed_link = EmailProjectLinkService.correct(
+            CorrectEmailProjectLinkCommand(
+                link=link,
+                new_project=new_project,
+                actor=actor,
+            )
+        )
+
+        self.assertEqual(confirmed_link.project, new_project)
+        self.assertEqual(confirmed_link.status, EmailProjectLink.Status.CONFIRMED)
+        self.assertEqual(confirmed_link.confirmed_by, actor)
+        self.assertIsNotNone(confirmed_link.confirmed_at)
+
+    def test_correct_returns_confirmed_link(self):
+        link = create_email_project_link()
+        new_project = create_project(organization=link.organization, code="26083", name="Returned project")
+        actor = self.create_actor()
+
+        confirmed_link = EmailProjectLinkService.correct(
+            CorrectEmailProjectLinkCommand(
+                link=link,
+                new_project=new_project,
+                actor=actor,
+            )
+        )
+
+        self.assertEqual(confirmed_link.status, EmailProjectLink.Status.CONFIRMED)
+        self.assertEqual(confirmed_link.project, new_project)
+
+    def test_metadata_is_not_mutated(self):
+        link = create_email_project_link()
+        actor = self.create_actor()
+        metadata = {"source": "manual-review"}
+
+        EmailProjectLinkService.confirm(
+            ConfirmEmailProjectLinkCommand(
+                link=link,
+                actor=actor,
+                metadata=metadata,
+            )
+        )
+        metadata["source"] = "caller-changed"
+
+        audit_event = AuditEvent.objects.get(event_type="email_project_link.confirmed")
+        self.assertEqual(audit_event.metadata["decision_metadata"], {"source": "manual-review"})
+
+    def test_audit_event_created_for_each_action(self):
+        actor = self.create_actor()
+        confirmed_link = create_email_project_link()
+        rejected_link = create_email_project_link()
+        corrected_link = create_email_project_link()
+        new_project = create_project(organization=corrected_link.organization, code="26084", name="Audit project")
+
+        EmailProjectLinkService.confirm(ConfirmEmailProjectLinkCommand(link=confirmed_link, actor=actor))
+        EmailProjectLinkService.reject(RejectEmailProjectLinkCommand(link=rejected_link, actor=actor))
+        EmailProjectLinkService.correct(
+            CorrectEmailProjectLinkCommand(
+                link=corrected_link,
+                new_project=new_project,
+                actor=actor,
+            )
+        )
+
+        self.assertTrue(AuditEvent.objects.filter(event_type="email_project_link.confirmed").exists())
+        self.assertTrue(AuditEvent.objects.filter(event_type="email_project_link.rejected").exists())
+        self.assertTrue(AuditEvent.objects.filter(event_type="email_project_link.corrected").exists())
+
+    def test_transaction_rolls_back_when_audit_fails(self):
+        link = create_email_project_link()
+        actor = self.create_actor()
+
+        with patch("apps.communications.services.project_links.AuditService.record", side_effect=RuntimeError("audit failed")):
+            with self.assertRaises(RuntimeError):
+                EmailProjectLinkService.confirm(
+                    ConfirmEmailProjectLinkCommand(
+                        link=link,
+                        actor=actor,
+                    )
+                )
+
+        link.refresh_from_db()
+        self.assertEqual(link.status, EmailProjectLink.Status.SUGGESTED)
+        self.assertIsNone(link.confirmed_by)
+        self.assertIsNone(link.confirmed_at)

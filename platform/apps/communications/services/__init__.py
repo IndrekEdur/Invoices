@@ -1,4 +1,17 @@
 from .attachments import EmailAttachmentDocumentService
-from .commands import ConvertEmailAttachmentToDocumentCommand
+from .commands import (
+    ConfirmEmailProjectLinkCommand,
+    ConvertEmailAttachmentToDocumentCommand,
+    CorrectEmailProjectLinkCommand,
+    RejectEmailProjectLinkCommand,
+)
+from .project_links import EmailProjectLinkService
 
-__all__ = ["ConvertEmailAttachmentToDocumentCommand", "EmailAttachmentDocumentService"]
+__all__ = [
+    "ConfirmEmailProjectLinkCommand",
+    "ConvertEmailAttachmentToDocumentCommand",
+    "CorrectEmailProjectLinkCommand",
+    "EmailAttachmentDocumentService",
+    "EmailProjectLinkService",
+    "RejectEmailProjectLinkCommand",
+]
