@@ -21,9 +21,11 @@ from .services import (
     CorrectEmailProjectLinkCommand,
     DetectEmailQuestionsCommand,
     EmailAttachmentDocumentService,
+    EmailProcessingService,
     EmailProjectLinkService,
     EmailProjectSuggestionService,
     EmailQuestionDetectionService,
+    ProcessEmailCommand,
     RejectEmailProjectLinkCommand,
     SuggestEmailProjectLinksCommand,
 )
@@ -1058,6 +1060,87 @@ class EmailQuestionModelAndDetectionServiceTests(TestCase):
         )[0]
 
         self.assertEqual(str(question), "How should we proceed?: How should we proceed?")
+
+
+class EmailProcessingServiceTests(TestCase):
+    def test_process_creates_project_suggestions_when_project_code_exists(self):
+        organization = create_organization()
+        project = create_project(organization=organization, code="26100", name="Processing project")
+        message = create_email_message(organization=organization, subject="26100 question")
+
+        result = EmailProcessingService.process(ProcessEmailCommand(email_message=message))
+
+        self.assertTrue(result["processed"])
+        self.assertEqual(result["project_links"][0].project, project)
+        self.assertEqual(EmailProjectLink.objects.count(), 1)
+
+    def test_process_detects_questions(self):
+        message = create_email_message(subject="Can you confirm?")
+
+        result = EmailProcessingService.process(ProcessEmailCommand(email_message=message))
+
+        self.assertTrue(result["processed"])
+        self.assertEqual(len(result["questions"]), 1)
+        self.assertEqual(EmailQuestion.objects.count(), 1)
+
+    def test_process_returns_structured_result(self):
+        message = create_email_message(subject="FYI")
+
+        result = EmailProcessingService.process(ProcessEmailCommand(email_message=message))
+
+        self.assertEqual(result["email_message"], message)
+        self.assertEqual(result["project_links"], [])
+        self.assertEqual(result["questions"], [])
+        self.assertTrue(result["processed"])
+
+    def test_process_creates_audit_event(self):
+        message = create_email_message(subject="FYI")
+
+        EmailProcessingService.process(ProcessEmailCommand(email_message=message))
+
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                event_type="email.processing_completed",
+                object_type="EmailMessage",
+                object_id=str(message.id),
+            ).exists()
+        )
+
+    def test_metadata_is_not_mutated(self):
+        message = create_email_message(subject="Please confirm")
+        metadata = {"source": "pipeline"}
+
+        EmailProcessingService.process(
+            ProcessEmailCommand(
+                email_message=message,
+                metadata=metadata,
+            )
+        )
+        metadata["source"] = "caller-changed"
+
+        audit_event = AuditEvent.objects.get(event_type="email.processing_completed")
+        self.assertEqual(audit_event.metadata["processing_metadata"], {"source": "pipeline"})
+
+    def test_no_project_no_question_still_returns_processed_true(self):
+        message = create_email_message(subject="FYI", body_text="Document attached.")
+
+        result = EmailProcessingService.process(ProcessEmailCommand(email_message=message))
+
+        self.assertTrue(result["processed"])
+        self.assertEqual(result["project_links"], [])
+        self.assertEqual(result["questions"], [])
+
+    def test_transaction_rolls_back_when_processing_audit_fails(self):
+        organization = create_organization()
+        create_project(organization=organization, code="26101", name="Rollback project")
+        message = create_email_message(organization=organization, subject="26101 Can you confirm?")
+
+        with patch("apps.communications.services.processing.AuditService.record", side_effect=RuntimeError("audit failed")):
+            with self.assertRaises(RuntimeError):
+                EmailProcessingService.process(ProcessEmailCommand(email_message=message))
+
+        self.assertEqual(EmailProjectLink.objects.count(), 0)
+        self.assertEqual(EmailQuestion.objects.count(), 0)
 
     def test_does_not_overwrite_confirmed_link(self):
         organization = create_organization()

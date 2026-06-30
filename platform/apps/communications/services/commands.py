@@ -46,3 +46,10 @@ class DetectEmailQuestionsCommand:
     email_message: object
     actor: object = None
     metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class ProcessEmailCommand:
+    email_message: object
+    actor: object = None
+    metadata: dict | None = None
