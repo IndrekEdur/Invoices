@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Project
+from .models import Project, ProjectParty
 
 
 @admin.register(Project)
@@ -9,3 +9,11 @@ class ProjectAdmin(admin.ModelAdmin):
     list_filter = ("organization", "status", "project_type")
     search_fields = ("code", "name", "description", "organization__name")
     readonly_fields = ("uuid", "created_at", "updated_at")
+
+
+@admin.register(ProjectParty)
+class ProjectPartyAdmin(admin.ModelAdmin):
+    list_display = ("name", "role", "project", "organization", "company_name", "email", "is_active")
+    list_filter = ("organization", "role", "is_active")
+    search_fields = ("name", "company_name", "email", "phone", "external_reference", "project__code", "project__name")
+    readonly_fields = ("created_at", "updated_at")

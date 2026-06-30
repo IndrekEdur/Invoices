@@ -43,3 +43,38 @@ class Project(models.Model):
 
     def __str__(self) -> str:
         return f"{self.code} - {self.name}"
+
+
+class ProjectParty(models.Model):
+    class Role(models.TextChoices):
+        CUSTOMER = "customer", "Customer"
+        SUPPLIER = "supplier", "Supplier"
+        SUBCONTRACTOR = "subcontractor", "Subcontractor"
+        PROJECT_MANAGER = "project_manager", "Project manager"
+        SITE_MANAGER = "site_manager", "Site manager"
+        ELECTRICIAN = "electrician", "Electrician"
+        DESIGNER = "designer", "Designer"
+        ARCHITECT = "architect", "Architect"
+        OWNER_SUPERVISOR = "owner_supervisor", "Owner supervisor"
+        AUTHORITY = "authority", "Authority"
+        ACCOUNTANT = "accountant", "Accountant"
+        OTHER = "other", "Other"
+
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="project_parties")
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="parties")
+    name = models.CharField(max_length=255)
+    email = models.EmailField(blank=True)
+    phone = models.CharField(max_length=64, blank=True)
+    role = models.CharField(max_length=32, choices=Role.choices, default=Role.OTHER)
+    company_name = models.CharField(max_length=255, blank=True)
+    external_reference = models.CharField(max_length=255, blank=True)
+    is_active = models.BooleanField(default=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["project__code", "role", "name", "id"]
+
+    def __str__(self) -> str:
+        return f"{self.name} ({self.role})"
