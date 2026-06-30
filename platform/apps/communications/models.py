@@ -1,6 +1,7 @@
 from django.db import models
 
 from apps.core.models import Organization
+from apps.documents.models import Document
 
 
 class EmailAccount(models.Model):
@@ -98,3 +99,30 @@ class EmailMessage(models.Model):
 
     def __str__(self) -> str:
         return self.subject or self.external_message_id
+
+
+class EmailAttachment(models.Model):
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="email_attachments")
+    email_message = models.ForeignKey(EmailMessage, on_delete=models.CASCADE, related_name="attachments")
+    document = models.ForeignKey(
+        Document,
+        on_delete=models.SET_NULL,
+        related_name="email_attachments",
+        blank=True,
+        null=True,
+    )
+    original_filename = models.CharField(max_length=255)
+    content_type = models.CharField(max_length=128, blank=True)
+    size_bytes = models.PositiveBigIntegerField(default=0)
+    content_id = models.CharField(max_length=255, blank=True)
+    is_inline = models.BooleanField(default=False)
+    sha256 = models.CharField(max_length=64, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["email_message_id", "original_filename", "id"]
+
+    def __str__(self) -> str:
+        return self.original_filename

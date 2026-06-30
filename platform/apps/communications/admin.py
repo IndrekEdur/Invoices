@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import EmailAccount, EmailMessage, EmailThread
+from .models import EmailAccount, EmailAttachment, EmailMessage, EmailThread
 
 
 @admin.register(EmailAccount)
@@ -30,5 +30,28 @@ class EmailMessageAdmin(admin.ModelAdmin):
         "sender_email",
         "sender_name",
         "account__email_address",
+    )
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(EmailAttachment)
+class EmailAttachmentAdmin(admin.ModelAdmin):
+    list_display = (
+        "original_filename",
+        "email_message",
+        "organization",
+        "document",
+        "content_type",
+        "size_bytes",
+        "is_inline",
+    )
+    list_filter = ("organization", "content_type", "is_inline")
+    search_fields = (
+        "original_filename",
+        "content_id",
+        "sha256",
+        "email_message__subject",
+        "email_message__external_message_id",
+        "document__title",
     )
     readonly_fields = ("created_at", "updated_at")

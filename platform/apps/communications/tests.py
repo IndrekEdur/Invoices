@@ -2,8 +2,9 @@ from django.db import IntegrityError
 from django.test import TestCase
 
 from apps.core.services import CreateOrganizationCommand, OrganizationService
+from apps.documents.models import Document
 
-from .models import EmailAccount, EmailMessage, EmailThread
+from .models import EmailAccount, EmailAttachment, EmailMessage, EmailThread
 
 
 def create_organization(name="Communications Org"):
@@ -17,6 +18,17 @@ def create_email_account(organization=None, email_address="mail@example.com"):
         provider=EmailAccount.Provider.IMAP,
         display_name="Mailbox",
         email_address=email_address,
+    )
+
+
+def create_email_message(organization=None):
+    organization = organization or create_organization()
+    account = create_email_account(organization=organization)
+    return EmailMessage.objects.create(
+        organization=organization,
+        account=account,
+        external_message_id="message-attachment-test",
+        subject="Message with attachment",
     )
 
 
@@ -276,3 +288,90 @@ class EmailMessageModelTests(TestCase):
         )
 
         self.assertEqual(str(message), "Readable message")
+
+
+class EmailAttachmentModelTests(TestCase):
+    def test_can_create_email_attachment(self):
+        message = create_email_message()
+
+        attachment = EmailAttachment.objects.create(
+            organization=message.organization,
+            email_message=message,
+            original_filename="invoice.pdf",
+            content_type="application/pdf",
+            size_bytes=12345,
+            content_id="attachment-1",
+            sha256="a" * 64,
+            metadata={"source": "imap"},
+        )
+
+        self.assertIsNotNone(attachment.id)
+        self.assertEqual(attachment.organization, message.organization)
+        self.assertEqual(attachment.original_filename, "invoice.pdf")
+        self.assertEqual(attachment.content_type, "application/pdf")
+        self.assertEqual(attachment.size_bytes, 12345)
+        self.assertEqual(attachment.metadata, {"source": "imap"})
+
+    def test_attachment_belongs_to_email_message(self):
+        message = create_email_message()
+
+        attachment = EmailAttachment.objects.create(
+            organization=message.organization,
+            email_message=message,
+            original_filename="invoice.pdf",
+        )
+
+        self.assertEqual(attachment.email_message, message)
+        self.assertEqual(message.attachments.get(), attachment)
+
+    def test_document_can_be_null(self):
+        message = create_email_message()
+
+        attachment = EmailAttachment.objects.create(
+            organization=message.organization,
+            email_message=message,
+            original_filename="invoice.pdf",
+        )
+
+        self.assertIsNone(attachment.document)
+
+    def test_document_can_be_linked(self):
+        message = create_email_message()
+        document = Document.objects.create(
+            organization=message.organization,
+            title="Invoice document",
+            original_filename="invoice.pdf",
+            source=Document.Source.MAIL,
+        )
+
+        attachment = EmailAttachment.objects.create(
+            organization=message.organization,
+            email_message=message,
+            document=document,
+            original_filename="invoice.pdf",
+        )
+
+        self.assertEqual(attachment.document, document)
+        self.assertEqual(document.email_attachments.get(), attachment)
+
+    def test_is_inline_defaults_false(self):
+        message = create_email_message()
+
+        attachment = EmailAttachment.objects.create(
+            organization=message.organization,
+            email_message=message,
+            original_filename="logo.png",
+        )
+
+        self.assertFalse(attachment.is_inline)
+
+    def test_attachment_str(self):
+        message = create_email_message()
+
+        attachment = EmailAttachment.objects.create(
+            organization=message.organization,
+            email_message=message,
+            original_filename="invoice.pdf",
+        )
+
+        self.assertEqual(str(attachment), "invoice.pdf")
