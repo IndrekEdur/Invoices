@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import EmailAccount, EmailAttachment, EmailMessage, EmailProjectLink, EmailThread
+from .models import EmailAccount, EmailAttachment, EmailMessage, EmailProjectLink, EmailQuestion, EmailThread
 
 
 @admin.register(EmailAccount)
@@ -62,4 +62,12 @@ class EmailProjectLinkAdmin(admin.ModelAdmin):
     list_display = ("email_message", "project", "organization", "status", "confidence", "confirmed_by", "confirmed_at")
     list_filter = ("organization", "status", "project")
     search_fields = ("email_message__subject", "email_message__external_message_id", "project__code", "project__name")
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(EmailQuestion)
+class EmailQuestionAdmin(admin.ModelAdmin):
+    list_display = ("email_message", "organization", "status", "detection_method", "confidence", "created_at")
+    list_filter = ("organization", "status", "detection_method")
+    search_fields = ("question_text", "email_message__subject", "email_message__external_message_id")
     readonly_fields = ("created_at", "updated_at")

@@ -14,14 +14,16 @@ from apps.documents.models import Document, DocumentVersion
 from apps.projects.models import Project
 from apps.workflow.models import WorkflowDefinition, WorkflowInstance, WorkflowState
 
-from .models import EmailAccount, EmailAttachment, EmailMessage, EmailProjectLink, EmailThread
+from .models import EmailAccount, EmailAttachment, EmailMessage, EmailProjectLink, EmailQuestion, EmailThread
 from .services import (
     ConfirmEmailProjectLinkCommand,
     ConvertEmailAttachmentToDocumentCommand,
     CorrectEmailProjectLinkCommand,
+    DetectEmailQuestionsCommand,
     EmailAttachmentDocumentService,
     EmailProjectLinkService,
     EmailProjectSuggestionService,
+    EmailQuestionDetectionService,
     RejectEmailProjectLinkCommand,
     SuggestEmailProjectLinksCommand,
 )
@@ -923,6 +925,139 @@ class EmailProjectSuggestionServiceTests(TestCase):
 
         self.assertEqual(suggestions, [])
         self.assertEqual(EmailProjectLink.objects.count(), 0)
+
+
+class EmailQuestionModelAndDetectionServiceTests(TestCase):
+    def test_detects_question_mark_in_subject(self):
+        message = create_email_message(subject="Can you confirm this?")
+
+        questions = EmailQuestionDetectionService.detect(
+            DetectEmailQuestionsCommand(email_message=message)
+        )
+
+        self.assertEqual(len(questions), 1)
+        self.assertEqual(questions[0].confidence, 70)
+        self.assertEqual(questions[0].status, EmailQuestion.Status.DETECTED)
+        self.assertEqual(questions[0].detection_method, EmailQuestion.DetectionMethod.RULE_BASED)
+
+    def test_detects_question_mark_in_body(self):
+        message = create_email_message(body_text="Kas see arve on korrektne?")
+
+        questions = EmailQuestionDetectionService.detect(
+            DetectEmailQuestionsCommand(email_message=message)
+        )
+
+        self.assertEqual(len(questions), 1)
+        self.assertEqual(questions[0].confidence, 70)
+
+    def test_detects_estonian_keyword(self):
+        message = create_email_message(subject="Palun saatke dokument")
+
+        questions = EmailQuestionDetectionService.detect(
+            DetectEmailQuestionsCommand(email_message=message)
+        )
+
+        self.assertEqual(len(questions), 1)
+        self.assertEqual(questions[0].confidence, 60)
+        self.assertIn(
+            {"matched_field": "subject", "rule": "estonian_keyword", "keyword": "palun", "confidence": 60},
+            questions[0].evidence["matches"],
+        )
+
+    def test_detects_english_keyword(self):
+        message = create_email_message(body_text="Please confirm the delivery date.")
+
+        questions = EmailQuestionDetectionService.detect(
+            DetectEmailQuestionsCommand(email_message=message)
+        )
+
+        self.assertEqual(len(questions), 1)
+        self.assertEqual(questions[0].confidence, 60)
+        self.assertIn(
+            {"matched_field": "body_text", "rule": "english_keyword", "keyword": "please", "confidence": 60},
+            questions[0].evidence["matches"],
+        )
+
+    def test_no_match_returns_empty_list(self):
+        message = create_email_message(subject="FYI", body_text="Invoice attached.")
+
+        questions = EmailQuestionDetectionService.detect(
+            DetectEmailQuestionsCommand(email_message=message)
+        )
+
+        self.assertEqual(questions, [])
+        self.assertEqual(EmailQuestion.objects.count(), 0)
+
+    def test_evidence_is_stored(self):
+        message = create_email_message(subject="Could you confirm this?")
+
+        questions = EmailQuestionDetectionService.detect(
+            DetectEmailQuestionsCommand(email_message=message)
+        )
+
+        evidence_matches = questions[0].evidence["matches"]
+        self.assertIn(
+            {"matched_field": "subject", "rule": "question_mark", "confidence": 70},
+            evidence_matches,
+        )
+        self.assertIn(
+            {"matched_field": "subject", "rule": "english_keyword", "keyword": "could you", "confidence": 60},
+            evidence_matches,
+        )
+
+    def test_audit_event_created(self):
+        message = create_email_message(subject="When can you send it?")
+
+        questions = EmailQuestionDetectionService.detect(
+            DetectEmailQuestionsCommand(email_message=message)
+        )
+
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                event_type="email_question.detected",
+                object_id=str(questions[0].id),
+                metadata__email_message_id=message.id,
+            ).exists()
+        )
+
+    def test_metadata_is_not_mutated(self):
+        message = create_email_message(subject="Please confirm")
+        metadata = {"source": "rules"}
+
+        questions = EmailQuestionDetectionService.detect(
+            DetectEmailQuestionsCommand(
+                email_message=message,
+                metadata=metadata,
+            )
+        )
+        metadata["source"] = "caller-changed"
+
+        audit_event = AuditEvent.objects.get(event_type="email_question.detected")
+        self.assertEqual(questions[0].metadata, {"source": "rules"})
+        self.assertEqual(audit_event.metadata["detection_metadata"], {"source": "rules"})
+
+    def test_organization_scoping_works(self):
+        organization = create_organization(name="Question Org")
+        other_organization = create_organization(name="Other Question Org")
+        message = create_email_message(organization=organization, subject="Kas saate kinnitada?")
+        create_email_message(organization=other_organization, subject="No detection here")
+
+        questions = EmailQuestionDetectionService.detect(
+            DetectEmailQuestionsCommand(email_message=message)
+        )
+
+        self.assertEqual(len(questions), 1)
+        self.assertEqual(questions[0].organization, organization)
+        self.assertEqual(EmailQuestion.objects.filter(organization=other_organization).count(), 0)
+
+    def test_question_str_works(self):
+        message = create_email_message(subject="How should we proceed?")
+
+        question = EmailQuestionDetectionService.detect(
+            DetectEmailQuestionsCommand(email_message=message)
+        )[0]
+
+        self.assertEqual(str(question), "How should we proceed?: How should we proceed?")
 
     def test_does_not_overwrite_confirmed_link(self):
         organization = create_organization()

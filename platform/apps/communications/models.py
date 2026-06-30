@@ -163,3 +163,37 @@ class EmailProjectLink(models.Model):
 
     def __str__(self) -> str:
         return f"{self.email_message} -> {self.project.code}"
+
+
+class EmailQuestion(models.Model):
+    class Status(models.TextChoices):
+        DETECTED = "detected", "Detected"
+        REVIEWED = "reviewed", "Reviewed"
+        DISMISSED = "dismissed", "Dismissed"
+        ANSWERED = "answered", "Answered"
+
+    class DetectionMethod(models.TextChoices):
+        RULE_BASED = "rule_based", "Rule based"
+        AI = "ai", "AI"
+        MANUAL = "manual", "Manual"
+
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="email_questions")
+    email_message = models.ForeignKey(EmailMessage, on_delete=models.CASCADE, related_name="questions")
+    question_text = models.TextField()
+    detection_method = models.CharField(
+        max_length=32,
+        choices=DetectionMethod.choices,
+        default=DetectionMethod.RULE_BASED,
+    )
+    confidence = models.PositiveSmallIntegerField(default=0)
+    evidence = models.JSONField(default=dict, blank=True)
+    status = models.CharField(max_length=32, choices=Status.choices, default=Status.DETECTED)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["email_message_id", "-confidence", "id"]
+
+    def __str__(self) -> str:
+        return f"{self.email_message}: {self.question_text[:80]}"

@@ -39,3 +39,10 @@ class SuggestEmailProjectLinksCommand:
     email_message: object
     actor: object = None
     metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class DetectEmailQuestionsCommand:
+    email_message: object
+    actor: object = None
+    metadata: dict | None = None
