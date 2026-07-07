@@ -62,3 +62,13 @@ class SyncEmailAccountCommand:
     actor: object = None
     metadata: dict | None = None
     process_imported: bool = False
+
+
+@dataclass(frozen=True)
+class BuildConversationContextCommand:
+    email_message: object
+    include_thread: bool = True
+    include_projects: bool = True
+    include_questions: bool = True
+    include_attachments: bool = True
+    metadata: dict | None = None

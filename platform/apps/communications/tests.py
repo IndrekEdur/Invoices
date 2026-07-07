@@ -20,7 +20,9 @@ from .connectors import IMAPEmailConnector
 from .dto import RawEmailMessage
 from .models import EmailAccount, EmailAttachment, EmailMessage, EmailProjectLink, EmailQuestion, EmailThread
 from .services import (
+    BuildConversationContextCommand,
     ConfirmEmailProjectLinkCommand,
+    ConversationContextBuilder,
     ConvertEmailAttachmentToDocumentCommand,
     CorrectEmailProjectLinkCommand,
     DetectEmailQuestionsCommand,
@@ -776,6 +778,261 @@ class EmailImportServiceTests(TestCase):
 
         message.refresh_from_db()
         self.assertEqual(message.metadata, {"provider": "imap"})
+
+
+class ConversationContextBuilderTests(TestCase):
+    def create_context_message(self):
+        organization = create_organization()
+        account = create_email_account(organization=organization)
+        thread = EmailThread.objects.create(
+            organization=organization,
+            account=account,
+            external_thread_id="context-thread",
+            subject="Context thread",
+        )
+        message = EmailMessage.objects.create(
+            organization=organization,
+            account=account,
+            thread=thread,
+            external_message_id="context-message",
+            subject="Context message",
+            body_text="Please review.",
+        )
+        return message
+
+    def test_builds_context_for_single_email(self):
+        message = create_email_message()
+
+        context = ConversationContextBuilder.build(BuildConversationContextCommand(email_message=message))
+
+        self.assertEqual(context.email_message, message)
+        self.assertEqual(context.thread_messages, [message])
+        self.assertEqual(context.project_links, [])
+        self.assertEqual(context.questions, [])
+        self.assertEqual(context.attachments, [])
+        self.assertEqual(context.documents, [])
+        self.assertEqual(context.evidence, [])
+
+    def test_includes_thread_messages(self):
+        message = self.create_context_message()
+        EmailMessage.objects.create(
+            organization=message.organization,
+            account=message.account,
+            thread=message.thread,
+            external_message_id="context-message-2",
+            subject="Follow-up",
+        )
+
+        context = ConversationContextBuilder.build(BuildConversationContextCommand(email_message=message))
+
+        self.assertEqual(len(context.thread_messages), 2)
+
+    def test_includes_confirmed_project_links(self):
+        message = self.create_context_message()
+        project = create_project(organization=message.organization, code="26071", name="Confirmed project")
+        EmailProjectLink.objects.create(
+            organization=message.organization,
+            email_message=message,
+            project=project,
+            status=EmailProjectLink.Status.CONFIRMED,
+            confidence=100,
+            evidence={"user": "confirmed"},
+        )
+
+        context = ConversationContextBuilder.build(BuildConversationContextCommand(email_message=message))
+
+        self.assertEqual(context.confirmed_projects, [project])
+        self.assertEqual(context.suggested_projects, [])
+
+    def test_includes_suggested_project_links(self):
+        message = self.create_context_message()
+        project = create_project(organization=message.organization, code="26072", name="Suggested project")
+        link = EmailProjectLink.objects.create(
+            organization=message.organization,
+            email_message=message,
+            project=project,
+            confidence=75,
+            evidence={"subject": "name match"},
+        )
+
+        context = ConversationContextBuilder.build(BuildConversationContextCommand(email_message=message))
+
+        self.assertEqual(context.project_links, [link])
+        self.assertEqual(context.suggested_projects, [project])
+
+    def test_includes_questions(self):
+        message = self.create_context_message()
+        question = EmailQuestion.objects.create(
+            organization=message.organization,
+            email_message=message,
+            question_text="Kas kinnitate?",
+            confidence=70,
+            evidence={"rule": "question_mark"},
+        )
+
+        context = ConversationContextBuilder.build(BuildConversationContextCommand(email_message=message))
+
+        self.assertEqual(context.questions, [question])
+
+    def test_includes_attachments(self):
+        message = self.create_context_message()
+        attachment = EmailAttachment.objects.create(
+            organization=message.organization,
+            email_message=message,
+            original_filename="invoice.pdf",
+        )
+
+        context = ConversationContextBuilder.build(BuildConversationContextCommand(email_message=message))
+
+        self.assertEqual(context.attachments, [attachment])
+
+    def test_includes_linked_documents(self):
+        message = self.create_context_message()
+        document = Document.objects.create(
+            organization=message.organization,
+            title="Invoice document",
+            original_filename="invoice.pdf",
+            source=Document.Source.EMAIL_ATTACHMENT,
+        )
+        EmailAttachment.objects.create(
+            organization=message.organization,
+            email_message=message,
+            document=document,
+            original_filename="invoice.pdf",
+        )
+
+        context = ConversationContextBuilder.build(BuildConversationContextCommand(email_message=message))
+
+        self.assertEqual(context.documents, [document])
+
+    def test_includes_evidence(self):
+        message = self.create_context_message()
+        project = create_project(organization=message.organization, code="26073", name="Evidence project")
+        EmailProjectLink.objects.create(
+            organization=message.organization,
+            email_message=message,
+            project=project,
+            confidence=90,
+            evidence={"subject": "code match"},
+        )
+        EmailQuestion.objects.create(
+            organization=message.organization,
+            email_message=message,
+            question_text="Can you confirm?",
+            confidence=70,
+            evidence={"rule": "question_mark"},
+        )
+
+        context = ConversationContextBuilder.build(BuildConversationContextCommand(email_message=message))
+
+        self.assertEqual(len(context.evidence), 2)
+        self.assertEqual({item["source"] for item in context.evidence}, {"project_link", "question"})
+
+    def test_respects_include_thread_false(self):
+        message = self.create_context_message()
+
+        context = ConversationContextBuilder.build(
+            BuildConversationContextCommand(email_message=message, include_thread=False)
+        )
+
+        self.assertEqual(context.thread_messages, [])
+
+    def test_respects_include_projects_false(self):
+        message = self.create_context_message()
+        project = create_project(organization=message.organization, code="26074", name="Hidden project")
+        EmailProjectLink.objects.create(
+            organization=message.organization,
+            email_message=message,
+            project=project,
+            evidence={"subject": "code match"},
+        )
+
+        context = ConversationContextBuilder.build(
+            BuildConversationContextCommand(email_message=message, include_projects=False)
+        )
+
+        self.assertEqual(context.project_links, [])
+        self.assertEqual(context.confirmed_projects, [])
+        self.assertEqual(context.suggested_projects, [])
+        self.assertEqual(context.evidence, [])
+
+    def test_respects_include_questions_false(self):
+        message = self.create_context_message()
+        EmailQuestion.objects.create(
+            organization=message.organization,
+            email_message=message,
+            question_text="Kas kinnitate?",
+            evidence={"rule": "question_mark"},
+        )
+
+        context = ConversationContextBuilder.build(
+            BuildConversationContextCommand(email_message=message, include_questions=False)
+        )
+
+        self.assertEqual(context.questions, [])
+        self.assertEqual(context.evidence, [])
+
+    def test_respects_include_attachments_false(self):
+        message = self.create_context_message()
+        EmailAttachment.objects.create(
+            organization=message.organization,
+            email_message=message,
+            original_filename="invoice.pdf",
+        )
+
+        context = ConversationContextBuilder.build(
+            BuildConversationContextCommand(email_message=message, include_attachments=False)
+        )
+
+        self.assertEqual(context.attachments, [])
+        self.assertEqual(context.documents, [])
+
+    def test_metadata_is_not_mutated(self):
+        message = self.create_context_message()
+        metadata = {"purpose": "reply-draft"}
+
+        context = ConversationContextBuilder.build(
+            BuildConversationContextCommand(email_message=message, metadata=metadata)
+        )
+        metadata["purpose"] = "caller-changed"
+
+        self.assertEqual(context.metadata, {"purpose": "reply-draft"})
+
+    def test_organization_scoping_is_respected(self):
+        message = self.create_context_message()
+        other_organization = create_organization(name="Other Org")
+        other_project = create_project(organization=other_organization, code="99001", name="Other project")
+        EmailMessage.objects.create(
+            organization=other_organization,
+            account=message.account,
+            thread=message.thread,
+            external_message_id="other-org-message",
+            subject="Wrong organization",
+        )
+        EmailProjectLink.objects.create(
+            organization=other_organization,
+            email_message=message,
+            project=other_project,
+            evidence={"subject": "wrong organization"},
+        )
+        EmailQuestion.objects.create(
+            organization=other_organization,
+            email_message=message,
+            question_text="Wrong organization?",
+            evidence={"rule": "wrong organization"},
+        )
+        EmailAttachment.objects.create(
+            organization=other_organization,
+            email_message=message,
+            original_filename="wrong-org.pdf",
+        )
+
+        context = ConversationContextBuilder.build(BuildConversationContextCommand(email_message=message))
+
+        self.assertEqual(context.thread_messages, [message])
+        self.assertEqual(context.project_links, [])
+        self.assertEqual(context.questions, [])
+        self.assertEqual(context.attachments, [])
 
 
 class EmailThreadModelTests(TestCase):

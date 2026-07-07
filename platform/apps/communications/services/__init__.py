@@ -1,5 +1,6 @@
 from .attachments import EmailAttachmentDocumentService
 from .commands import (
+    BuildConversationContextCommand,
     ConfirmEmailProjectLinkCommand,
     ConvertEmailAttachmentToDocumentCommand,
     CorrectEmailProjectLinkCommand,
@@ -9,6 +10,7 @@ from .commands import (
     SuggestEmailProjectLinksCommand,
     SyncEmailAccountCommand,
 )
+from .context import ConversationContextBuilder
 from .imports import EmailImportService
 from .processing import EmailProcessingService
 from .question_detection import EmailQuestionDetectionService
@@ -17,7 +19,9 @@ from .project_suggestions import EmailProjectSuggestionService
 from .sync import EmailSyncService
 
 __all__ = [
+    "BuildConversationContextCommand",
     "ConfirmEmailProjectLinkCommand",
+    "ConversationContextBuilder",
     "ConvertEmailAttachmentToDocumentCommand",
     "CorrectEmailProjectLinkCommand",
     "DetectEmailQuestionsCommand",

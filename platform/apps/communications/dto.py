@@ -20,3 +20,19 @@ class RawEmailMessage:
     sent_at: object = None
     received_at: object = None
     metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class ConversationContext:
+    """Structured context for future project reasoning and reply drafting."""
+
+    email_message: object
+    thread_messages: list = field(default_factory=list)
+    project_links: list = field(default_factory=list)
+    confirmed_projects: list = field(default_factory=list)
+    suggested_projects: list = field(default_factory=list)
+    questions: list = field(default_factory=list)
+    attachments: list = field(default_factory=list)
+    documents: list = field(default_factory=list)
+    evidence: list = field(default_factory=list)
+    metadata: dict | None = None
