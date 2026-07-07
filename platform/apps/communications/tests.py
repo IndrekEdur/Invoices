@@ -1,8 +1,11 @@
 import shutil
 import tempfile
+from io import StringIO
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError
@@ -947,6 +950,105 @@ class EmailSyncServiceTests(TestCase):
             EmailSyncService.sync(SyncEmailAccountCommand(email_account=account, limit=7))
 
         connector.fetch_messages.assert_called_once_with(limit=7)
+
+
+class SyncEmailAccountCommandTests(TestCase):
+    def test_command_calls_email_sync_service(self):
+        account = create_email_account()
+
+        with patch("apps.communications.management.commands.sync_email_account.EmailSyncService") as sync_service:
+            sync_service.sync.return_value = {
+                "email_account": account,
+                "fetched_count": 0,
+                "imported_count": 0,
+                "processed_count": 0,
+                "raw_messages": [],
+                "imported_messages": [],
+                "processing_results": [],
+                "synced": True,
+            }
+
+            call_command("sync_email_account", str(account.id), stdout=StringIO())
+
+        sync_service.sync.assert_called_once()
+
+    def test_limit_is_passed(self):
+        account = create_email_account()
+
+        with patch("apps.communications.management.commands.sync_email_account.EmailSyncService") as sync_service:
+            sync_service.sync.return_value = {
+                "email_account": account,
+                "fetched_count": 0,
+                "imported_count": 0,
+                "processed_count": 0,
+                "raw_messages": [],
+                "imported_messages": [],
+                "processing_results": [],
+                "synced": True,
+            }
+
+            call_command("sync_email_account", str(account.id), "--limit", "5", stdout=StringIO())
+
+        command = sync_service.sync.call_args.args[0]
+        self.assertEqual(command.limit, 5)
+
+    def test_process_sets_process_imported_true(self):
+        account = create_email_account()
+
+        with patch("apps.communications.management.commands.sync_email_account.EmailSyncService") as sync_service:
+            sync_service.sync.return_value = {
+                "email_account": account,
+                "fetched_count": 0,
+                "imported_count": 0,
+                "processed_count": 0,
+                "raw_messages": [],
+                "imported_messages": [],
+                "processing_results": [],
+                "synced": True,
+            }
+
+            call_command("sync_email_account", str(account.id), "--process", stdout=StringIO())
+
+        command = sync_service.sync.call_args.args[0]
+        self.assertTrue(command.process_imported)
+
+    def test_missing_account_raises_command_error(self):
+        with self.assertRaisesRegex(CommandError, "EmailAccount not found"):
+            call_command("sync_email_account", "999999", stdout=StringIO())
+
+    def test_sync_failure_raises_command_error(self):
+        account = create_email_account()
+
+        with patch("apps.communications.management.commands.sync_email_account.EmailSyncService") as sync_service:
+            sync_service.sync.side_effect = RuntimeError("sync exploded")
+
+            with self.assertRaisesRegex(CommandError, "Email sync failed"):
+                call_command("sync_email_account", str(account.id), stdout=StringIO())
+
+    def test_output_includes_fetched_imported_and_processed_counts(self):
+        account = create_email_account(email_address="sync@example.com")
+        output = StringIO()
+
+        with patch("apps.communications.management.commands.sync_email_account.EmailSyncService") as sync_service:
+            sync_service.sync.return_value = {
+                "email_account": account,
+                "fetched_count": 5,
+                "imported_count": 4,
+                "processed_count": 3,
+                "raw_messages": [],
+                "imported_messages": [],
+                "processing_results": [],
+                "synced": True,
+            }
+
+            call_command("sync_email_account", str(account.id), stdout=output)
+
+        text = output.getvalue()
+        self.assertIn("account: sync@example.com", text)
+        self.assertIn("fetched_count: 5", text)
+        self.assertIn("imported_count: 4", text)
+        self.assertIn("processed_count: 3", text)
+        self.assertIn("synced: True", text)
 
 
 class EmailImportServiceTests(TestCase):
