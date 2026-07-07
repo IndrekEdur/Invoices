@@ -5,6 +5,8 @@ from apps.core.services import AuditService
 from ..connectors import IMAPEmailConnector
 from ..models import EmailAccount
 from .imports import EmailImportService
+from .processing import EmailProcessingService
+from .commands import ProcessEmailCommand
 
 
 class EmailSyncService:
@@ -47,6 +49,19 @@ class EmailSyncService:
             )
             for raw_message in raw_messages
         ]
+        processing_results = []
+
+        if command.process_imported:
+            processing_results = [
+                EmailProcessingService.process(
+                    ProcessEmailCommand(
+                        email_message=message,
+                        actor=command.actor,
+                        metadata=metadata,
+                    )
+                )
+                for message in imported_messages
+            ]
 
         with transaction.atomic():
             AuditService.record(
@@ -61,6 +76,7 @@ class EmailSyncService:
                     "limit": command.limit,
                     "fetched_count": len(raw_messages),
                     "imported_count": len(imported_messages),
+                    "processed_count": len(processing_results),
                     "sync_metadata": metadata,
                 },
             )
@@ -71,6 +87,8 @@ class EmailSyncService:
             "imported_count": len(imported_messages),
             "raw_messages": raw_messages,
             "imported_messages": imported_messages,
+            "processed_count": len(processing_results),
+            "processing_results": processing_results,
             "synced": True,
         }
 

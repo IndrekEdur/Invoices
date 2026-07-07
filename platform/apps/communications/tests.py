@@ -301,7 +301,112 @@ class EmailSyncServiceTests(TestCase):
         self.assertEqual(result["imported_count"], 1)
         self.assertEqual(result["raw_messages"], [raw_message])
         self.assertEqual(result["imported_messages"][0].external_message_id, raw_message.external_message_id)
+        self.assertEqual(result["processed_count"], 0)
+        self.assertEqual(result["processing_results"], [])
         self.assertTrue(result["synced"])
+
+    def test_default_process_imported_is_false(self):
+        account = create_imap_email_account()
+
+        command = SyncEmailAccountCommand(email_account=account)
+
+        self.assertFalse(command.process_imported)
+
+    def test_sync_does_not_process_by_default(self):
+        account = create_imap_email_account()
+
+        with patch("apps.communications.services.sync.IMAPEmailConnector") as connector_class:
+            connector_class.return_value.fetch_messages.return_value = [create_raw_email()]
+
+            with patch("apps.communications.services.sync.EmailProcessingService") as processing_service:
+                result = EmailSyncService.sync(SyncEmailAccountCommand(email_account=account))
+
+        processing_service.process.assert_not_called()
+        self.assertEqual(result["processed_count"], 0)
+        self.assertEqual(result["processing_results"], [])
+
+    def test_sync_processes_imported_emails_when_requested(self):
+        account = create_imap_email_account()
+
+        with patch("apps.communications.services.sync.IMAPEmailConnector") as connector_class:
+            connector_class.return_value.fetch_messages.return_value = [create_raw_email()]
+
+            with patch("apps.communications.services.sync.EmailProcessingService") as processing_service:
+                processing_service.process.return_value = {"processed": True}
+
+                result = EmailSyncService.sync(
+                    SyncEmailAccountCommand(
+                        email_account=account,
+                        process_imported=True,
+                    )
+                )
+
+        processing_service.process.assert_called_once()
+        self.assertEqual(result["processed_count"], 1)
+        self.assertEqual(result["processing_results"], [{"processed": True}])
+
+    def test_disconnect_called_if_processing_fails(self):
+        account = create_imap_email_account()
+
+        with patch("apps.communications.services.sync.IMAPEmailConnector") as connector_class:
+            connector = connector_class.return_value
+            connector.fetch_messages.return_value = [create_raw_email()]
+
+            with patch("apps.communications.services.sync.EmailProcessingService") as processing_service:
+                processing_service.process.side_effect = RuntimeError("processing failed")
+
+                with self.assertRaises(RuntimeError):
+                    EmailSyncService.sync(
+                        SyncEmailAccountCommand(
+                            email_account=account,
+                            process_imported=True,
+                        )
+                    )
+
+        connector.disconnect.assert_called_once_with()
+
+    def test_project_suggestions_can_be_created_through_processing_hook(self):
+        account = create_imap_email_account()
+        create_project(organization=account.organization, code="26070", name="Kanarbiku")
+        raw_message = create_raw_email(
+            subject="Question about 26070",
+            body_text="No extra body.",
+        )
+
+        with patch("apps.communications.services.sync.IMAPEmailConnector") as connector_class:
+            connector_class.return_value.fetch_messages.return_value = [raw_message]
+
+            result = EmailSyncService.sync(
+                SyncEmailAccountCommand(
+                    email_account=account,
+                    process_imported=True,
+                )
+            )
+
+        self.assertEqual(result["processed_count"], 1)
+        self.assertEqual(EmailProjectLink.objects.count(), 1)
+        self.assertEqual(result["processing_results"][0]["project_links"][0].project.code, "26070")
+
+    def test_questions_can_be_created_through_processing_hook(self):
+        account = create_imap_email_account()
+        raw_message = create_raw_email(
+            subject="Kas saad kinnitada?",
+            body_text="Palun kinnitage.",
+        )
+
+        with patch("apps.communications.services.sync.IMAPEmailConnector") as connector_class:
+            connector_class.return_value.fetch_messages.return_value = [raw_message]
+
+            result = EmailSyncService.sync(
+                SyncEmailAccountCommand(
+                    email_account=account,
+                    process_imported=True,
+                )
+            )
+
+        self.assertEqual(result["processed_count"], 1)
+        self.assertEqual(EmailQuestion.objects.count(), 1)
+        self.assertEqual(result["processing_results"][0]["questions"][0].status, EmailQuestion.Status.DETECTED)
 
     def test_sync_imports_fetched_raw_email_message(self):
         account = create_imap_email_account()
@@ -423,6 +528,7 @@ class EmailSyncServiceTests(TestCase):
         audit_event = AuditEvent.objects.get(event_type="email.sync_completed")
         self.assertEqual(audit_event.metadata["fetched_count"], 0)
         self.assertEqual(audit_event.metadata["imported_count"], 0)
+        self.assertEqual(audit_event.metadata["processed_count"], 0)
 
     def test_metadata_is_not_mutated(self):
         account = create_imap_email_account()

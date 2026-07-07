@@ -61,3 +61,4 @@ class SyncEmailAccountCommand:
     limit: int = 50
     actor: object = None
     metadata: dict | None = None
+    process_imported: bool = False
