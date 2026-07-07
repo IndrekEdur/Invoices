@@ -270,3 +270,20 @@ Reason:
 - AI context must be reproducible and auditable.
 - Human-confirmed facts are more trustworthy than unverified AI guesses.
 - Separating knowledge from learning, policy, workflow, and AI keeps future automation safer and easier to debug.
+
+## ADR-019: Platform UI Is a Business Workspace, Not a Django Admin Replacement
+
+Date: 2026-07-07
+
+Decision:
+
+- The platform user interface shall be designed as a business workspace, not a Django Admin replacement.
+- Normal users should work through role-specific dashboards, inboxes, project workspaces, review queues, document workspaces, search, and AI assistant panels.
+- Django Admin remains a developer/admin tool for low-level operations, not the main product interface.
+
+Reason:
+
+- The platform must help users make business decisions, not expose database tables.
+- AI suggestions, review queues, evidence, workflow state, and project context need dedicated UX patterns.
+- Project managers, site managers, electricians, accounting users, administrators, and management have different daily workflows.
+- Trustworthy automation requires visible evidence, human confirmation, and clear action controls.

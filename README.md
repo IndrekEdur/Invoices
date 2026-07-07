@@ -12,6 +12,8 @@
 
 `KNOWLEDGE_ARCHITECTURE.md` describes the Knowledge Engine as the controlled memory, evidence, timeline, and AI context layer of the platform.
 
+`UI_ARCHITECTURE.md` describes the future platform user experience as a business workspace, not a Django Admin replacement.
+
 ## Testide käivitamine
 
 Käivita testid repo juurkaustast:
