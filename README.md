@@ -10,6 +10,8 @@
 
 `EMAIL_PROCESSING_EPIC.md` describes the end-to-end lifecycle of an incoming business e-mail from arrival to accounting, learning, and business memory.
 
+`KNOWLEDGE_ARCHITECTURE.md` describes the Knowledge Engine as the controlled memory, evidence, timeline, and AI context layer of the platform.
+
 ## Testide käivitamine
 
 Käivita testid repo juurkaustast:

@@ -253,3 +253,20 @@ Reason:
 - The platform's value comes from end-to-end business outcomes, not separate disconnected features.
 - E-mail processing connects communication, projects, documents, workflows, AI reasoning, accounting, learning, and business memory.
 - Scenario-level epics help future implementation tasks stay aligned with real user workflows.
+
+## ADR-018: Knowledge Engine Becomes the Controlled Memory and AI Context Layer
+
+Date: 2026-07-07
+
+Decision:
+
+- The Knowledge Engine becomes the controlled memory and AI context layer of the platform.
+- It turns communications, documents, workflow events, audit events, user confirmations, decisions, and future accounting outcomes into reusable business knowledge.
+- Future AI and reasoning services should receive context through Knowledge Engine builders and providers rather than querying arbitrary domain tables directly.
+
+Reason:
+
+- Business recommendations must be explainable through evidence, timeline, source references, and human confirmations.
+- AI context must be reproducible and auditable.
+- Human-confirmed facts are more trustworthy than unverified AI guesses.
+- Separating knowledge from learning, policy, workflow, and AI keeps future automation safer and easier to debug.
