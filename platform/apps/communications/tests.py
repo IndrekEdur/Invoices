@@ -18,14 +18,16 @@ from apps.workflow.models import WorkflowDefinition, WorkflowInstance, WorkflowS
 
 from .connectors import IMAPEmailConnector
 from .dto import RawEmailMessage
-from .models import EmailAccount, EmailAttachment, EmailMessage, EmailProjectLink, EmailQuestion, EmailThread
+from .models import EmailAccount, EmailAnswerDraft, EmailAttachment, EmailMessage, EmailProjectLink, EmailQuestion, EmailThread
 from .services import (
     BuildConversationContextCommand,
     ConfirmEmailProjectLinkCommand,
     ConversationContextBuilder,
+    CreateEmailAnswerDraftCommand,
     ConvertEmailAttachmentToDocumentCommand,
     CorrectEmailProjectLinkCommand,
     DetectEmailQuestionsCommand,
+    EmailAnswerDraftService,
     EmailAttachmentDocumentService,
     EmailImportService,
     EmailProcessingService,
@@ -1033,6 +1035,120 @@ class ConversationContextBuilderTests(TestCase):
         self.assertEqual(context.project_links, [])
         self.assertEqual(context.questions, [])
         self.assertEqual(context.attachments, [])
+
+
+class EmailAnswerDraftServiceTests(TestCase):
+    def test_can_create_email_answer_draft(self):
+        message = create_email_message()
+
+        draft = EmailAnswerDraftService.create_draft(
+            CreateEmailAnswerDraftCommand(
+                email_message=message,
+                draft_text="Draft answer",
+            )
+        )
+
+        self.assertIsNotNone(draft.id)
+        self.assertEqual(draft.organization, message.organization)
+        self.assertEqual(draft.email_message, message)
+        self.assertEqual(draft.draft_text, "Draft answer")
+
+    def test_default_status_is_draft(self):
+        message = create_email_message()
+
+        draft = EmailAnswerDraftService.create_draft(CreateEmailAnswerDraftCommand(email_message=message))
+
+        self.assertEqual(draft.status, EmailAnswerDraft.Status.DRAFT)
+
+    def test_default_generated_by_is_rule_based(self):
+        message = create_email_message()
+
+        draft = EmailAnswerDraftService.create_draft(CreateEmailAnswerDraftCommand(email_message=message))
+
+        self.assertEqual(draft.generated_by, EmailAnswerDraft.GeneratedBy.RULE_BASED)
+
+    def test_question_can_be_null(self):
+        message = create_email_message()
+
+        draft = EmailAnswerDraftService.create_draft(CreateEmailAnswerDraftCommand(email_message=message))
+
+        self.assertIsNone(draft.question)
+
+    def test_evidence_stored(self):
+        message = create_email_message()
+        evidence = {"sources": [{"type": "question", "confidence": 70}]}
+
+        draft = EmailAnswerDraftService.create_draft(
+            CreateEmailAnswerDraftCommand(email_message=message, evidence=evidence)
+        )
+
+        self.assertEqual(draft.evidence, evidence)
+
+    def test_context_snapshot_stored(self):
+        message = create_email_message()
+        context_snapshot = {"thread_messages": ["Question"], "projects": ["26070"]}
+
+        draft = EmailAnswerDraftService.create_draft(
+            CreateEmailAnswerDraftCommand(email_message=message, context_snapshot=context_snapshot)
+        )
+
+        self.assertEqual(draft.context_snapshot, context_snapshot)
+
+    def test_evidence_not_mutated(self):
+        message = create_email_message()
+        evidence = {"sources": [{"type": "question"}]}
+
+        draft = EmailAnswerDraftService.create_draft(
+            CreateEmailAnswerDraftCommand(email_message=message, evidence=evidence)
+        )
+        evidence["sources"][0]["type"] = "caller-changed"
+
+        draft.refresh_from_db()
+        self.assertEqual(draft.evidence, {"sources": [{"type": "question"}]})
+
+    def test_context_snapshot_not_mutated(self):
+        message = create_email_message()
+        context_snapshot = {"messages": [{"subject": "Original"}]}
+
+        draft = EmailAnswerDraftService.create_draft(
+            CreateEmailAnswerDraftCommand(email_message=message, context_snapshot=context_snapshot)
+        )
+        context_snapshot["messages"][0]["subject"] = "caller-changed"
+
+        draft.refresh_from_db()
+        self.assertEqual(draft.context_snapshot, {"messages": [{"subject": "Original"}]})
+
+    def test_metadata_not_mutated(self):
+        message = create_email_message()
+        metadata = {"source": {"name": "manual"}}
+
+        EmailAnswerDraftService.create_draft(
+            CreateEmailAnswerDraftCommand(email_message=message, metadata=metadata)
+        )
+        metadata["source"]["name"] = "caller-changed"
+
+        audit_event = AuditEvent.objects.get(event_type="email.answer_draft_created")
+        self.assertEqual(audit_event.metadata["draft_metadata"], {"source": {"name": "manual"}})
+
+    def test_audit_event_created(self):
+        message = create_email_message()
+
+        draft = EmailAnswerDraftService.create_draft(CreateEmailAnswerDraftCommand(email_message=message))
+
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                event_type="email.answer_draft_created",
+                object_type="EmailAnswerDraft",
+                object_id=str(draft.id),
+            ).exists()
+        )
+
+    def test_str_works(self):
+        message = create_email_message(subject="Draft source")
+
+        draft = EmailAnswerDraftService.create_draft(CreateEmailAnswerDraftCommand(email_message=message))
+
+        self.assertEqual(str(draft), "Answer draft for Draft source")
 
 
 class EmailThreadModelTests(TestCase):

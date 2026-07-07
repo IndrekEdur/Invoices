@@ -72,3 +72,15 @@ class BuildConversationContextCommand:
     include_questions: bool = True
     include_attachments: bool = True
     metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class CreateEmailAnswerDraftCommand:
+    email_message: object
+    question: object = None
+    draft_text: str = ""
+    evidence: dict | None = None
+    context_snapshot: dict | None = None
+    generated_by: str = "rule_based"
+    actor: object = None
+    metadata: dict | None = None

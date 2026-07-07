@@ -197,3 +197,58 @@ class EmailQuestion(models.Model):
 
     def __str__(self) -> str:
         return f"{self.email_message}: {self.question_text[:80]}"
+
+
+class EmailAnswerDraft(models.Model):
+    class Status(models.TextChoices):
+        DRAFT = "draft", "Draft"
+        NEEDS_REVIEW = "needs_review", "Needs review"
+        APPROVED = "approved", "Approved"
+        REJECTED = "rejected", "Rejected"
+        SENT = "sent", "Sent"
+
+    class GeneratedBy(models.TextChoices):
+        RULE_BASED = "rule_based", "Rule based"
+        AI = "ai", "AI"
+        MANUAL = "manual", "Manual"
+
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="email_answer_drafts")
+    email_message = models.ForeignKey(EmailMessage, on_delete=models.CASCADE, related_name="answer_drafts")
+    question = models.ForeignKey(
+        EmailQuestion,
+        on_delete=models.SET_NULL,
+        related_name="answer_drafts",
+        blank=True,
+        null=True,
+    )
+    status = models.CharField(max_length=32, choices=Status.choices, default=Status.DRAFT)
+    draft_text = models.TextField(blank=True)
+    final_text = models.TextField(blank=True)
+    evidence = models.JSONField(default=dict, blank=True)
+    context_snapshot = models.JSONField(default=dict, blank=True)
+    generated_by = models.CharField(max_length=32, choices=GeneratedBy.choices, default=GeneratedBy.RULE_BASED)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="reviewed_email_answer_drafts",
+        blank=True,
+        null=True,
+    )
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="approved_email_answer_drafts",
+        blank=True,
+        null=True,
+    )
+    approved_at = models.DateTimeField(blank=True, null=True)
+    sent_at = models.DateTimeField(blank=True, null=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+
+    def __str__(self) -> str:
+        return f"Answer draft for {self.email_message}"
