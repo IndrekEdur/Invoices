@@ -231,8 +231,11 @@ class IMAPEmailConnectorTests(TestCase):
     def test_imap_connector_accepts_imap_account(self):
         account = create_imap_email_account()
 
-        connector = IMAPEmailConnector(account)
-        result = connector.connect()
+        with patch("apps.communications.connectors.imap.imaplib.IMAP4_SSL") as imap_class:
+            imap_class.return_value.login.return_value = ("OK", [])
+
+            connector = IMAPEmailConnector(account)
+            result = connector.connect()
 
         self.assertEqual(result, connector)
         self.assertTrue(connector.connected)
@@ -287,9 +290,93 @@ class IMAPEmailConnectorTests(TestCase):
         connector.disconnect()
         self.assertFalse(connector.connected)
 
-        connector.connect()
+        with patch("apps.communications.connectors.imap.imaplib.IMAP4_SSL") as imap_class:
+            imap_class.return_value.login.return_value = ("OK", [])
+
+            connector.connect()
+
         connector.disconnect()
         self.assertFalse(connector.connected)
+
+    def test_ssl_imap_connection_is_used_when_use_ssl_true(self):
+        account = create_imap_email_account(use_ssl=True)
+
+        with patch("apps.communications.connectors.imap.imaplib.IMAP4_SSL") as imap_ssl:
+            imap_ssl.return_value.login.return_value = ("OK", [])
+
+            IMAPEmailConnector(account).connect()
+
+        imap_ssl.assert_called_once_with(account.host, account.port)
+
+    def test_non_ssl_imap_connection_is_used_when_use_ssl_false(self):
+        account = create_imap_email_account(use_ssl=False)
+
+        with patch("apps.communications.connectors.imap.imaplib.IMAP4") as imap_plain:
+            imap_plain.return_value.login.return_value = ("OK", [])
+
+            IMAPEmailConnector(account).connect()
+
+        imap_plain.assert_called_once_with(account.host, account.port)
+
+    def test_login_called_with_username_and_secret(self):
+        account = create_imap_email_account(username="mail@example.com", encrypted_secret_placeholder="temporary-secret")
+
+        with patch("apps.communications.connectors.imap.imaplib.IMAP4_SSL") as imap_ssl:
+            client = imap_ssl.return_value
+            client.login.return_value = ("OK", [])
+
+            IMAPEmailConnector(account).connect()
+
+        client.login.assert_called_once_with("mail@example.com", "temporary-secret")
+
+    def test_logout_called_on_disconnect(self):
+        account = create_imap_email_account()
+
+        with patch("apps.communications.connectors.imap.imaplib.IMAP4_SSL") as imap_ssl:
+            client = imap_ssl.return_value
+            client.login.return_value = ("OK", [])
+            connector = IMAPEmailConnector(account).connect()
+
+            connector.disconnect()
+
+        client.logout.assert_called_once_with()
+
+    def test_list_mailboxes_parses_mocked_imap_response(self):
+        account = create_imap_email_account()
+
+        with patch("apps.communications.connectors.imap.imaplib.IMAP4_SSL") as imap_ssl:
+            client = imap_ssl.return_value
+            client.login.return_value = ("OK", [])
+            client.list.return_value = (
+                "OK",
+                [
+                    b'(\\HasNoChildren) "/" "INBOX"',
+                    b'(\\HasNoChildren) "/" "Archive"',
+                ],
+            )
+            connector = IMAPEmailConnector(account).connect()
+
+            mailboxes = connector.list_mailboxes()
+
+        self.assertEqual(mailboxes, ["INBOX", "Archive"])
+
+    def test_connection_failure_raises_clear_exception(self):
+        account = create_imap_email_account()
+
+        with patch("apps.communications.connectors.imap.imaplib.IMAP4_SSL") as imap_ssl:
+            imap_ssl.side_effect = OSError("network unavailable")
+
+            with self.assertRaisesRegex(RuntimeError, "IMAP connection failed"):
+                IMAPEmailConnector(account).connect()
+
+    def test_login_failure_raises_clear_exception(self):
+        account = create_imap_email_account()
+
+        with patch("apps.communications.connectors.imap.imaplib.IMAP4_SSL") as imap_ssl:
+            imap_ssl.return_value.login.return_value = ("NO", [b"authentication failed"])
+
+            with self.assertRaisesRegex(RuntimeError, "IMAP login failed"):
+                IMAPEmailConnector(account).connect()
 
     def test_maps_dict_to_raw_email_message(self):
         account = create_imap_email_account()
