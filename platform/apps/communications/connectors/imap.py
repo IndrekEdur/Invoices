@@ -1,5 +1,6 @@
 from django.core.exceptions import ValidationError
 
+from apps.communications.dto import RawEmailMessage
 from apps.communications.models import EmailAccount
 
 from .base import BaseEmailConnector
@@ -19,6 +20,27 @@ class IMAPEmailConnector(BaseEmailConnector):
 
     def fetch_messages(self, limit=50):
         return []
+
+    def map_imap_message(self, raw_data):
+        metadata = dict(raw_data.get("metadata") or {})
+
+        return RawEmailMessage(
+            external_message_id=raw_data.get("external_message_id", ""),
+            internet_message_id=raw_data.get("internet_message_id", ""),
+            external_thread_id=raw_data.get("external_thread_id", ""),
+            subject=raw_data.get("subject", ""),
+            body_text=raw_data.get("body_text", ""),
+            body_html=raw_data.get("body_html", ""),
+            sender_email=raw_data.get("sender_email", ""),
+            sender_name=raw_data.get("sender_name", ""),
+            recipients=list(raw_data.get("recipients") or []),
+            cc=list(raw_data.get("cc") or []),
+            bcc=list(raw_data.get("bcc") or []),
+            direction=raw_data.get("direction") or "inbound",
+            sent_at=raw_data.get("sent_at"),
+            received_at=raw_data.get("received_at"),
+            metadata=metadata,
+        )
 
     def disconnect(self):
         self.connected = False

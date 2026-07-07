@@ -284,6 +284,118 @@ class IMAPEmailConnectorTests(TestCase):
         connector.disconnect()
         self.assertFalse(connector.connected)
 
+    def test_maps_dict_to_raw_email_message(self):
+        account = create_imap_email_account()
+        connector = IMAPEmailConnector(account)
+
+        message = connector.map_imap_message(
+            {
+                "external_message_id": "imap-1",
+                "internet_message_id": "<imap-1@example.com>",
+                "external_thread_id": "thread-1",
+                "subject": "Mapped message",
+                "sender_email": "sender@example.com",
+                "sender_name": "Sender",
+                "recipients": [{"email": "to@example.com"}],
+                "metadata": {"folder": "INBOX"},
+            }
+        )
+
+        self.assertIsInstance(message, RawEmailMessage)
+        self.assertEqual(message.external_message_id, "imap-1")
+        self.assertEqual(message.internet_message_id, "<imap-1@example.com>")
+        self.assertEqual(message.external_thread_id, "thread-1")
+        self.assertEqual(message.subject, "Mapped message")
+        self.assertEqual(message.sender_email, "sender@example.com")
+        self.assertEqual(message.sender_name, "Sender")
+        self.assertEqual(message.recipients, [{"email": "to@example.com"}])
+        self.assertEqual(message.metadata, {"folder": "INBOX"})
+
+    def test_map_defaults_recipients_cc_bcc_to_empty_lists(self):
+        account = create_imap_email_account()
+        connector = IMAPEmailConnector(account)
+
+        message = connector.map_imap_message({"external_message_id": "imap-1"})
+
+        self.assertEqual(message.recipients, [])
+        self.assertEqual(message.cc, [])
+        self.assertEqual(message.bcc, [])
+
+    def test_map_defaults_direction_to_inbound(self):
+        account = create_imap_email_account()
+        connector = IMAPEmailConnector(account)
+
+        message = connector.map_imap_message({"external_message_id": "imap-1"})
+
+        self.assertEqual(message.direction, "inbound")
+
+    def test_map_defaults_metadata_to_empty_dict(self):
+        account = create_imap_email_account()
+        connector = IMAPEmailConnector(account)
+
+        message = connector.map_imap_message({"external_message_id": "imap-1"})
+
+        self.assertEqual(message.metadata, {})
+
+    def test_map_does_not_mutate_raw_data(self):
+        account = create_imap_email_account()
+        connector = IMAPEmailConnector(account)
+        raw_data = {
+            "external_message_id": "imap-1",
+            "recipients": [{"email": "to@example.com"}],
+        }
+        original_data = {
+            "external_message_id": "imap-1",
+            "recipients": [{"email": "to@example.com"}],
+        }
+
+        connector.map_imap_message(raw_data)
+
+        self.assertEqual(raw_data, original_data)
+
+    def test_map_does_not_mutate_metadata(self):
+        account = create_imap_email_account()
+        connector = IMAPEmailConnector(account)
+        metadata = {"folder": "INBOX"}
+        raw_data = {"external_message_id": "imap-1", "metadata": metadata}
+
+        message = connector.map_imap_message(raw_data)
+        metadata["folder"] = "Archive"
+
+        self.assertEqual(message.metadata, {"folder": "INBOX"})
+
+    def test_map_supports_body_text_and_body_html(self):
+        account = create_imap_email_account()
+        connector = IMAPEmailConnector(account)
+
+        message = connector.map_imap_message(
+            {
+                "external_message_id": "imap-1",
+                "body_text": "Plain body",
+                "body_html": "<p>HTML body</p>",
+            }
+        )
+
+        self.assertEqual(message.body_text, "Plain body")
+        self.assertEqual(message.body_html, "<p>HTML body</p>")
+
+    def test_map_supports_sent_at_and_received_at(self):
+        account = create_imap_email_account()
+        connector = IMAPEmailConnector(account)
+        sent_at = timezone.now() - timezone.timedelta(minutes=5)
+        received_at = timezone.now()
+
+        message = connector.map_imap_message(
+            {
+                "external_message_id": "imap-1",
+                "sent_at": sent_at,
+                "received_at": received_at,
+            }
+        )
+
+        self.assertEqual(message.sent_at, sent_at)
+        self.assertEqual(message.received_at, received_at)
+
 
 class EmailSyncServiceTests(TestCase):
     def test_sync_imap_account_returns_structured_result(self):
