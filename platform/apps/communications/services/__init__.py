@@ -1,13 +1,16 @@
 from .attachments import EmailAttachmentDocumentService
 from .answer_drafts import EmailAnswerDraftService
 from .commands import (
+    ApproveEmailAnswerDraftCommand,
     BuildConversationContextCommand,
     ConfirmEmailProjectLinkCommand,
     CreateEmailAnswerDraftCommand,
     ConvertEmailAttachmentToDocumentCommand,
     CorrectEmailProjectLinkCommand,
     DetectEmailQuestionsCommand,
+    MarkEmailAnswerDraftNeedsReviewCommand,
     ProcessEmailCommand,
+    RejectEmailAnswerDraftCommand,
     RejectEmailProjectLinkCommand,
     SuggestEmailProjectLinksCommand,
     SyncEmailAccountCommand,
@@ -21,6 +24,7 @@ from .project_suggestions import EmailProjectSuggestionService
 from .sync import EmailSyncService
 
 __all__ = [
+    "ApproveEmailAnswerDraftCommand",
     "BuildConversationContextCommand",
     "ConfirmEmailProjectLinkCommand",
     "ConversationContextBuilder",
@@ -35,7 +39,9 @@ __all__ = [
     "EmailProjectLinkService",
     "EmailProjectSuggestionService",
     "EmailQuestionDetectionService",
+    "MarkEmailAnswerDraftNeedsReviewCommand",
     "ProcessEmailCommand",
+    "RejectEmailAnswerDraftCommand",
     "RejectEmailProjectLinkCommand",
     "SuggestEmailProjectLinksCommand",
     "SyncEmailAccountCommand",

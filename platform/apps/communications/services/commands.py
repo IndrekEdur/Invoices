@@ -84,3 +84,26 @@ class CreateEmailAnswerDraftCommand:
     generated_by: str = "rule_based"
     actor: object = None
     metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class MarkEmailAnswerDraftNeedsReviewCommand:
+    draft: object
+    actor: object
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class ApproveEmailAnswerDraftCommand:
+    draft: object
+    actor: object
+    final_text: str | None = None
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class RejectEmailAnswerDraftCommand:
+    draft: object
+    actor: object
+    reason: str = ""
+    metadata: dict | None = None

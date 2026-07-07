@@ -20,6 +20,7 @@ from .connectors import IMAPEmailConnector
 from .dto import RawEmailMessage
 from .models import EmailAccount, EmailAnswerDraft, EmailAttachment, EmailMessage, EmailProjectLink, EmailQuestion, EmailThread
 from .services import (
+    ApproveEmailAnswerDraftCommand,
     BuildConversationContextCommand,
     ConfirmEmailProjectLinkCommand,
     ConversationContextBuilder,
@@ -34,7 +35,9 @@ from .services import (
     EmailProjectLinkService,
     EmailProjectSuggestionService,
     EmailQuestionDetectionService,
+    MarkEmailAnswerDraftNeedsReviewCommand,
     ProcessEmailCommand,
+    RejectEmailAnswerDraftCommand,
     RejectEmailProjectLinkCommand,
     SuggestEmailProjectLinksCommand,
     SyncEmailAccountCommand,
@@ -1149,6 +1152,144 @@ class EmailAnswerDraftServiceTests(TestCase):
         draft = EmailAnswerDraftService.create_draft(CreateEmailAnswerDraftCommand(email_message=message))
 
         self.assertEqual(str(draft), "Answer draft for Draft source")
+
+    def test_mark_needs_review_changes_status(self):
+        draft = EmailAnswerDraftService.create_draft(CreateEmailAnswerDraftCommand(email_message=create_email_message()))
+        actor = get_user_model().objects.create_user(username="reviewer")
+
+        EmailAnswerDraftService.mark_needs_review(
+            MarkEmailAnswerDraftNeedsReviewCommand(draft=draft, actor=actor)
+        )
+
+        draft.refresh_from_db()
+        self.assertEqual(draft.status, EmailAnswerDraft.Status.NEEDS_REVIEW)
+
+    def test_mark_needs_review_sets_reviewed_by(self):
+        draft = EmailAnswerDraftService.create_draft(CreateEmailAnswerDraftCommand(email_message=create_email_message()))
+        actor = get_user_model().objects.create_user(username="reviewer")
+
+        EmailAnswerDraftService.mark_needs_review(
+            MarkEmailAnswerDraftNeedsReviewCommand(draft=draft, actor=actor)
+        )
+
+        draft.refresh_from_db()
+        self.assertEqual(draft.reviewed_by, actor)
+
+    def test_approve_changes_status(self):
+        draft = EmailAnswerDraftService.create_draft(CreateEmailAnswerDraftCommand(email_message=create_email_message()))
+        actor = get_user_model().objects.create_user(username="approver")
+
+        EmailAnswerDraftService.approve(ApproveEmailAnswerDraftCommand(draft=draft, actor=actor))
+
+        draft.refresh_from_db()
+        self.assertEqual(draft.status, EmailAnswerDraft.Status.APPROVED)
+
+    def test_approve_sets_approved_by_and_approved_at(self):
+        draft = EmailAnswerDraftService.create_draft(CreateEmailAnswerDraftCommand(email_message=create_email_message()))
+        actor = get_user_model().objects.create_user(username="approver")
+
+        EmailAnswerDraftService.approve(ApproveEmailAnswerDraftCommand(draft=draft, actor=actor))
+
+        draft.refresh_from_db()
+        self.assertEqual(draft.approved_by, actor)
+        self.assertIsNotNone(draft.approved_at)
+
+    def test_approve_copies_draft_text_to_final_text_if_missing(self):
+        draft = EmailAnswerDraftService.create_draft(
+            CreateEmailAnswerDraftCommand(email_message=create_email_message(), draft_text="Draft answer")
+        )
+        actor = get_user_model().objects.create_user(username="approver")
+
+        EmailAnswerDraftService.approve(ApproveEmailAnswerDraftCommand(draft=draft, actor=actor))
+
+        draft.refresh_from_db()
+        self.assertEqual(draft.final_text, "Draft answer")
+
+    def test_approve_uses_provided_final_text(self):
+        draft = EmailAnswerDraftService.create_draft(
+            CreateEmailAnswerDraftCommand(email_message=create_email_message(), draft_text="Draft answer")
+        )
+        actor = get_user_model().objects.create_user(username="approver")
+
+        EmailAnswerDraftService.approve(
+            ApproveEmailAnswerDraftCommand(draft=draft, actor=actor, final_text="Edited final answer")
+        )
+
+        draft.refresh_from_db()
+        self.assertEqual(draft.final_text, "Edited final answer")
+
+    def test_reject_changes_status(self):
+        draft = EmailAnswerDraftService.create_draft(CreateEmailAnswerDraftCommand(email_message=create_email_message()))
+        actor = get_user_model().objects.create_user(username="reviewer")
+
+        EmailAnswerDraftService.reject(RejectEmailAnswerDraftCommand(draft=draft, actor=actor))
+
+        draft.refresh_from_db()
+        self.assertEqual(draft.status, EmailAnswerDraft.Status.REJECTED)
+
+    def test_reject_sets_reviewed_by(self):
+        draft = EmailAnswerDraftService.create_draft(CreateEmailAnswerDraftCommand(email_message=create_email_message()))
+        actor = get_user_model().objects.create_user(username="reviewer")
+
+        EmailAnswerDraftService.reject(RejectEmailAnswerDraftCommand(draft=draft, actor=actor))
+
+        draft.refresh_from_db()
+        self.assertEqual(draft.reviewed_by, actor)
+
+    def test_reject_stores_reason(self):
+        draft = EmailAnswerDraftService.create_draft(CreateEmailAnswerDraftCommand(email_message=create_email_message()))
+        actor = get_user_model().objects.create_user(username="reviewer")
+
+        EmailAnswerDraftService.reject(
+            RejectEmailAnswerDraftCommand(draft=draft, actor=actor, reason="Wrong tone")
+        )
+
+        draft.refresh_from_db()
+        self.assertEqual(draft.metadata["rejection_reason"], "Wrong tone")
+        audit_event = AuditEvent.objects.get(event_type="email.answer_draft_rejected")
+        self.assertEqual(audit_event.metadata["review_metadata"]["reason"], "Wrong tone")
+
+    def test_audit_event_created_for_each_review_action(self):
+        actor = get_user_model().objects.create_user(username="reviewer")
+        draft = EmailAnswerDraftService.create_draft(CreateEmailAnswerDraftCommand(email_message=create_email_message()))
+
+        EmailAnswerDraftService.mark_needs_review(
+            MarkEmailAnswerDraftNeedsReviewCommand(draft=draft, actor=actor)
+        )
+        EmailAnswerDraftService.approve(ApproveEmailAnswerDraftCommand(draft=draft, actor=actor))
+        EmailAnswerDraftService.reject(RejectEmailAnswerDraftCommand(draft=draft, actor=actor))
+
+        self.assertTrue(AuditEvent.objects.filter(event_type="email.answer_draft_needs_review").exists())
+        self.assertTrue(AuditEvent.objects.filter(event_type="email.answer_draft_approved").exists())
+        self.assertTrue(AuditEvent.objects.filter(event_type="email.answer_draft_rejected").exists())
+
+    def test_review_metadata_is_not_mutated(self):
+        draft = EmailAnswerDraftService.create_draft(CreateEmailAnswerDraftCommand(email_message=create_email_message()))
+        actor = get_user_model().objects.create_user(username="reviewer")
+        metadata = {"source": {"name": "manual-review"}}
+
+        EmailAnswerDraftService.mark_needs_review(
+            MarkEmailAnswerDraftNeedsReviewCommand(draft=draft, actor=actor, metadata=metadata)
+        )
+        metadata["source"]["name"] = "caller-changed"
+
+        audit_event = AuditEvent.objects.get(event_type="email.answer_draft_needs_review")
+        self.assertEqual(audit_event.metadata["review_metadata"], {"source": {"name": "manual-review"}})
+
+    def test_review_action_rolls_back_if_audit_fails(self):
+        draft = EmailAnswerDraftService.create_draft(CreateEmailAnswerDraftCommand(email_message=create_email_message()))
+        actor = get_user_model().objects.create_user(username="reviewer")
+
+        with patch("apps.communications.services.answer_drafts.AuditService.record") as record:
+            record.side_effect = RuntimeError("audit failed")
+            with self.assertRaises(RuntimeError):
+                EmailAnswerDraftService.mark_needs_review(
+                    MarkEmailAnswerDraftNeedsReviewCommand(draft=draft, actor=actor)
+                )
+
+        draft.refresh_from_db()
+        self.assertEqual(draft.status, EmailAnswerDraft.Status.DRAFT)
+        self.assertIsNone(draft.reviewed_by)
 
 
 class EmailThreadModelTests(TestCase):
