@@ -228,6 +228,68 @@ class EmailAccountModelTests(TestCase):
 
 
 class IMAPEmailConnectorTests(TestCase):
+    def make_plain_email(
+        self,
+        *,
+        subject="Hello from IMAP",
+        message_id="<message-1@example.com>",
+        from_header="Sender Name <sender@example.com>",
+        to_header="Receiver <receiver@example.com>",
+        cc_header="Copy <copy@example.com>",
+        body="Plain body",
+        date_header="Tue, 7 Jul 2026 10:00:00 +0300",
+        references="",
+        in_reply_to="",
+    ):
+        headers = [
+            f"Message-ID: {message_id}" if message_id else "",
+            f"Date: {date_header}" if date_header else "",
+            f"From: {from_header}",
+            f"To: {to_header}",
+            f"Cc: {cc_header}",
+            f"Subject: {subject}",
+            f"References: {references}" if references else "",
+            f"In-Reply-To: {in_reply_to}" if in_reply_to else "",
+            "Content-Type: text/plain; charset=utf-8",
+        ]
+        return ("\r\n".join(header for header in headers if header) + f"\r\n\r\n{body}").encode()
+
+    def make_multipart_email(self):
+        return b"""Message-ID: <multipart@example.com>
+Date: Tue, 7 Jul 2026 11:00:00 +0300
+From: Sender <sender@example.com>
+To: Receiver <receiver@example.com>
+Subject: Multipart message
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="mixed-boundary"
+
+--mixed-boundary
+Content-Type: multipart/alternative; boundary="alt-boundary"
+
+--alt-boundary
+Content-Type: text/plain; charset=utf-8
+
+Plain multipart body
+--alt-boundary
+Content-Type: text/html; charset=utf-8
+
+<p>HTML multipart body</p>
+--alt-boundary--
+--mixed-boundary
+Content-Type: text/plain
+Content-Disposition: attachment; filename="note.txt"
+
+Attachment body should be ignored
+--mixed-boundary--
+"""
+
+    def connect_with_mock_client(self, client):
+        account = create_imap_email_account()
+        with patch("apps.communications.connectors.imap.imaplib.IMAP4_SSL") as imap_class:
+            imap_class.return_value = client
+            client.login.return_value = ("OK", [])
+            return IMAPEmailConnector(account).connect()
+
     def test_imap_connector_accepts_imap_account(self):
         account = create_imap_email_account()
 
@@ -276,9 +338,13 @@ class IMAPEmailConnectorTests(TestCase):
             connector.connect()
 
     def test_fetch_messages_returns_list(self):
-        account = create_imap_email_account()
-        connector = IMAPEmailConnector(account)
+        client = patch("apps.communications.connectors.imap.imaplib.IMAP4_SSL").start().return_value
+        self.addCleanup(patch.stopall)
+        client.login.return_value = ("OK", [])
+        client.select.return_value = ("OK", [])
+        client.search.return_value = ("OK", [b""])
 
+        connector = IMAPEmailConnector(create_imap_email_account()).connect()
         messages = connector.fetch_messages()
 
         self.assertEqual(messages, [])
@@ -377,6 +443,123 @@ class IMAPEmailConnectorTests(TestCase):
 
             with self.assertRaisesRegex(RuntimeError, "IMAP login failed"):
                 IMAPEmailConnector(account).connect()
+
+    def test_fetch_messages_returns_raw_email_message_list(self):
+        client = patch("apps.communications.connectors.imap.imaplib.IMAP4_SSL").start().return_value
+        self.addCleanup(patch.stopall)
+        client.login.return_value = ("OK", [])
+        client.select.return_value = ("OK", [])
+        client.search.return_value = ("OK", [b"1"])
+        client.fetch.return_value = ("OK", [(b"1 (RFC822)", self.make_plain_email())])
+
+        messages = IMAPEmailConnector(create_imap_email_account()).connect().fetch_messages()
+
+        self.assertEqual(len(messages), 1)
+        self.assertIsInstance(messages[0], RawEmailMessage)
+
+    def test_fetch_messages_respects_limit(self):
+        client = patch("apps.communications.connectors.imap.imaplib.IMAP4_SSL").start().return_value
+        self.addCleanup(patch.stopall)
+        client.login.return_value = ("OK", [])
+        client.select.return_value = ("OK", [])
+        client.search.return_value = ("OK", [b"1 2 3"])
+        client.fetch.side_effect = [
+            ("OK", [(b"2 (RFC822)", self.make_plain_email(message_id="<message-2@example.com>"))]),
+            ("OK", [(b"3 (RFC822)", self.make_plain_email(message_id="<message-3@example.com>"))]),
+        ]
+
+        messages = IMAPEmailConnector(create_imap_email_account()).connect().fetch_messages(limit=2)
+
+        self.assertEqual([message.external_message_id for message in messages], ["2", "3"])
+
+    def test_fetch_messages_selects_inbox_by_default(self):
+        client = patch("apps.communications.connectors.imap.imaplib.IMAP4_SSL").start().return_value
+        self.addCleanup(patch.stopall)
+        client.login.return_value = ("OK", [])
+        client.select.return_value = ("OK", [])
+        client.search.return_value = ("OK", [b""])
+
+        IMAPEmailConnector(create_imap_email_account()).connect().fetch_messages()
+
+        client.select.assert_called_once_with("INBOX")
+
+    def test_parse_email_message_parses_subject(self):
+        connector = IMAPEmailConnector(create_imap_email_account())
+
+        message = connector.parse_email_message(self.make_plain_email(subject="Parsed subject"), "1")
+
+        self.assertEqual(message.subject, "Parsed subject")
+
+    def test_parse_email_message_parses_sender(self):
+        connector = IMAPEmailConnector(create_imap_email_account())
+
+        message = connector.parse_email_message(
+            self.make_plain_email(from_header="Sender Name <sender@example.com>"),
+            "1",
+        )
+
+        self.assertEqual(message.sender_name, "Sender Name")
+        self.assertEqual(message.sender_email, "sender@example.com")
+
+    def test_parse_email_message_parses_recipients(self):
+        connector = IMAPEmailConnector(create_imap_email_account())
+
+        message = connector.parse_email_message(
+            self.make_plain_email(to_header="One <one@example.com>, two@example.com"),
+            "1",
+        )
+
+        self.assertEqual(
+            message.recipients,
+            [
+                {"name": "One", "email": "one@example.com"},
+                {"name": "", "email": "two@example.com"},
+            ],
+        )
+
+    def test_parse_email_message_parses_body_text(self):
+        connector = IMAPEmailConnector(create_imap_email_account())
+
+        message = connector.parse_email_message(self.make_plain_email(body="Body text"), "1")
+
+        self.assertEqual(message.body_text, "Body text")
+
+    def test_parse_email_message_parses_body_html(self):
+        connector = IMAPEmailConnector(create_imap_email_account())
+
+        message = connector.parse_email_message(self.make_multipart_email(), "1")
+
+        self.assertEqual(message.body_html.strip(), "<p>HTML multipart body</p>")
+
+    def test_parse_email_message_parses_message_id(self):
+        connector = IMAPEmailConnector(create_imap_email_account())
+
+        message = connector.parse_email_message(self.make_plain_email(message_id="<custom@example.com>"), "7")
+
+        self.assertEqual(message.internet_message_id, "<custom@example.com>")
+
+    def test_parse_email_message_handles_missing_message_id(self):
+        connector = IMAPEmailConnector(create_imap_email_account())
+
+        message = connector.parse_email_message(self.make_plain_email(message_id=""), "7")
+
+        self.assertEqual(message.external_message_id, "7")
+        self.assertEqual(message.internet_message_id, "")
+
+    def test_parse_email_message_handles_multipart_email(self):
+        connector = IMAPEmailConnector(create_imap_email_account())
+
+        message = connector.parse_email_message(self.make_multipart_email(), "1")
+
+        self.assertEqual(message.body_text.strip(), "Plain multipart body")
+        self.assertEqual(message.body_html.strip(), "<p>HTML multipart body</p>")
+
+    def test_parse_email_message_ignores_attachments_for_now(self):
+        connector = IMAPEmailConnector(create_imap_email_account())
+
+        message = connector.parse_email_message(self.make_multipart_email(), "1")
+
+        self.assertNotIn("Attachment body should be ignored", message.body_text)
 
     def test_maps_dict_to_raw_email_message(self):
         account = create_imap_email_account()
