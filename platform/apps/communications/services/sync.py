@@ -4,6 +4,7 @@ from apps.core.services import AuditService
 
 from ..connectors import IMAPEmailConnector
 from ..models import EmailAccount
+from .imports import EmailImportService
 
 
 class EmailSyncService:
@@ -30,12 +31,22 @@ class EmailSyncService:
                 },
             )
 
-        messages = []
+        raw_messages = []
         try:
             connector.connect()
-            messages = connector.fetch_messages(limit=command.limit)
+            raw_messages = connector.fetch_messages(limit=command.limit)
         finally:
             connector.disconnect()
+
+        imported_messages = [
+            EmailImportService.import_message(
+                email_account,
+                raw_message,
+                actor=command.actor,
+                metadata=metadata,
+            )
+            for raw_message in raw_messages
+        ]
 
         with transaction.atomic():
             AuditService.record(
@@ -48,15 +59,18 @@ class EmailSyncService:
                 metadata={
                     "provider": email_account.provider,
                     "limit": command.limit,
-                    "fetched_count": len(messages),
+                    "fetched_count": len(raw_messages),
+                    "imported_count": len(imported_messages),
                     "sync_metadata": metadata,
                 },
             )
 
         return {
             "email_account": email_account,
-            "fetched_count": len(messages),
-            "messages": messages,
+            "fetched_count": len(raw_messages),
+            "imported_count": len(imported_messages),
+            "raw_messages": raw_messages,
+            "imported_messages": imported_messages,
             "synced": True,
         }
 

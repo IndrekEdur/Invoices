@@ -288,17 +288,68 @@ class IMAPEmailConnectorTests(TestCase):
 class EmailSyncServiceTests(TestCase):
     def test_sync_imap_account_returns_structured_result(self):
         account = create_imap_email_account()
+        raw_message = create_raw_email()
 
         with patch("apps.communications.services.sync.IMAPEmailConnector") as connector_class:
             connector = connector_class.return_value
-            connector.fetch_messages.return_value = [{"subject": "Message"}]
+            connector.fetch_messages.return_value = [raw_message]
 
             result = EmailSyncService.sync(SyncEmailAccountCommand(email_account=account))
 
         self.assertEqual(result["email_account"], account)
         self.assertEqual(result["fetched_count"], 1)
-        self.assertEqual(result["messages"], [{"subject": "Message"}])
+        self.assertEqual(result["imported_count"], 1)
+        self.assertEqual(result["raw_messages"], [raw_message])
+        self.assertEqual(result["imported_messages"][0].external_message_id, raw_message.external_message_id)
         self.assertTrue(result["synced"])
+
+    def test_sync_imports_fetched_raw_email_message(self):
+        account = create_imap_email_account()
+
+        with patch("apps.communications.services.sync.IMAPEmailConnector") as connector_class:
+            connector_class.return_value.fetch_messages.return_value = [create_raw_email()]
+
+            EmailSyncService.sync(SyncEmailAccountCommand(email_account=account))
+
+        self.assertTrue(
+            EmailMessage.objects.filter(
+                account=account,
+                external_message_id="raw-message-1",
+            ).exists()
+        )
+
+    def test_multiple_raw_messages_are_imported(self):
+        account = create_imap_email_account()
+        raw_messages = [
+            create_raw_email(external_message_id="raw-1"),
+            create_raw_email(external_message_id="raw-2"),
+        ]
+
+        with patch("apps.communications.services.sync.IMAPEmailConnector") as connector_class:
+            connector_class.return_value.fetch_messages.return_value = raw_messages
+
+            result = EmailSyncService.sync(SyncEmailAccountCommand(email_account=account))
+
+        self.assertEqual(result["fetched_count"], 2)
+        self.assertEqual(result["imported_count"], 2)
+        self.assertEqual(EmailMessage.objects.filter(account=account).count(), 2)
+
+    def test_duplicate_raw_message_does_not_create_duplicate_email_message(self):
+        account = create_imap_email_account()
+        raw_messages = [
+            create_raw_email(subject="First version"),
+            create_raw_email(subject="Updated version"),
+        ]
+
+        with patch("apps.communications.services.sync.IMAPEmailConnector") as connector_class:
+            connector_class.return_value.fetch_messages.return_value = raw_messages
+
+            result = EmailSyncService.sync(SyncEmailAccountCommand(email_account=account))
+
+        self.assertEqual(result["fetched_count"], 2)
+        self.assertEqual(result["imported_count"], 2)
+        self.assertEqual(EmailMessage.objects.filter(account=account).count(), 1)
+        self.assertEqual(EmailMessage.objects.get(account=account).subject, "Updated version")
 
     def test_unsupported_provider_raises_error(self):
         account = create_imap_email_account(provider=EmailAccount.Provider.GMAIL)
@@ -332,6 +383,21 @@ class EmailSyncServiceTests(TestCase):
 
         connector.disconnect.assert_called_once_with()
 
+    def test_disconnect_called_if_import_fails(self):
+        account = create_imap_email_account()
+
+        with patch("apps.communications.services.sync.IMAPEmailConnector") as connector_class:
+            connector = connector_class.return_value
+            connector.fetch_messages.return_value = [create_raw_email()]
+
+            with patch("apps.communications.services.sync.EmailImportService") as import_service:
+                import_service.import_message.side_effect = RuntimeError("import failed")
+
+                with self.assertRaises(RuntimeError):
+                    EmailSyncService.sync(SyncEmailAccountCommand(email_account=account))
+
+        connector.disconnect.assert_called_once_with()
+
     def test_audit_event_created_for_started_and_completed(self):
         account = create_imap_email_account()
 
@@ -354,6 +420,9 @@ class EmailSyncServiceTests(TestCase):
                 object_id=str(account.id),
             ).exists()
         )
+        audit_event = AuditEvent.objects.get(event_type="email.sync_completed")
+        self.assertEqual(audit_event.metadata["fetched_count"], 0)
+        self.assertEqual(audit_event.metadata["imported_count"], 0)
 
     def test_metadata_is_not_mutated(self):
         account = create_imap_email_account()
