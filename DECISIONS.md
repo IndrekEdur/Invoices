@@ -287,3 +287,20 @@ Reason:
 - AI suggestions, review queues, evidence, workflow state, and project context need dedicated UX patterns.
 - Project managers, site managers, electricians, accounting users, administrators, and management have different daily workflows.
 - Trustworthy automation requires visible evidence, human confirmation, and clear action controls.
+
+## ADR-020: Operations Workspace Platform Governs Business Engines and AI Capabilities
+
+Date: 2026-07-07
+
+Decision:
+
+- The Operations Workspace Platform becomes the top-level architectural concept governing all business engines and future AI capabilities.
+- The product is a business workspace where communication, projects, documents, workflow, knowledge, accounting, integrations, and AI assistance work together.
+- ERP, CRM, document archive, and e-mail-client capabilities are orchestrated inside one operational context rather than treated as isolated products.
+
+Reason:
+
+- Daily operational work crosses system boundaries.
+- AI needs verified knowledge, evidence, workflow, and human review to be useful and safe.
+- A workspace architecture keeps the product business-first while still allowing modular engines and future capabilities to grow independently.
+- This concept aligns UI, domain models, knowledge, policy, integrations, audit, and future AI assistance under one shared architecture.

@@ -1,6 +1,10 @@
-# PST Invoice Finder MVP
+# Operations Workspace Platform
+
+This repository is evolving from a local invoice automation prototype into an Operations Workspace Platform: one business workspace where communication, projects, documents, workflows, knowledge, accounting, integrations, and AI assistance come together.
 
 ## Architecture Documents
+
+`PLATFORM_ARCHITECTURE.md` is the top-level architecture document for the Operations Workspace Platform and explains how all engines, workspace areas, knowledge, AI, and future capabilities fit together.
 
 `ENTERPRISE_DOMAIN_MAP.md` describes the business domain vision: what the organization should know, remember, communicate, and act on.
 
