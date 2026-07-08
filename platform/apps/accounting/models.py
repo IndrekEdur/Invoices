@@ -1,1 +1,34 @@
-# Accounting models will be added after the legacy data model is mapped.
+from django.db import models
+
+from apps.core.models import Organization
+
+
+class AccountingIntegration(models.Model):
+    class Provider(models.TextChoices):
+        MERIT = "merit", "Merit"
+        STANDARD_BOOKS = "standard_books", "Standard Books"
+        XERO = "xero", "Xero"
+        EXACT = "exact", "Exact"
+        OTHER = "other", "Other"
+
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name="accounting_integrations",
+    )
+    provider = models.CharField(max_length=32, choices=Provider.choices, default=Provider.MERIT)
+    display_name = models.CharField(max_length=255)
+    api_base_url = models.URLField(blank=True)
+    api_id = models.CharField(max_length=255, blank=True)
+    encrypted_secret_placeholder = models.CharField(max_length=255, blank=True)
+    is_active = models.BooleanField(default=True)
+    last_sync_at = models.DateTimeField(blank=True, null=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["organization__name", "display_name", "id"]
+
+    def __str__(self) -> str:
+        return f"{self.display_name} ({self.provider})"
