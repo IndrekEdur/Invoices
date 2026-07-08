@@ -7,43 +7,61 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/htmx.org@1.9.12"></script>
 </head>
-<body class="min-h-screen bg-slate-50 text-slate-900">
+<body class="min-h-screen bg-slate-50 text-slate-900 antialiased">
     <div class="flex min-h-screen">
-        <aside class="hidden w-72 shrink-0 border-r border-slate-200 bg-slate-950 text-white lg:block">
-            <div class="px-6 py-6">
-                <div class="text-xs font-semibold uppercase tracking-wide text-amber-300">Operations</div>
-                <div class="mt-1 text-xl font-semibold">Workspace</div>
+        <aside class="hidden w-72 shrink-0 border-r border-slate-800 bg-slate-950 text-white lg:block">
+            <div class="px-6 pb-7 pt-7">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-11 w-11 items-center justify-center rounded-xl bg-amber-400 text-sm font-bold text-slate-950 shadow-sm">OW</div>
+                    <div>
+                        <div class="text-xs font-semibold uppercase tracking-wide text-amber-300">Operations</div>
+                        <div class="mt-0.5 text-xl font-semibold tracking-tight">Workspace</div>
+                    </div>
+                </div>
             </div>
-            <nav class="space-y-1 px-4" aria-label="Workspace navigation">
-                {% include "workspace/partials/sidebar_link.html" with section="dashboard" label="Dashboard" icon="D" url_name="workspace:dashboard" %}
-                {% include "workspace/partials/sidebar_link.html" with section="inbox" label="Inbox" icon="I" url_name="workspace:inbox" %}
-                {% include "workspace/partials/sidebar_link.html" with section="projects" label="Projects" icon="P" url_name="workspace:projects" %}
-                {% include "workspace/partials/sidebar_link.html" with section="documents" label="Documents" icon="F" url_name="workspace:documents" %}
-                {% include "workspace/partials/sidebar_link.html" with section="reviews" label="Reviews" icon="R" url_name="workspace:reviews" %}
-                {% include "workspace/partials/sidebar_link.html" with section="search" label="Search" icon="S" url_name="workspace:search" %}
-                {% include "workspace/partials/sidebar_link.html" with section="assistant" label="AI Assistant" icon="AI" url_name="workspace:assistant" %}
-                {% include "workspace/partials/sidebar_link.html" with section="settings" label="Administration" icon="A" url_name="workspace:settings" %}
-                <div class="pt-3">
-                    {% include "workspace/partials/sidebar_link.html" with section="design_system" label="Design System" icon="DS" url_name="workspace:design_system" %}
+            <nav class="space-y-7 px-4" aria-label="Workspace navigation">
+                <div class="space-y-1.5">
+                    {% include "workspace/partials/sidebar_link.html" with section="dashboard" label="Dashboard" icon="dashboard" url_name="workspace:dashboard" %}
+                    {% include "workspace/partials/sidebar_link.html" with section="inbox" label="Inbox" icon="inbox" url_name="workspace:inbox" %}
+                    {% include "workspace/partials/sidebar_link.html" with section="projects" label="Projects" icon="projects" url_name="workspace:projects" %}
+                    {% include "workspace/partials/sidebar_link.html" with section="documents" label="Documents" icon="documents" url_name="workspace:documents" %}
+                    {% include "workspace/partials/sidebar_link.html" with section="reviews" label="Reviews" icon="reviews" url_name="workspace:reviews" %}
+                </div>
+                <div class="space-y-1.5 border-t border-white/10 pt-5">
+                    {% include "workspace/partials/sidebar_link.html" with section="search" label="Search" icon="search" url_name="workspace:search" %}
+                    {% include "workspace/partials/sidebar_link.html" with section="assistant" label="AI Assistant" icon="assistant" url_name="workspace:assistant" %}
+                    {% include "workspace/partials/sidebar_link.html" with section="settings" label="Administration" icon="settings" url_name="workspace:settings" %}
+                    {% include "workspace/partials/sidebar_link.html" with section="design_system" label="Design System" icon="dashboard" url_name="workspace:design_system" %}
                 </div>
             </nav>
         </aside>
 
         <div class="flex min-w-0 flex-1 flex-col">
-            <header class="border-b border-slate-200 bg-white">
-                <div class="flex min-h-16 items-center gap-4 px-4 sm:px-6 lg:px-8">
+            <header class="sticky top-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur">
+                <div class="flex min-h-20 items-center gap-4 px-4 sm:px-6 lg:px-8">
                     <div class="min-w-0 flex-1">
-                        <div class="text-sm font-medium text-slate-500">Operations Workspace Platform</div>
-                        <div class="truncate text-lg font-semibold">{{ page_title|default:"Workspace" }}</div>
+                        <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Operations Workspace Platform</div>
+                        <div class="mt-1 truncate text-xl font-semibold tracking-tight text-slate-950">{{ page_title|default:"Workspace" }}</div>
                     </div>
-                    <div class="hidden w-full max-w-md md:block">
+                    <div class="relative hidden w-full max-w-md md:block">
                         <label class="sr-only" for="global-search">Global search</label>
+                        <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">
+                            {% include "workspace/partials/icon.html" with name="search" class="h-4 w-4" %}
+                        </span>
                         <input id="global-search" type="search" placeholder="Search projects, emails, documents..."
-                               class="w-full rounded-md border border-slate-300 bg-slate-50 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:bg-white">
+                               class="w-full rounded-xl border border-slate-300 bg-slate-50 py-2.5 pl-10 pr-3 text-sm outline-none transition focus:border-slate-500 focus:bg-white focus:ring-4 focus:ring-slate-200">
                     </div>
-                    <button class="rounded-md border border-slate-300 px-3 py-2 text-sm" type="button" aria-label="Notifications">Bell</button>
-                    <button class="rounded-md border border-slate-300 px-3 py-2 text-sm" type="button">Organization</button>
-                    <button class="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white" type="button">User</button>
+                    <button class="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-300 bg-white text-slate-600 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-slate-200" type="button" aria-label="Notifications">
+                        {% include "workspace/partials/icon.html" with name="bell" class="h-5 w-5" %}
+                    </button>
+                    <button class="hidden items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-slate-200 xl:inline-flex" type="button">
+                        {% include "workspace/partials/icon.html" with name="organization" class="h-4 w-4" %}
+                        Organization
+                    </button>
+                    <button class="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-3 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-slate-300" type="button">
+                        {% include "workspace/partials/icon.html" with name="user" class="h-4 w-4" %}
+                        User
+                    </button>
                 </div>
             </header>
 
@@ -56,17 +74,17 @@
                         </div>
                         <div class="flex items-center gap-2">
                             {% block actions %}
-                            <span class="rounded-md bg-slate-100 px-3 py-2 text-sm text-slate-600">Actions placeholder</span>
+                            <span class="rounded-xl bg-slate-100 px-3 py-2 text-sm text-slate-600">Actions placeholder</span>
                             {% endblock %}
                         </div>
                     </div>
                 </div>
 
-                <section id="workspace-notifications" class="px-4 pt-4 sm:px-6 lg:px-8" hx-target="this" hx-swap="innerHTML">
-                    <div class="rounded-md border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">Notification placeholder</div>
+                <section id="workspace-notifications" class="px-4 pt-5 sm:px-6 lg:px-8" hx-target="this" hx-swap="innerHTML">
+                    <div class="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 shadow-sm">Notification placeholder</div>
                 </section>
 
-                <section id="workspace-content" class="px-4 py-6 sm:px-6 lg:px-8" hx-target="this" hx-swap="innerHTML">
+                <section id="workspace-content" class="px-4 py-8 sm:px-6 lg:px-8" hx-target="this" hx-swap="innerHTML">
                     {% block content %}{% endblock %}
                 </section>
             </main>

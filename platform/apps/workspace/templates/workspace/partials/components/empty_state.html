@@ -1,5 +1,6 @@
-<div class="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center">
-    <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-md bg-slate-100 text-sm font-semibold text-slate-600">{{ icon|default:"-" }}</div>
-    <h3 class="mt-4 text-base font-semibold text-slate-950">{{ title }}</h3>
-    <p class="mt-2 text-sm text-slate-600">{{ body }}</p>
+<div class="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center shadow-sm">
+    <div class="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-100 text-lg font-semibold text-slate-500">{{ icon|default:"-" }}</div>
+    <h3 class="mt-5 text-base font-semibold tracking-tight text-slate-950">{{ title }}</h3>
+    <p class="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-600">{{ body }}</p>
+    {% if action_label %}<div class="mt-5">{% include "workspace/partials/components/button.html" with label=action_label variant="secondary" %}</div>{% endif %}
 </div>

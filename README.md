@@ -55,6 +55,8 @@ The dashboard MVP at `/workspace/dashboard/` is data-driven and reads existing e
 
 The inbox MVP at `/workspace/inbox/` lists imported e-mails with project suggestions, question counts, attachment counts, filters, search, and a basic read-only detail page.
 
+Workspace UX polish has been completed for the dashboard, inbox, shared layout, sidebar, badges, tables, empty states, and buttons.
+
 Väike esimene prototüüp, mis loeb Outlooki `.pst` faili, leiab võimalikud arved ning salvestab kontrolltabeli CSV ja JSON formaadis.
 
 ## Rakenduste käivitamine

@@ -1,19 +1,19 @@
 {% if rows %}
-    <div class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+    <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div class="overflow-x-auto">
             <table class="min-w-full divide-y divide-slate-200 text-sm">
-                <thead class="bg-slate-50">
+                <thead class="sticky top-0 bg-slate-50">
                     <tr>
                         {% for header in headers %}
-                            <th class="px-4 py-3 text-left font-semibold text-slate-700">{{ header }}</th>
+                            <th class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">{{ header }}</th>
                         {% endfor %}
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-100">
                     {% for row in rows %}
-                        <tr>
+                        <tr class="odd:bg-white even:bg-slate-50/50 transition hover:bg-blue-50/60">
                             {% for cell in row %}
-                                <td class="px-4 py-3 text-slate-700">{{ cell }}</td>
+                                <td class="px-5 py-4 text-slate-700">{{ cell }}</td>
                             {% endfor %}
                         </tr>
                     {% endfor %}

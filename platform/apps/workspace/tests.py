@@ -253,6 +253,16 @@ class InboxMVPTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "No emails found")
 
+    def test_inbox_ux_polish_renders_search_and_review_columns(self):
+        organization = create_organization()
+        create_email_message(organization, subject="UX polish email")
+
+        response = self.client.get(reverse("workspace:inbox"))
+
+        self.assertContains(response, "Search subject, sender, body")
+        self.assertContains(response, "Project Status")
+        self.assertContains(response, "Review")
+
     def test_inbox_lists_imported_email(self):
         organization = create_organization()
         create_email_message(organization, subject="Imported inbox email")
