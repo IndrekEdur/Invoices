@@ -3,19 +3,52 @@
 {% block title %}Dashboard | Operations Workspace Platform{% endblock %}
 
 {% block content %}
-<div class="space-y-6">
-    <div>
-        <h1 class="text-2xl font-semibold text-slate-950">Dashboard</h1>
-        <p class="mt-1 text-sm text-slate-600">Daily operational overview placeholder.</p>
+<div class="space-y-8">
+    {% include "workspace/partials/components/page_header.html" with eyebrow="Operations" title="Dashboard" body="Live operational overview from existing workspace data." %}
+
+    <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {% for card in dashboard_cards %}
+            <article id="dashboard-card-{{ forloop.counter }}" class="rounded-lg border border-slate-200 bg-white p-5 shadow-sm" hx-target="this" hx-swap="outerHTML">
+                <div class="flex items-start justify-between gap-4">
+                    <div>
+                        <div class="text-sm font-medium text-slate-500">{{ card.title }}</div>
+                        <div class="mt-3 text-3xl font-semibold text-slate-950">{{ card.count }}</div>
+                    </div>
+                    <div class="flex h-10 w-10 items-center justify-center rounded-md bg-slate-100 text-sm font-semibold text-slate-700">{{ card.icon }}</div>
+                </div>
+                <div class="mt-4 flex items-center justify-between gap-3">
+                    <p class="text-xs text-slate-500">{{ card.body }}</p>
+                    {% include "workspace/partials/components/status_badge.html" with label=card.status status=card.status %}
+                </div>
+            </article>
+        {% endfor %}
     </div>
 
-    <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        {% include "workspace/partials/dashboard_card.html" with icon="E" title="Emails" count="--" target="dashboard-emails" %}
-        {% include "workspace/partials/dashboard_card.html" with icon="P" title="Projects" count="--" target="dashboard-projects" %}
-        {% include "workspace/partials/dashboard_card.html" with icon="D" title="Documents" count="--" target="dashboard-documents" %}
-        {% include "workspace/partials/dashboard_card.html" with icon="R" title="Reviews" count="--" target="dashboard-reviews" %}
-        {% include "workspace/partials/dashboard_card.html" with icon="AI" title="AI Suggestions" count="--" target="dashboard-ai" %}
-        {% include "workspace/partials/dashboard_card.html" with icon="S" title="Synchronization Status" count="--" target="dashboard-sync" %}
+    <div class="grid gap-6 xl:grid-cols-2">
+        <section class="space-y-3">
+            {% include "workspace/partials/components/section_header.html" with title="Latest 5 Emails" body="Most recent imported communication." %}
+            {% include "workspace/partials/components/table_wrapper.html" with headers=latest_email_headers rows=latest_emails empty_title="No emails yet" empty_body="Imported emails will appear here." %}
+        </section>
+
+        <section class="space-y-3">
+            {% include "workspace/partials/components/section_header.html" with title="Latest 5 Project Suggestions" body="Recent project link suggestions and confirmations." %}
+            {% include "workspace/partials/components/table_wrapper.html" with headers=latest_project_suggestion_headers rows=latest_project_suggestions empty_title="No project suggestions yet" empty_body="Project suggestions will appear here." %}
+        </section>
+
+        <section class="space-y-3">
+            {% include "workspace/partials/components/section_header.html" with title="Latest 5 Questions" body="Detected questions from communication." %}
+            {% include "workspace/partials/components/table_wrapper.html" with headers=latest_question_headers rows=latest_questions empty_title="No questions detected yet" empty_body="Detected questions will appear here." %}
+        </section>
+
+        <section class="space-y-3">
+            {% include "workspace/partials/components/section_header.html" with title="Latest 5 Documents" body="Recently stored business documents." %}
+            {% include "workspace/partials/components/table_wrapper.html" with headers=latest_document_headers rows=latest_documents empty_title="No documents yet" empty_body="Documents will appear here." %}
+        </section>
+
+        <section class="space-y-3 xl:col-span-2">
+            {% include "workspace/partials/components/section_header.html" with title="Latest 5 Audit Events" body="Recent traceable platform actions." %}
+            {% include "workspace/partials/components/table_wrapper.html" with headers=latest_audit_event_headers rows=latest_audit_events empty_title="No audit events yet" empty_body="Audit events will appear here." %}
+        </section>
     </div>
 </div>
 {% endblock %}

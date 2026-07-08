@@ -1,5 +1,7 @@
 from django.views.generic import TemplateView
 
+from .services import DashboardContextBuilder
+
 
 class WorkspacePageView(TemplateView):
     """Thin workspace page view; business logic belongs in services."""
@@ -18,6 +20,11 @@ class DashboardView(WorkspacePageView):
     template_name = "workspace/dashboard.html"
     page_title = "Dashboard"
     section = "dashboard"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(DashboardContextBuilder.build())
+        return context
 
 
 class InboxView(WorkspacePageView):

@@ -1,7 +1,26 @@
-<div class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-    <div class="overflow-x-auto">
-        <table class="min-w-full divide-y divide-slate-200 text-sm">
-            {{ table_content }}
-        </table>
+{% if rows %}
+    <div class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 text-sm">
+                <thead class="bg-slate-50">
+                    <tr>
+                        {% for header in headers %}
+                            <th class="px-4 py-3 text-left font-semibold text-slate-700">{{ header }}</th>
+                        {% endfor %}
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                    {% for row in rows %}
+                        <tr>
+                            {% for cell in row %}
+                                <td class="px-4 py-3 text-slate-700">{{ cell }}</td>
+                            {% endfor %}
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
     </div>
-</div>
+{% else %}
+    {% include "workspace/partials/components/empty_state.html" with icon="0" title=empty_title body=empty_body %}
+{% endif %}

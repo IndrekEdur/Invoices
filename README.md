@@ -51,6 +51,8 @@ It uses a Django Templates + HTMX-first approach. The current version provides r
 
 The workspace design system demo is available under `/workspace/design-system/` and contains reusable server-rendered components for buttons, cards, badges, statuses, empty states, tables, headers, and form fields.
 
+The dashboard MVP at `/workspace/dashboard/` is data-driven and reads existing e-mails, project suggestions, questions, answer drafts, projects, documents, workflow instances, and audit events.
+
 Väike esimene prototüüp, mis loeb Outlooki `.pst` faili, leiab võimalikud arved ning salvestab kontrolltabeli CSV ja JSON formaadis.
 
 ## Rakenduste käivitamine
