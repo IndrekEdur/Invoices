@@ -20,6 +20,8 @@ This repository is evolving from a local invoice automation prototype into an Op
 
 `UI_ARCHITECTURE.md` describes the future platform user experience as a business workspace, not a Django Admin replacement.
 
+`MERIT_INTEGRATION_ARCHITECTURE.md` describes how Workspace project codes synchronize with Merit Aktiva dimensions through explicit, auditable integration services.
+
 ## Testide käivitamine
 
 Käivita testid repo juurkaustast:

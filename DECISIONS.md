@@ -321,3 +321,21 @@ Reason:
 - A complete but narrow workflow is more useful than many disconnected partial modules.
 - Replacing Outlook/folder/manual search habits requires a coherent workspace with Inbox, Projects, Documents, Reviews, Search, AI assistance, Security, and Administration.
 - Production usability requires authentication, organization isolation, permissions, audit, review, and evidence from the beginning.
+
+## ADR-022: Merit Dimensions Synchronize with Workspace Project Codes Through Explicit Integration Services
+
+Date: 2026-07-08
+
+Decision:
+
+- Merit dimensions shall be synchronized with Workspace project codes through explicit integration services and user-approved accounting actions.
+- Workspace `Project.code` should correspond to Merit `Dimension.code`.
+- Merit API logic must live behind connector/service boundaries, not inside Project models, templates, or generic workspace views.
+- Creating or changing Merit dimensions requires explicit user approval unless a future Policy Layer allows automation.
+
+Reason:
+
+- Workspace manages operational project context while Merit remains the accounting system.
+- Project dimensions affect accounting and must be auditable, explainable, and conflict-aware.
+- Existing Merit dimensions must be imported before creating new project codes to prevent duplicates and preserve historical accounting context.
+- Clear integration boundaries reduce risk when future invoice export, payment sync, and project dimension workflows are added.

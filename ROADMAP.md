@@ -4,7 +4,7 @@ This roadmap describes the intended direction for the invoice automation project
 
 `MASTER_ARCHITECTURE.md` is the main architecture reference for aligning roadmap tasks with the broader AI Business Operating System vision.
 
-Current architecture phase: Operations Workspace Platform.
+Current architecture phase: Merit Integration Architecture.
 
 Current product phase: Operations Workspace MVP.
 
