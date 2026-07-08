@@ -6,6 +6,8 @@ This repository is evolving from a local invoice automation prototype into an Op
 
 `PLATFORM_ARCHITECTURE.md` is the top-level architecture document for the Operations Workspace Platform and explains how all engines, workspace areas, knowledge, AI, and future capabilities fit together.
 
+`MVP_ROADMAP.md` defines the first production-usable Operations Workspace MVP for replacing daily operational workflows.
+
 `ENTERPRISE_DOMAIN_MAP.md` describes the business domain vision: what the organization should know, remember, communicate, and act on.
 
 `COMMUNICATION_ARCHITECTURE.md` describes how business communication, especially e-mails, becomes part of organization memory.

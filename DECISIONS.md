@@ -304,3 +304,20 @@ Reason:
 - AI needs verified knowledge, evidence, workflow, and human review to be useful and safe.
 - A workspace architecture keeps the product business-first while still allowing modular engines and future capabilities to grow independently.
 - This concept aligns UI, domain models, knowledge, policy, integrations, audit, and future AI assistance under one shared architecture.
+
+## ADR-021: First Product Milestone Is a Production-Usable Operations Workspace MVP
+
+Date: 2026-07-08
+
+Decision:
+
+- The first product milestone shall be a production-usable Operations Workspace MVP focused on replacing daily operational workflows before expanding functionality.
+- The MVP should let a real installation company receive e-mail, confirm project context, open documents, review AI suggestions, search history, and work from one browser workspace.
+- Future modules should grow from this complete daily workflow instead of isolated technical features.
+
+Reason:
+
+- The platform's value is proven only when users can perform daily work inside it.
+- A complete but narrow workflow is more useful than many disconnected partial modules.
+- Replacing Outlook/folder/manual search habits requires a coherent workspace with Inbox, Projects, Documents, Reviews, Search, AI assistance, Security, and Administration.
+- Production usability requires authentication, organization isolation, permissions, audit, review, and evidence from the beginning.

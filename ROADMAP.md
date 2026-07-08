@@ -6,6 +6,8 @@ This roadmap describes the intended direction for the invoice automation project
 
 Current architecture phase: Operations Workspace Platform.
 
+Current product phase: Operations Workspace MVP.
+
 Current engineering phase: Engineering Standards.
 
 Current implementation phase: Platform Core.
