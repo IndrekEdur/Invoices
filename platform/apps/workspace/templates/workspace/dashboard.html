@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard | Operations Workspace Platform{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div>
+        <h1 class="text-2xl font-semibold text-slate-950">Dashboard</h1>
+        <p class="mt-1 text-sm text-slate-600">Daily operational overview placeholder.</p>
+    </div>
+
+    <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        {% include "workspace/partials/dashboard_card.html" with icon="E" title="Emails" count="--" target="dashboard-emails" %}
+        {% include "workspace/partials/dashboard_card.html" with icon="P" title="Projects" count="--" target="dashboard-projects" %}
+        {% include "workspace/partials/dashboard_card.html" with icon="D" title="Documents" count="--" target="dashboard-documents" %}
+        {% include "workspace/partials/dashboard_card.html" with icon="R" title="Reviews" count="--" target="dashboard-reviews" %}
+        {% include "workspace/partials/dashboard_card.html" with icon="AI" title="AI Suggestions" count="--" target="dashboard-ai" %}
+        {% include "workspace/partials/dashboard_card.html" with icon="S" title="Synchronization Status" count="--" target="dashboard-sync" %}
+    </div>
+</div>
+{% endblock %}

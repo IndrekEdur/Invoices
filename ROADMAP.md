@@ -12,6 +12,8 @@ Current engineering phase: Engineering Standards.
 
 Current implementation phase: Platform Core.
 
+Current implementation: Workspace Skeleton.
+
 Current implementation focus: End-to-End Email Processing.
 
 ## Phase 0: Preserve the Working Prototype

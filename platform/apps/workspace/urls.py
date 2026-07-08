@@ -1,0 +1,26 @@
+from django.urls import path
+
+from .views import (
+    AssistantView,
+    DashboardView,
+    DocumentsView,
+    InboxView,
+    ProjectsView,
+    ReviewsView,
+    SearchView,
+    SettingsView,
+)
+
+app_name = "workspace"
+
+urlpatterns = [
+    path("", DashboardView.as_view(), name="home"),
+    path("dashboard/", DashboardView.as_view(), name="dashboard"),
+    path("inbox/", InboxView.as_view(), name="inbox"),
+    path("projects/", ProjectsView.as_view(), name="projects"),
+    path("documents/", DocumentsView.as_view(), name="documents"),
+    path("reviews/", ReviewsView.as_view(), name="reviews"),
+    path("search/", SearchView.as_view(), name="search"),
+    path("assistant/", AssistantView.as_view(), name="assistant"),
+    path("settings/", SettingsView.as_view(), name="settings"),
+]

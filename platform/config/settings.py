@@ -23,6 +23,7 @@ INSTALLED_APPS = [
     "apps.knowledge",
     "apps.learning",
     "apps.workflow",
+    "apps.workspace",
 ]
 
 MIDDLEWARE = [

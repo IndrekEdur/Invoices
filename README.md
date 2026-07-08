@@ -43,6 +43,12 @@ cd platform
 python manage.py test apps.core
 ```
 
+## Workspace UI
+
+The first Operations Workspace UI skeleton is available under `/workspace/`.
+
+It uses a Django Templates + HTMX-first approach. The current version provides reusable layout, navigation, placeholder pages, and HTMX-ready regions without business functionality yet.
+
 Väike esimene prototüüp, mis loeb Outlooki `.pst` faili, leiab võimalikud arved ning salvestab kontrolltabeli CSV ja JSON formaadis.
 
 ## Rakenduste käivitamine
