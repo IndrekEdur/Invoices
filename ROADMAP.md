@@ -12,7 +12,7 @@ Current engineering phase: Engineering Standards.
 
 Current implementation phase: Platform Core.
 
-Current implementation: Dashboard MVP.
+Current implementation: Inbox MVP.
 
 Current implementation focus: End-to-End Email Processing.
 

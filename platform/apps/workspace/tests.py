@@ -2,7 +2,14 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from apps.communications.models import EmailAccount, EmailAnswerDraft, EmailMessage, EmailProjectLink, EmailQuestion
+from apps.communications.models import (
+    EmailAccount,
+    EmailAnswerDraft,
+    EmailAttachment,
+    EmailMessage,
+    EmailProjectLink,
+    EmailQuestion,
+)
 from apps.core.models import AuditEvent
 from apps.core.services import CreateOrganizationCommand, OrganizationService
 from apps.documents.models import Document
@@ -30,7 +37,10 @@ def create_email_message(organization, subject="Workspace email"):
         account=account,
         external_message_id=f"{subject}-id",
         subject=subject,
+        body_text="Workspace body text",
         sender_email="sender@example.com",
+        sender_name="Sender Name",
+        recipients=["receiver@example.com"],
         received_at=timezone.now(),
     )
 
@@ -234,3 +244,148 @@ class DashboardMVPTests(TestCase):
         self.assertContains(response, "Workflow Instances")
         self.assertContains(response, "Audit Events Today")
         self.assertContains(response, "dashboard.test")
+
+
+class InboxMVPTests(TestCase):
+    def test_inbox_returns_200_with_empty_db(self):
+        response = self.client.get(reverse("workspace:inbox"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "No emails found")
+
+    def test_inbox_lists_imported_email(self):
+        organization = create_organization()
+        create_email_message(organization, subject="Imported inbox email")
+
+        response = self.client.get(reverse("workspace:inbox"))
+
+        self.assertContains(response, "Imported inbox email")
+        self.assertContains(response, "Sender Name")
+
+    def test_inbox_shows_project_suggestion(self):
+        organization = create_organization()
+        message = create_email_message(organization, subject="Project suggestion email")
+        project = create_project(organization, code="26100", name="Inbox Project")
+        EmailProjectLink.objects.create(
+            organization=organization,
+            email_message=message,
+            project=project,
+            status=EmailProjectLink.Status.SUGGESTED,
+            confidence=90,
+        )
+
+        response = self.client.get(reverse("workspace:inbox"))
+
+        self.assertContains(response, "26100")
+        self.assertContains(response, "suggested")
+
+    def test_inbox_shows_confidence(self):
+        organization = create_organization()
+        message = create_email_message(organization, subject="Confidence email")
+        project = create_project(organization, code="26101", name="Confidence Project")
+        EmailProjectLink.objects.create(
+            organization=organization,
+            email_message=message,
+            project=project,
+            confidence=75,
+        )
+
+        response = self.client.get(reverse("workspace:inbox"))
+
+        self.assertContains(response, "75%")
+
+    def test_inbox_shows_question_count(self):
+        organization = create_organization()
+        message = create_email_message(organization, subject="Question count email")
+        EmailQuestion.objects.create(
+            organization=organization,
+            email_message=message,
+            question_text="Kas saaks kinnitada?",
+        )
+
+        response = self.client.get(reverse("workspace:inbox"))
+
+        self.assertContains(response, "Question count email")
+        self.assertContains(response, ">1<", html=False)
+
+    def test_filter_has_questions_works(self):
+        organization = create_organization()
+        message_with_question = create_email_message(organization, subject="Has question")
+        create_email_message(organization, subject="No question")
+        EmailQuestion.objects.create(
+            organization=organization,
+            email_message=message_with_question,
+            question_text="Can you confirm?",
+        )
+
+        response = self.client.get(reverse("workspace:inbox"), {"filter": "has_questions"})
+
+        self.assertContains(response, "Has question")
+        self.assertNotContains(response, "No question")
+
+    def test_filter_no_project_works(self):
+        organization = create_organization()
+        no_project_message = create_email_message(organization, subject="No project email")
+        project_message = create_email_message(organization, subject="With project email")
+        project = create_project(organization, code="26102", name="Linked Project")
+        EmailProjectLink.objects.create(
+            organization=organization,
+            email_message=project_message,
+            project=project,
+        )
+
+        response = self.client.get(reverse("workspace:inbox"), {"filter": "no_project"})
+
+        self.assertContains(response, no_project_message.subject)
+        self.assertNotContains(response, project_message.subject)
+
+    def test_search_by_subject_works(self):
+        organization = create_organization()
+        create_email_message(organization, subject="Kanarbiku search email")
+        create_email_message(organization, subject="Unrelated email")
+
+        response = self.client.get(reverse("workspace:inbox"), {"q": "Kanarbiku"})
+
+        self.assertContains(response, "Kanarbiku search email")
+        self.assertNotContains(response, "Unrelated email")
+
+    def test_email_detail_route_returns_200(self):
+        organization = create_organization()
+        message = create_email_message(organization, subject="Detail route email")
+
+        response = self.client.get(reverse("workspace:inbox_detail", kwargs={"email_id": message.id}))
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_email_detail_shows_subject_body_and_evidence(self):
+        organization = create_organization()
+        message = create_email_message(organization, subject="Evidence detail email")
+        message.body_text = "Detail body content"
+        message.save(update_fields=["body_text"])
+        project = create_project(organization, code="26103", name="Evidence Project")
+        EmailProjectLink.objects.create(
+            organization=organization,
+            email_message=message,
+            project=project,
+            confidence=90,
+            evidence={"matched": "subject"},
+        )
+        EmailQuestion.objects.create(
+            organization=organization,
+            email_message=message,
+            question_text="Please confirm?",
+            evidence={"keyword": "please"},
+        )
+        EmailAttachment.objects.create(
+            organization=organization,
+            email_message=message,
+            original_filename="evidence.pdf",
+        )
+
+        response = self.client.get(reverse("workspace:inbox_detail", kwargs={"email_id": message.id}))
+
+        self.assertContains(response, "Evidence detail email")
+        self.assertContains(response, "Detail body content")
+        self.assertContains(response, "matched")
+        self.assertContains(response, "Please confirm?")
+        self.assertContains(response, "evidence.pdf")

@@ -1,6 +1,6 @@
 from django.views.generic import TemplateView
 
-from .services import DashboardContextBuilder
+from .services import DashboardContextBuilder, InboxContextBuilder
 
 
 class WorkspacePageView(TemplateView):
@@ -31,6 +31,27 @@ class InboxView(WorkspacePageView):
     template_name = "workspace/inbox.html"
     page_title = "Inbox"
     section = "inbox"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(
+            InboxContextBuilder.build(
+                filter_value=self.request.GET.get("filter", "all"),
+                query=self.request.GET.get("q", ""),
+            )
+        )
+        return context
+
+
+class InboxDetailView(WorkspacePageView):
+    template_name = "workspace/inbox_detail.html"
+    page_title = "Email Detail"
+    section = "inbox"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(InboxContextBuilder.build_detail(email_id=self.kwargs["email_id"]))
+        return context
 
 
 class ProjectsView(WorkspacePageView):
