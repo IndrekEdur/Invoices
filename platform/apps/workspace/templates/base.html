@@ -81,7 +81,17 @@
                 </div>
 
                 <section id="workspace-notifications" class="px-4 pt-5 sm:px-6 lg:px-8" hx-target="this" hx-swap="innerHTML">
-                    <div class="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 shadow-sm">Notification placeholder</div>
+                    {% if messages %}
+                        <div class="space-y-2">
+                            {% for message in messages %}
+                                <div class="rounded-xl border px-4 py-3 text-sm shadow-sm {% if message.tags == 'success' %}border-green-200 bg-green-50 text-green-800{% elif message.tags == 'error' %}border-red-200 bg-red-50 text-red-800{% elif message.tags == 'warning' %}border-yellow-200 bg-yellow-50 text-yellow-900{% else %}border-slate-200 bg-white text-slate-600{% endif %}">
+                                    {{ message }}
+                                </div>
+                            {% endfor %}
+                        </div>
+                    {% else %}
+                        <div class="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 shadow-sm">Notification placeholder</div>
+                    {% endif %}
                 </section>
 
                 <section id="workspace-content" class="px-4 py-8 sm:px-6 lg:px-8" hx-target="this" hx-swap="innerHTML">

@@ -2,6 +2,10 @@
 
 {% block title %}Inbox | Operations Workspace Platform{% endblock %}
 
+{% block actions %}
+    {% include "workspace/partials/sync_button.html" with next_url=request.get_full_path %}
+{% endblock %}
+
 {% block content %}
 <div class="space-y-8">
     {% include "workspace/partials/components/page_header.html" with eyebrow="Communication" title="Inbox" body="Imported e-mails with project suggestions, question detection, attachments, and review state." %}

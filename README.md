@@ -57,6 +57,8 @@ The inbox MVP at `/workspace/inbox/` lists imported e-mails with project suggest
 
 Workspace UX polish has been completed for the dashboard, inbox, shared layout, sidebar, badges, tables, empty states, and buttons.
 
+Manual e-mail sync is available from the dashboard and inbox through a CSRF-protected `Sync now` POST action that uses the existing EmailSyncService.
+
 Väike esimene prototüüp, mis loeb Outlooki `.pst` faili, leiab võimalikud arved ning salvestab kontrolltabeli CSV ja JSON formaadis.
 
 ## Rakenduste käivitamine

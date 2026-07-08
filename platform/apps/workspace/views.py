@@ -1,4 +1,10 @@
+from django.contrib import messages
+from django.shortcuts import redirect
+from django.views import View
 from django.views.generic import TemplateView
+
+from apps.communications.models import EmailAccount
+from apps.communications.services import EmailSyncService, SyncEmailAccountCommand
 
 from .services import DashboardContextBuilder, InboxContextBuilder
 
@@ -52,6 +58,43 @@ class InboxDetailView(WorkspacePageView):
         context = super().get_context_data(**kwargs)
         context.update(InboxContextBuilder.build_detail(email_id=self.kwargs["email_id"]))
         return context
+
+
+class InboxSyncView(View):
+    """Manual sync action; provider-specific sync logic remains in EmailSyncService."""
+
+    def post(self, request, *args, **kwargs):
+        email_account = EmailAccount.objects.filter(is_active=True).order_by("id").first()
+        redirect_to = request.POST.get("next") or "workspace:inbox"
+
+        if not email_account:
+            messages.warning(request, "No active email account is configured yet. Add an EmailAccount before syncing.")
+            return redirect(redirect_to)
+
+        actor = request.user if request.user.is_authenticated else None
+
+        try:
+            result = EmailSyncService.sync(
+                SyncEmailAccountCommand(
+                    email_account=email_account,
+                    limit=10,
+                    actor=actor,
+                    metadata={"source": "workspace_manual_sync"},
+                    process_imported=True,
+                )
+            )
+        except Exception:
+            messages.error(request, "Email sync failed. Check account configuration and try again.")
+            return redirect(redirect_to)
+
+        messages.success(
+            request,
+            "Email sync completed: "
+            f"fetched {result['fetched_count']}, "
+            f"imported {result['imported_count']}, "
+            f"processed {result['processed_count']}.",
+        )
+        return redirect(redirect_to)
 
 
 class ProjectsView(WorkspacePageView):

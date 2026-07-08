@@ -1,3 +1,6 @@
+from unittest.mock import patch
+
+from django.contrib.messages import get_messages
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -399,3 +402,78 @@ class InboxMVPTests(TestCase):
         self.assertContains(response, "matched")
         self.assertContains(response, "Please confirm?")
         self.assertContains(response, "evidence.pdf")
+
+
+class ManualEmailSyncTests(TestCase):
+    def test_sync_endpoint_requires_post(self):
+        response = self.client.get(reverse("workspace:inbox_sync"))
+
+        self.assertEqual(response.status_code, 405)
+
+    @patch("apps.workspace.views.EmailSyncService.sync")
+    def test_sync_endpoint_calls_email_sync_service(self, sync_mock):
+        sync_mock.return_value = {
+            "fetched_count": 2,
+            "imported_count": 1,
+            "processed_count": 1,
+        }
+        organization = create_organization()
+        account = create_email_account(organization)
+
+        self.client.post(reverse("workspace:inbox_sync"))
+
+        sync_mock.assert_called_once()
+        command = sync_mock.call_args.args[0]
+        self.assertEqual(command.email_account, account)
+        self.assertEqual(command.limit, 10)
+        self.assertTrue(command.process_imported)
+
+    @patch("apps.workspace.views.EmailSyncService.sync")
+    def test_sync_success_redirects_and_message_contains_counts(self, sync_mock):
+        sync_mock.return_value = {
+            "fetched_count": 3,
+            "imported_count": 2,
+            "processed_count": 1,
+        }
+        organization = create_organization()
+        create_email_account(organization)
+
+        response = self.client.post(reverse("workspace:inbox_sync"), follow=True)
+
+        self.assertRedirects(response, reverse("workspace:inbox"))
+        messages = [str(message) for message in get_messages(response.wsgi_request)]
+        self.assertTrue(any("fetched 3" in message for message in messages))
+        self.assertTrue(any("imported 2" in message for message in messages))
+        self.assertTrue(any("processed 1" in message for message in messages))
+
+    def test_sync_no_active_account_handled(self):
+        response = self.client.post(reverse("workspace:inbox_sync"), follow=True)
+
+        self.assertRedirects(response, reverse("workspace:inbox"))
+        self.assertContains(response, "No active email account is configured yet")
+
+    @patch("apps.workspace.views.EmailSyncService.sync")
+    def test_sync_error_handled(self, sync_mock):
+        sync_mock.side_effect = RuntimeError("secret connection detail")
+        organization = create_organization()
+        create_email_account(organization)
+
+        response = self.client.post(reverse("workspace:inbox_sync"), follow=True)
+
+        self.assertRedirects(response, reverse("workspace:inbox"))
+        self.assertContains(response, "Email sync failed")
+        self.assertNotContains(response, "secret connection detail")
+
+    def test_dashboard_renders_sync_button(self):
+        response = self.client.get(reverse("workspace:dashboard"))
+
+        self.assertContains(response, "Sync now")
+        self.assertContains(response, reverse("workspace:inbox_sync"))
+        self.assertContains(response, "csrfmiddlewaretoken")
+
+    def test_inbox_renders_sync_button(self):
+        response = self.client.get(reverse("workspace:inbox"))
+
+        self.assertContains(response, "Sync now")
+        self.assertContains(response, reverse("workspace:inbox_sync"))
+        self.assertContains(response, "csrfmiddlewaretoken")

@@ -2,6 +2,10 @@
 
 {% block title %}Dashboard | Operations Workspace Platform{% endblock %}
 
+{% block actions %}
+    {% include "workspace/partials/sync_button.html" with next_url=request.get_full_path %}
+{% endblock %}
+
 {% block content %}
 <div class="space-y-10">
     {% include "workspace/partials/components/page_header.html" with eyebrow="Operations" title="Dashboard" body="Live operational overview from existing workspace data." %}
