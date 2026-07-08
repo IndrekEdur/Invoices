@@ -49,6 +49,8 @@ The first Operations Workspace UI skeleton is available under `/workspace/`.
 
 It uses a Django Templates + HTMX-first approach. The current version provides reusable layout, navigation, placeholder pages, and HTMX-ready regions without business functionality yet.
 
+The workspace design system demo is available under `/workspace/design-system/` and contains reusable server-rendered components for buttons, cards, badges, statuses, empty states, tables, headers, and form fields.
+
 Väike esimene prototüüp, mis loeb Outlooki `.pst` faili, leiab võimalikud arved ning salvestab kontrolltabeli CSV ja JSON formaadis.
 
 ## Rakenduste käivitamine

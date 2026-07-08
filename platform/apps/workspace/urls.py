@@ -3,6 +3,7 @@ from django.urls import path
 from .views import (
     AssistantView,
     DashboardView,
+    DesignSystemView,
     DocumentsView,
     InboxView,
     ProjectsView,
@@ -23,4 +24,5 @@ urlpatterns = [
     path("search/", SearchView.as_view(), name="search"),
     path("assistant/", AssistantView.as_view(), name="assistant"),
     path("settings/", SettingsView.as_view(), name="settings"),
+    path("design-system/", DesignSystemView.as_view(), name="design_system"),
 ]

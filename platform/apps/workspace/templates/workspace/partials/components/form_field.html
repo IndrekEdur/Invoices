@@ -1,0 +1,6 @@
+<div class="space-y-1">
+    <label for="{{ field_id }}" class="text-sm font-medium text-slate-700">{{ label }}</label>
+    <input id="{{ field_id }}" name="{{ field_name|default:field_id }}" type="{{ input_type|default:'text' }}" placeholder="{{ placeholder }}"
+           class="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-slate-600">
+    {% if help_text %}<p class="text-xs text-slate-500">{{ help_text }}</p>{% endif %}
+</div>

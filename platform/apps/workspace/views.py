@@ -60,3 +60,9 @@ class SettingsView(WorkspacePageView):
     template_name = "workspace/settings.html"
     page_title = "Administration"
     section = "settings"
+
+
+class DesignSystemView(WorkspacePageView):
+    template_name = "workspace/design_system.html"
+    page_title = "Design System"
+    section = "design_system"

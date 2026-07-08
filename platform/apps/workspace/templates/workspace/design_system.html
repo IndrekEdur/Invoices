@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Design System | Operations Workspace Platform{% endblock %}
+
+{% block content %}
+<div class="space-y-8">
+    {% include "workspace/partials/components/page_header.html" with eyebrow="Workspace" title="Design System" body="Reusable Django template components for future HTMX workspace screens." action_label="Primary action" %}
+
+    <section class="space-y-4">
+        {% include "workspace/partials/components/section_header.html" with title="Buttons" body="Server-rendered button partials prepared for future HTMX targets." %}
+        <div class="flex flex-wrap gap-3">
+            {% include "workspace/partials/components/button.html" with label="Primary Button" %}
+            {% include "workspace/partials/components/button.html" with label="Secondary Button" variant="secondary" %}
+            {% include "workspace/partials/components/button.html" with label="Danger Button" variant="danger" %}
+        </div>
+    </section>
+
+    <section class="space-y-4">
+        {% include "workspace/partials/components/section_header.html" with title="Cards" body="Neutral cards for dashboard and review summaries." %}
+        <div class="grid gap-4 md:grid-cols-3">
+            {% include "workspace/partials/components/card.html" with eyebrow="Card" title="Project Context" body="A reusable content container." %}
+            {% include "workspace/partials/components/card.html" with eyebrow="Card" title="Review Queue" body="Prepared for future HTMX refreshes." %}
+            {% include "workspace/partials/components/card.html" with eyebrow="Card" title="Knowledge" body="Evidence and context can live here." %}
+        </div>
+    </section>
+
+    <section class="space-y-4">
+        {% include "workspace/partials/components/section_header.html" with title="Badges and Status Badges" body="Consistent status language for workspace screens." %}
+        <div class="flex flex-wrap gap-2">
+            {% include "workspace/partials/components/badge.html" with label="Success" tone="success" %}
+            {% include "workspace/partials/components/badge.html" with label="Warning" tone="warning" %}
+            {% include "workspace/partials/components/badge.html" with label="Danger" tone="danger" %}
+            {% include "workspace/partials/components/badge.html" with label="Info" tone="info" %}
+            {% include "workspace/partials/components/badge.html" with label="Neutral" tone="neutral" %}
+        </div>
+        <div class="flex flex-wrap gap-2">
+            {% include "workspace/partials/components/status_badge.html" with label="Pending" status="pending" %}
+            {% include "workspace/partials/components/status_badge.html" with label="Approved" status="approved" %}
+            {% include "workspace/partials/components/status_badge.html" with label="Rejected" status="rejected" %}
+            {% include "workspace/partials/components/status_badge.html" with label="Needs Review" status="needs_review" %}
+        </div>
+    </section>
+
+    <section class="space-y-4">
+        {% include "workspace/partials/components/section_header.html" with title="Tables" body="Table wrapper for future inbox, project and review lists." %}
+        <div class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-200 text-sm">
+                    <thead class="bg-slate-50">
+                        <tr>
+                            <th class="px-4 py-3 text-left font-semibold text-slate-700">Object</th>
+                            <th class="px-4 py-3 text-left font-semibold text-slate-700">Status</th>
+                            <th class="px-4 py-3 text-left font-semibold text-slate-700">Owner</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100">
+                        <tr>
+                            <td class="px-4 py-3">Design System Table</td>
+                            <td class="px-4 py-3">{% include "workspace/partials/components/status_badge.html" with label="Pending" status="pending" %}</td>
+                            <td class="px-4 py-3">Workspace</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <section class="space-y-4">
+        {% include "workspace/partials/components/section_header.html" with title="Empty States" body="Reusable empty state for first-run screens and filtered lists." %}
+        {% include "workspace/partials/components/empty_state.html" with icon="0" title="No items yet" body="Future workspace data will appear here when available." %}
+    </section>
+
+    <section class="space-y-4">
+        {% include "workspace/partials/components/section_header.html" with title="Form Fields" body="Simple form field wrapper for future filter and review forms." %}
+        <div class="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            {% include "workspace/partials/components/form_field.html" with field_id="demo-field" label="Form Field Wrapper" placeholder="Type a value" help_text="Reusable wrapper with label, input and helper text." %}
+        </div>
+    </section>
+</div>
+{% endblock %}

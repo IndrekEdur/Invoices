@@ -1,0 +1,5 @@
+<article class="rounded-lg border border-slate-200 bg-white p-5 shadow-sm" {% if component_id %}id="{{ component_id }}"{% endif %}>
+    {% if eyebrow %}<div class="text-xs font-semibold uppercase tracking-wide text-slate-500">{{ eyebrow }}</div>{% endif %}
+    <h3 class="mt-1 text-base font-semibold text-slate-950">{{ title }}</h3>
+    {% if body %}<p class="mt-2 text-sm text-slate-600">{{ body }}</p>{% endif %}
+</article>

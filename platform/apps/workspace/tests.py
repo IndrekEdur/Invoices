@@ -13,6 +13,7 @@ class WorkspaceRouteTests(SimpleTestCase):
         ("workspace:search", "/workspace/search/"),
         ("workspace:assistant", "/workspace/assistant/"),
         ("workspace:settings", "/workspace/settings/"),
+        ("workspace:design_system", "/workspace/design-system/"),
     ]
 
     def test_every_workspace_route_returns_http_200(self):
@@ -40,3 +41,28 @@ class WorkspaceRouteTests(SimpleTestCase):
         for title in ["Emails", "Projects", "Documents", "Reviews", "AI Suggestions", "Synchronization Status"]:
             with self.subTest(title=title):
                 self.assertContains(response, title)
+
+    def test_design_system_page_returns_http_200(self):
+        response = self.client.get(reverse("workspace:design_system"))
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_design_system_template_renders_key_component_labels(self):
+        response = self.client.get(reverse("workspace:design_system"))
+
+        for label in [
+            "Primary Button",
+            "Cards",
+            "Badges and Status Badges",
+            "Design System Table",
+            "No items yet",
+            "Form Field Wrapper",
+        ]:
+            with self.subTest(label=label):
+                self.assertContains(response, label)
+
+    def test_navigation_contains_design_system_link(self):
+        response = self.client.get(reverse("workspace:dashboard"))
+
+        self.assertContains(response, "Design System")
+        self.assertContains(response, reverse("workspace:design_system"))
