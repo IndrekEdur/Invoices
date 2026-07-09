@@ -26,6 +26,8 @@ The accounting app includes a project code allocation service that suggests the 
 
 The projects app includes a controlled project creation service that creates a Project with the suggested next available code and records an audit event, while leaving Merit dimension creation as a future explicit integration step.
 
+The accounting app includes a reusable Merit API client connector for signed HTTP communication, health checks, JSON parsing, timeout handling, and sanitized exception mapping. Future Merit services should use this connector instead of performing direct HTTP calls.
+
 The Workspace Projects UI at `/workspace/projects/` shows Workspace projects together with cached accounting project dimensions, project code status indicators, filters, search, detail placeholders, and a controlled create-project flow using suggested project codes.
 
 The Project Workspace at `/workspace/projects/<id>/` uses ProjectKnowledgeBuilder to show project overview, timeline, communications, documents, people, addresses, knowledge evidence, questions and audit history.

@@ -12,7 +12,7 @@ Current engineering phase: Engineering Standards.
 
 Current implementation phase: Platform Core.
 
-Current implementation: Email Reply Draft UI.
+Current implementation: Merit API Client.
 
 Current implementation focus: End-to-End Email Processing.
 
