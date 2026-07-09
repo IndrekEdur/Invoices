@@ -5,8 +5,9 @@ from django.views.generic import TemplateView
 
 from apps.communications.models import EmailAccount
 from apps.communications.services import EmailSyncService, SyncEmailAccountCommand
+from apps.projects.services import CreateProjectWithSuggestedCodeCommand, ProjectCreationService
 
-from .services import DashboardContextBuilder, InboxContextBuilder
+from .services import DashboardContextBuilder, InboxContextBuilder, ProjectsContextBuilder
 
 
 class WorkspacePageView(TemplateView):
@@ -101,6 +102,76 @@ class ProjectsView(WorkspacePageView):
     template_name = "workspace/projects.html"
     page_title = "Projects"
     section = "projects"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(
+            ProjectsContextBuilder.build(
+                filter_value=self.request.GET.get("filter", "all"),
+                query=self.request.GET.get("q", ""),
+            )
+        )
+        return context
+
+
+class ProjectCreateView(WorkspacePageView):
+    template_name = "workspace/project_create.html"
+    page_title = "Create Project"
+    section = "projects"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(
+            ProjectsContextBuilder.build_create_context(
+                prefix=self.request.GET.get("prefix", ""),
+                min_code=self.request.GET.get("min_code") or None,
+            )
+        )
+        return context
+
+    def post(self, request, *args, **kwargs):
+        organization = ProjectsContextBuilder.get_default_organization()
+        if not organization:
+            messages.error(request, "Create an Organization before creating projects.")
+            return redirect("workspace:project_create")
+
+        actor = request.user if request.user.is_authenticated else None
+
+        try:
+            result = ProjectCreationService.create_with_suggested_code(
+                CreateProjectWithSuggestedCodeCommand(
+                    organization=organization,
+                    name=request.POST.get("name", "").strip(),
+                    description=request.POST.get("description", "").strip(),
+                    project_type=request.POST.get("project_type", "other"),
+                    status=request.POST.get("status", "active"),
+                    min_code=request.POST.get("min_code") or None,
+                    prefix=request.POST.get("prefix", "").strip(),
+                    actor=actor,
+                    metadata={"source": "workspace_project_create"},
+                )
+            )
+        except Exception:
+            messages.error(request, "Project creation failed. Check project data and try again.")
+            return redirect("workspace:project_create")
+
+        messages.success(
+            request,
+            f"Project {result.project.code} {result.project.name} created. "
+            "Merit dimension creation will be added in future integration step.",
+        )
+        return redirect("workspace:projects")
+
+
+class ProjectDetailView(WorkspacePageView):
+    template_name = "workspace/project_detail.html"
+    page_title = "Project Detail"
+    section = "projects"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(ProjectsContextBuilder.build_detail(project_id=self.kwargs["project_id"]))
+        return context
 
 
 class DocumentsView(WorkspacePageView):

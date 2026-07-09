@@ -13,10 +13,12 @@ from apps.communications.models import (
     EmailProjectLink,
     EmailQuestion,
 )
+from apps.accounting.models import AccountingDimension
 from apps.core.models import AuditEvent
 from apps.core.services import CreateOrganizationCommand, OrganizationService
 from apps.documents.models import Document
 from apps.projects.models import Project
+from apps.projects.services import CreateProjectWithSuggestedCodeResult
 from apps.workflow.models import WorkflowDefinition, WorkflowInstance, WorkflowState
 
 
@@ -477,3 +479,176 @@ class ManualEmailSyncTests(TestCase):
         self.assertContains(response, "Sync now")
         self.assertContains(response, reverse("workspace:inbox_sync"))
         self.assertContains(response, "csrfmiddlewaretoken")
+
+
+class ProjectListManagementUITests(TestCase):
+    def test_projects_page_returns_200(self):
+        response = self.client.get(reverse("workspace:projects"))
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_project_list_shows_existing_project(self):
+        organization = create_organization()
+        create_project(organization, code="26124", name="Kanarbiku")
+
+        response = self.client.get(reverse("workspace:projects"))
+
+        self.assertContains(response, "26124")
+        self.assertContains(response, "Kanarbiku")
+
+    def test_accounting_dimension_cache_appears(self):
+        organization = create_organization()
+        AccountingDimension.objects.create(
+            organization=organization,
+            code="26125",
+            name="Merit cached project",
+        )
+
+        response = self.client.get(reverse("workspace:projects"))
+
+        self.assertContains(response, "26125")
+        self.assertContains(response, "Merit cached project")
+        self.assertContains(response, "Merit cache")
+
+    def test_dimension_with_matching_project_shows_linked(self):
+        organization = create_organization()
+        create_project(organization, code="26126", name="Linked project")
+        AccountingDimension.objects.create(
+            organization=organization,
+            code="26126",
+            name="Linked project",
+        )
+
+        response = self.client.get(reverse("workspace:projects"))
+
+        self.assertContains(response, "linked")
+
+    def test_dimension_without_project_shows_missing_in_workspace(self):
+        organization = create_organization()
+        AccountingDimension.objects.create(
+            organization=organization,
+            code="26127",
+            name="Missing Workspace project",
+        )
+
+        response = self.client.get(reverse("workspace:projects"))
+
+        self.assertContains(response, "missing_in_workspace")
+
+    def test_workspace_project_without_dimension_shows_workspace_only(self):
+        organization = create_organization()
+        create_project(organization, code="26128", name="Workspace only project")
+
+        response = self.client.get(reverse("workspace:projects"))
+
+        self.assertContains(response, "workspace_only")
+
+    def test_create_page_returns_200(self):
+        create_organization()
+
+        response = self.client.get(reverse("workspace:project_create"))
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_suggested_code_is_shown(self):
+        organization = create_organization()
+        create_project(organization, code="26129", name="Existing project")
+
+        response = self.client.get(reverse("workspace:project_create"))
+
+        self.assertContains(response, "Suggested next code")
+        self.assertContains(response, "26130")
+
+    @patch("apps.workspace.views.ProjectCreationService.create_with_suggested_code")
+    def test_submit_creates_project_through_service(self, create_mock):
+        organization = create_organization()
+        project = Project(
+            id=1,
+            organization=organization,
+            code="26131",
+            name="Created through service",
+        )
+        create_mock.return_value = CreateProjectWithSuggestedCodeResult(
+            project=project,
+            suggested_code="26131",
+            allocation_summary={},
+        )
+
+        response = self.client.post(
+            reverse("workspace:project_create"),
+            {
+                "name": "Created through service",
+                "description": "Created from UI",
+                "project_type": Project.Type.ELECTRICAL,
+                "status": Project.Status.PLANNED,
+                "min_code": "26131",
+                "prefix": "26",
+            },
+        )
+
+        self.assertRedirects(response, reverse("workspace:projects"))
+        create_mock.assert_called_once()
+        command = create_mock.call_args.args[0]
+        self.assertEqual(command.organization, organization)
+        self.assertEqual(command.name, "Created through service")
+        self.assertEqual(command.description, "Created from UI")
+        self.assertEqual(command.project_type, Project.Type.ELECTRICAL)
+        self.assertEqual(command.status, Project.Status.PLANNED)
+        self.assertEqual(command.min_code, "26131")
+        self.assertEqual(command.prefix, "26")
+
+    def test_project_detail_page_returns_200(self):
+        organization = create_organization()
+        project = create_project(organization, code="26132", name="Detail project")
+
+        response = self.client.get(reverse("workspace:project_detail", kwargs={"project_id": project.id}))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Detail project")
+        self.assertContains(response, "Parties")
+        self.assertContains(response, "Related emails")
+
+    def test_filter_active_works(self):
+        organization = create_organization()
+        create_project(organization, code="26133", name="Active project")
+        Project.objects.create(
+            organization=organization,
+            code="26134",
+            name="Planned project",
+            status=Project.Status.PLANNED,
+        )
+
+        response = self.client.get(reverse("workspace:projects"), {"filter": "active"})
+
+        self.assertContains(response, "Active project")
+        self.assertNotContains(response, "Planned project")
+
+    def test_filter_missing_in_workspace_works(self):
+        organization = create_organization()
+        create_project(organization, code="26135", name="Workspace project")
+        AccountingDimension.objects.create(
+            organization=organization,
+            code="26136",
+            name="Missing project dimension",
+        )
+
+        response = self.client.get(reverse("workspace:projects"), {"filter": "missing_in_workspace"})
+
+        self.assertContains(response, "Missing project dimension")
+        self.assertNotContains(response, "26135")
+
+    def test_search_works(self):
+        organization = create_organization()
+        create_project(organization, code="26137", name="Searchable Workspace")
+        AccountingDimension.objects.create(
+            organization=organization,
+            code="26138",
+            name="Searchable Dimension",
+        )
+        create_project(organization, code="26139", name="Other project")
+
+        response = self.client.get(reverse("workspace:projects"), {"q": "Dimension"})
+
+        self.assertContains(response, "Searchable Dimension")
+        self.assertNotContains(response, "Searchable Workspace")
+        self.assertNotContains(response, "Other project")
