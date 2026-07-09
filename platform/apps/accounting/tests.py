@@ -12,6 +12,7 @@ from apps.accounting.connectors import (
     UnexpectedResponseError,
 )
 from apps.accounting.models import AccountingDimension, AccountingIntegration
+from apps.accounting.secrets import SecretMissingError, SecretProvider
 from apps.accounting.services import ProjectCodeAllocationService, SuggestNextProjectCodeCommand
 from apps.core.services import CreateOrganizationCommand, OrganizationService
 from apps.projects.models import Project
@@ -219,6 +220,54 @@ class AccountingDimensionTests(TestCase):
         self.assertEqual(str(dimension), "26131 Display name")
 
 
+class SecretProviderTests(TestCase):
+    def test_get_secret_returns_placeholder_secret(self):
+        integration = create_merit_integration()
+
+        secret = SecretProvider.get_secret(integration)
+
+        self.assertEqual(secret, "api-secret")
+
+    def test_missing_secret_raises_secret_missing_error(self):
+        integration = create_merit_integration()
+        integration.encrypted_secret_placeholder = ""
+
+        with self.assertRaises(SecretMissingError):
+            SecretProvider.get_secret(integration)
+
+    def test_mask_secret_returns_empty_for_empty_value(self):
+        self.assertEqual(SecretProvider.mask_secret(""), "")
+        self.assertEqual(SecretProvider.mask_secret(None), "")
+
+    def test_mask_secret_hides_short_secret(self):
+        self.assertEqual(SecretProvider.mask_secret("abc"), "****")
+        self.assertEqual(SecretProvider.mask_secret("abcd"), "****")
+
+    def test_mask_secret_masks_long_secret(self):
+        self.assertEqual(SecretProvider.mask_secret("abcdefyz"), "ab****yz")
+
+    def test_secret_is_not_included_in_exception_message(self):
+        integration = create_merit_integration()
+        integration.encrypted_secret_placeholder = ""
+
+        with self.assertRaises(SecretMissingError) as context:
+            SecretProvider.get_secret(integration)
+
+        self.assertNotIn("api-secret", str(context.exception))
+        self.assertNotIn("encrypted_secret_placeholder", str(context.exception))
+
+    def test_provider_does_not_mutate_integration(self):
+        integration = create_merit_integration()
+        original_secret = integration.encrypted_secret_placeholder
+        original_api_id = integration.api_id
+
+        SecretProvider.get_secret(integration)
+        SecretProvider.mask_secret(integration.encrypted_secret_placeholder)
+
+        self.assertEqual(integration.encrypted_secret_placeholder, original_secret)
+        self.assertEqual(integration.api_id, original_api_id)
+
+
 class MeritAPIClientTests(TestCase):
     @patch("apps.accounting.connectors.merit.request.urlopen")
     def test_successful_health(self, urlopen_mock):
@@ -327,6 +376,21 @@ class MeritAPIClientTests(TestCase):
         self.assertIn("timestamp=", request_object.full_url)
         self.assertIn("signature=", request_object.full_url)
         self.assertNotIn("api-secret", request_object.full_url)
+
+    @patch("apps.accounting.connectors.merit.request.urlopen")
+    def test_client_reads_secret_through_secret_provider(self, urlopen_mock):
+        integration = create_merit_integration()
+        secret_provider = SecretProvider()
+        urlopen_mock.return_value = FakeHTTPResponse('{"ok": true}')
+
+        with patch.object(secret_provider, "get_secret", wraps=secret_provider.get_secret) as get_secret_mock:
+            MeritAPIClient(integration, secret_provider=secret_provider).request(
+                "POST",
+                "/api/v1/gettaxes",
+                payload={},
+            )
+
+        self.assertGreaterEqual(get_secret_mock.call_count, 1)
 
 
 class ProjectCodeAllocationServiceTests(TestCase):

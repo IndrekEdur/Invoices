@@ -304,6 +304,7 @@ Logging:
 
 - Log important operational failures.
 - Do not log secrets, API keys, full bank data, or unnecessary personal data.
+- External API credentials must be accessed through `SecretProvider` or a future secret backend, never directly in business services.
 - Prefer structured event/audit records for business history.
 
 Exceptions:

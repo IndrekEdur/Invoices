@@ -9,6 +9,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 
 from apps.accounting.models import AccountingIntegration
+from apps.accounting.secrets import SecretMissingError, SecretProvider
 
 from .base import AccountingConnector
 from .exceptions import (
@@ -32,20 +33,23 @@ class MeritAPIClient(AccountingConnector):
 
     health_endpoint = "/api/v1/gettaxes"
 
-    def __init__(self, integration: AccountingIntegration, *, timeout=DEFAULT_TIMEOUT_SECONDS):
+    def __init__(self, integration: AccountingIntegration, *, timeout=DEFAULT_TIMEOUT_SECONDS, secret_provider=None):
         if integration.provider != AccountingIntegration.Provider.MERIT:
             raise ValueError("MeritAPIClient requires an AccountingIntegration with provider='merit'.")
 
         self.integration = integration
         self.api_base_url = (integration.api_base_url or DEFAULT_MERIT_BASE_URL).rstrip("/")
         self.api_id = integration.api_id.strip()
-        # TODO: Replace encrypted_secret_placeholder with real encrypted secret management.
-        self.api_secret = integration.encrypted_secret_placeholder.strip()
+        self.secret_provider = secret_provider or SecretProvider()
         self.timeout = timeout
 
     def authenticate(self):
-        if not self.api_id or not self.api_secret:
+        if not self.api_id:
             raise AuthenticationError("Merit API credentials are not configured.")
+        try:
+            self.secret_provider.get_secret(self.integration)
+        except SecretMissingError as exc:
+            raise AuthenticationError("Merit API credentials are not configured.") from exc
         return {"api_id": self.api_id}
 
     def request(self, method, path, *, payload=None, headers=None, timeout=None):
@@ -103,7 +107,8 @@ class MeritAPIClient(AccountingConnector):
 
     def _signature(self, timestamp, body):
         data = f"{self.api_id}{timestamp}{body}".encode("utf-8")
-        digest = hmac.new(self.api_secret.encode("ascii"), data, hashlib.sha256).digest()
+        api_secret = self.secret_provider.get_secret(self.integration)
+        digest = hmac.new(api_secret.encode("ascii"), data, hashlib.sha256).digest()
         return base64.b64encode(digest).decode("ascii")
 
     def _headers(self, extra_headers):
