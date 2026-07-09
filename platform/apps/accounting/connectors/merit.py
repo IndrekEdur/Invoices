@@ -6,22 +6,23 @@ import json
 import time
 from urllib import request
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urljoin
 
 from apps.accounting.models import AccountingIntegration
 from apps.accounting.secrets import SecretMissingError, SecretProvider
 
 from .base import AccountingConnector
 from .exceptions import (
-    AuthenticationError,
-    ConnectionError,
-    RateLimitError,
-    UnexpectedResponseError,
+    AccountingAPIError,
+    AccountingAuthenticationError,
+    AccountingConnectionError,
+    AccountingRateLimitError,
+    AccountingUnexpectedResponseError,
 )
 
 
 DEFAULT_MERIT_BASE_URL = "https://aktiva.merit.ee"
-DEFAULT_TIMEOUT_SECONDS = 20
+DEFAULT_TIMEOUT_SECONDS = 30
 
 
 class MeritAPIClient(AccountingConnector):
@@ -30,8 +31,6 @@ class MeritAPIClient(AccountingConnector):
     This class is the integration boundary for direct Merit HTTP calls.
     Business services should use this connector instead of urllib/requests.
     """
-
-    health_endpoint = "/api/v1/gettaxes"
 
     def __init__(self, integration: AccountingIntegration, *, timeout=DEFAULT_TIMEOUT_SECONDS, secret_provider=None):
         if integration.provider != AccountingIntegration.Provider.MERIT:
@@ -45,21 +44,21 @@ class MeritAPIClient(AccountingConnector):
 
     def authenticate(self):
         if not self.api_id:
-            raise AuthenticationError("Merit API credentials are not configured.")
+            raise AccountingAuthenticationError("Merit API credentials are not configured.")
         try:
             self.secret_provider.get_secret(self.integration)
         except SecretMissingError as exc:
-            raise AuthenticationError("Merit API credentials are not configured.") from exc
-        return {"api_id": self.api_id}
+            raise AccountingAuthenticationError("Merit API credentials are not configured.") from exc
+        return True
 
-    def request(self, method, path, *, payload=None, headers=None, timeout=None):
+    def request(self, method, path, *, payload=None, params=None, headers=None, timeout=None):
         self.authenticate()
         method = method.upper()
         if method not in {"GET", "POST"}:
             raise ValueError("MeritAPIClient supports only GET and POST requests.")
 
         body = self._json_body(payload if payload is not None else {})
-        url = self._signed_url(path, body if method == "POST" else "")
+        url = self._signed_url(path, body if method == "POST" else "", params=params)
         request_headers = self._headers(headers)
         data = body.encode("utf-8") if method == "POST" else None
         http_request = request.Request(url, data=data, headers=request_headers, method=method)
@@ -72,38 +71,41 @@ class MeritAPIClient(AccountingConnector):
         except HTTPError as exc:
             raise self._map_http_error(exc) from exc
         except TimeoutError as exc:
-            raise ConnectionError("Merit API request timed out.") from exc
+            raise AccountingConnectionError("Merit API request timed out.") from exc
         except URLError as exc:
-            raise ConnectionError("Could not connect to Merit API.") from exc
+            raise AccountingConnectionError("Could not connect to Merit API.") from exc
 
         if status_code >= 400:
-            raise UnexpectedResponseError(f"Merit API returned HTTP {status_code}.")
+            raise self._map_status_error(status_code)
 
         return self._parse_response(raw, response_headers)
 
     def health(self):
         started = time.perf_counter()
-        response_data = self.request("POST", self.health_endpoint, payload={})
-        response_time = round(time.perf_counter() - started, 3)
+        self.authenticate()
+        response_time_ms = round((time.perf_counter() - started) * 1000, 3)
 
         return {
             "healthy": True,
-            "response_time": response_time,
             "provider": AccountingIntegration.Provider.MERIT,
-            "version": self._extract_version(response_data),
+            "response_time_ms": response_time_ms,
+            "status_code": None,
+            "mode": "local_check",
         }
 
-    def _signed_url(self, path, body):
-        clean_path = path if path.startswith("/") else f"/{path}"
+    def _signed_url(self, path, body, *, params=None):
+        clean_path = path.lstrip("/")
         timestamp = self._timestamp()
-        params = urlencode(
-            {
+        query_params = {
+            **(params or {}),
+            **{
                 "apiId": self.api_id,
                 "timestamp": timestamp,
                 "signature": self._signature(timestamp, body),
-            }
-        )
-        return f"{self.api_base_url}{clean_path}?{params}"
+            },
+        }
+        query = urlencode(query_params)
+        return f"{urljoin(f'{self.api_base_url}/', clean_path)}?{query}"
 
     def _signature(self, timestamp, body):
         data = f"{self.api_id}{timestamp}{body}".encode("utf-8")
@@ -132,29 +134,33 @@ class MeritAPIClient(AccountingConnector):
             return json.loads(raw)
         except json.JSONDecodeError as exc:
             if "json" in content_type.lower():
-                raise UnexpectedResponseError("Merit API returned invalid JSON.") from exc
+                raise AccountingUnexpectedResponseError("Merit API returned invalid JSON.") from exc
             return raw
+
+    def _map_status_error(self, status_code):
+        if status_code in {401, 403}:
+            return AccountingAuthenticationError(f"Merit API returned HTTP {status_code}.")
+        if status_code == 429:
+            return AccountingRateLimitError(f"Merit API returned HTTP {status_code}.")
+        if status_code >= 500:
+            return AccountingAPIError(f"Merit API returned HTTP {status_code}.")
+        return AccountingUnexpectedResponseError(f"Merit API returned HTTP {status_code}.")
 
     def _map_http_error(self, exc):
         message = self._safe_http_error_message(exc)
         if exc.code in {401, 403}:
-            return AuthenticationError(message)
+            return AccountingAuthenticationError(message)
         if exc.code == 429:
-            return RateLimitError(message)
+            return AccountingRateLimitError(message)
         if exc.code >= 500:
-            return ConnectionError(message)
-        return UnexpectedResponseError(message)
+            return AccountingAPIError(message)
+        return AccountingUnexpectedResponseError(message)
 
     def _safe_http_error_message(self, exc):
         raw = exc.read().decode("utf-8-sig", errors="replace") if exc.fp else ""
         if not raw:
             return f"Merit API returned HTTP {exc.code}."
         return f"Merit API returned HTTP {exc.code}: {raw}"
-
-    def _extract_version(self, response_data):
-        if isinstance(response_data, dict):
-            return response_data.get("version") or response_data.get("Version")
-        return None
 
     def _timestamp(self):
         return datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")

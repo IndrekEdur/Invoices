@@ -2,17 +2,23 @@ class AccountingAPIError(RuntimeError):
     """Base exception for accounting connector failures."""
 
 
-class AuthenticationError(AccountingAPIError):
+class AccountingAuthenticationError(AccountingAPIError):
     """Raised when an accounting API rejects credentials or signatures."""
 
 
-class ConnectionError(AccountingAPIError):
+class AccountingConnectionError(AccountingAPIError):
     """Raised when the connector cannot reach the accounting API."""
 
 
-class RateLimitError(AccountingAPIError):
+class AccountingRateLimitError(AccountingAPIError):
     """Raised when an accounting API reports request throttling."""
 
 
-class UnexpectedResponseError(AccountingAPIError):
+class AccountingUnexpectedResponseError(AccountingAPIError):
     """Raised when an accounting API returns an invalid or unsupported response."""
+
+
+AuthenticationError = AccountingAuthenticationError
+ConnectionError = AccountingConnectionError
+RateLimitError = AccountingRateLimitError
+UnexpectedResponseError = AccountingUnexpectedResponseError

@@ -9,7 +9,7 @@ class AccountingConnector(ABC):
         """Prepare authentication data for future provider-specific requests."""
 
     @abstractmethod
-    def request(self, method, path, *, payload=None, headers=None, timeout=None):
+    def request(self, method, path, *, payload=None, params=None):
         """Perform a provider API request and return parsed response data."""
 
     @abstractmethod

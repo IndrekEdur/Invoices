@@ -5,11 +5,12 @@ from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 
 from apps.accounting.connectors import (
-    AuthenticationError,
-    ConnectionError,
+    AccountingAPIError,
+    AccountingAuthenticationError,
+    AccountingConnectionError,
+    AccountingRateLimitError,
+    AccountingUnexpectedResponseError,
     MeritAPIClient,
-    RateLimitError,
-    UnexpectedResponseError,
 )
 from apps.accounting.models import AccountingDimension, AccountingIntegration
 from apps.accounting.secrets import SecretMissingError, SecretProvider
@@ -48,6 +49,16 @@ class FakeHTTPResponse:
 
     def read(self):
         return self.body
+
+
+class StaticSecretProvider:
+    def __init__(self, secret="provider-secret"):
+        self.secret = secret
+        self.calls = 0
+
+    def get_secret(self, integration):
+        self.calls += 1
+        return self.secret
 
 
 def http_error(status, body=""):
@@ -269,32 +280,36 @@ class SecretProviderTests(TestCase):
 
 
 class MeritAPIClientTests(TestCase):
-    @patch("apps.accounting.connectors.merit.request.urlopen")
-    def test_successful_health(self, urlopen_mock):
+    def test_health_returns_structured_local_check_result(self):
         integration = create_merit_integration()
-        urlopen_mock.return_value = FakeHTTPResponse('{"Version": "v1"}')
 
         health = MeritAPIClient(integration).health()
 
         self.assertTrue(health["healthy"])
         self.assertEqual(health["provider"], AccountingIntegration.Provider.MERIT)
-        self.assertEqual(health["version"], "v1")
-        self.assertIn("response_time", health)
+        self.assertEqual(health["mode"], "local_check")
+        self.assertIsNone(health["status_code"])
+        self.assertIn("response_time_ms", health)
+
+    def test_authenticate_returns_true_when_api_id_and_secret_exist(self):
+        integration = create_merit_integration()
+
+        self.assertTrue(MeritAPIClient(integration).authenticate())
 
     @patch("apps.accounting.connectors.merit.request.urlopen")
     def test_authentication_error_is_mapped(self, urlopen_mock):
         integration = create_merit_integration()
         urlopen_mock.side_effect = http_error(401, '{"Message":"Invalid signature"}')
 
-        with self.assertRaises(AuthenticationError):
-            MeritAPIClient(integration).health()
+        with self.assertRaises(AccountingAuthenticationError):
+            MeritAPIClient(integration).request("POST", "/api/v1/gettaxes", payload={})
 
     def test_missing_credentials_raise_authentication_error(self):
         integration = create_merit_integration()
         integration.api_id = ""
         integration.encrypted_secret_placeholder = ""
 
-        with self.assertRaises(AuthenticationError):
+        with self.assertRaises(AccountingAuthenticationError):
             MeritAPIClient(integration).health()
 
     @patch("apps.accounting.connectors.merit.request.urlopen")
@@ -302,7 +317,7 @@ class MeritAPIClientTests(TestCase):
         integration = create_merit_integration()
         urlopen_mock.side_effect = TimeoutError()
 
-        with self.assertRaises(ConnectionError):
+        with self.assertRaises(AccountingConnectionError):
             MeritAPIClient(integration).request("POST", "/api/v1/gettaxes", payload={})
 
     @patch("apps.accounting.connectors.merit.request.urlopen")
@@ -310,7 +325,7 @@ class MeritAPIClientTests(TestCase):
         integration = create_merit_integration()
         urlopen_mock.side_effect = URLError("network down")
 
-        with self.assertRaises(ConnectionError):
+        with self.assertRaises(AccountingConnectionError):
             MeritAPIClient(integration).request("POST", "/api/v1/gettaxes", payload={})
 
     @patch("apps.accounting.connectors.merit.request.urlopen")
@@ -318,7 +333,7 @@ class MeritAPIClientTests(TestCase):
         integration = create_merit_integration()
         urlopen_mock.side_effect = http_error(500, '{"Message":"Server error"}')
 
-        with self.assertRaises(ConnectionError):
+        with self.assertRaises(AccountingAPIError):
             MeritAPIClient(integration).request("POST", "/api/v1/gettaxes", payload={})
 
     @patch("apps.accounting.connectors.merit.request.urlopen")
@@ -326,7 +341,7 @@ class MeritAPIClientTests(TestCase):
         integration = create_merit_integration()
         urlopen_mock.side_effect = http_error(429, '{"Message":"Too many requests"}')
 
-        with self.assertRaises(RateLimitError):
+        with self.assertRaises(AccountingRateLimitError):
             MeritAPIClient(integration).request("POST", "/api/v1/gettaxes", payload={})
 
     @patch("apps.accounting.connectors.merit.request.urlopen")
@@ -339,11 +354,35 @@ class MeritAPIClientTests(TestCase):
         self.assertEqual(response, {"ok": True, "items": [1, 2]})
 
     @patch("apps.accounting.connectors.merit.request.urlopen")
+    def test_get_request_builds_url_with_params(self, urlopen_mock):
+        integration = create_merit_integration()
+        urlopen_mock.return_value = FakeHTTPResponse('{"ok": true}')
+
+        MeritAPIClient(integration).request("GET", "/api/v1/items", params={"page": 2})
+
+        request_object = urlopen_mock.call_args.args[0]
+        self.assertEqual(request_object.get_method(), "GET")
+        self.assertIn("/api/v1/items?", request_object.full_url)
+        self.assertIn("page=2", request_object.full_url)
+        self.assertIn("apiId=api-id", request_object.full_url)
+
+    @patch("apps.accounting.connectors.merit.request.urlopen")
+    def test_post_request_sends_json_payload(self, urlopen_mock):
+        integration = create_merit_integration()
+        urlopen_mock.return_value = FakeHTTPResponse('{"ok": true}')
+
+        MeritAPIClient(integration).request("POST", "/api/v1/items", payload={"name": "Test"})
+
+        request_object = urlopen_mock.call_args.args[0]
+        self.assertEqual(request_object.get_method(), "POST")
+        self.assertEqual(request_object.data.decode("utf-8"), '{"name":"Test"}')
+
+    @patch("apps.accounting.connectors.merit.request.urlopen")
     def test_invalid_json_response_is_mapped_when_content_type_is_json(self, urlopen_mock):
         integration = create_merit_integration()
         urlopen_mock.return_value = FakeHTTPResponse("{not-json", headers={"Content-Type": "application/json"})
 
-        with self.assertRaises(UnexpectedResponseError):
+        with self.assertRaises(AccountingUnexpectedResponseError):
             MeritAPIClient(integration).request("POST", "/api/v1/gettaxes", payload={})
 
     @patch("apps.accounting.connectors.merit.request.urlopen")
@@ -391,6 +430,19 @@ class MeritAPIClientTests(TestCase):
             )
 
         self.assertGreaterEqual(get_secret_mock.call_count, 1)
+
+    @patch("apps.accounting.connectors.merit.request.urlopen")
+    def test_client_does_not_read_secret_field_directly_when_provider_injected(self, urlopen_mock):
+        integration = create_merit_integration()
+        integration.encrypted_secret_placeholder = ""
+        secret_provider = StaticSecretProvider()
+        urlopen_mock.return_value = FakeHTTPResponse('{"ok": true}')
+
+        MeritAPIClient(integration, secret_provider=secret_provider).request("POST", "/api/v1/gettaxes", payload={})
+
+        request_object = urlopen_mock.call_args.args[0]
+        self.assertIn("signature=", request_object.full_url)
+        self.assertEqual(secret_provider.calls, 2)
 
 
 class ProjectCodeAllocationServiceTests(TestCase):
