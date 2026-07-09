@@ -970,3 +970,181 @@ class ProjectLinkReviewUITests(TestCase):
 
         link.refresh_from_db()
         self.assertEqual(link.status, EmailProjectLink.Status.SUGGESTED)
+
+
+class EmailReplyDraftUITests(TestCase):
+    def _email_with_question(self):
+        organization = create_organization()
+        message = create_email_message(organization, subject="Reply draft email")
+        question = EmailQuestion.objects.create(
+            organization=organization,
+            email_message=message,
+            question_text="Can you confirm the schedule?",
+            evidence={"keyword": "confirm"},
+        )
+        return message, question
+
+    def _draft(self, status=EmailAnswerDraft.Status.DRAFT):
+        message, question = self._email_with_question()
+        draft = EmailAnswerDraft.objects.create(
+            organization=message.organization,
+            email_message=message,
+            question=question,
+            status=status,
+            draft_text="Initial draft reply",
+        )
+        return draft
+
+    def test_email_detail_shows_detected_questions(self):
+        message, _question = self._email_with_question()
+
+        response = self.client.get(reverse("workspace:inbox_detail", kwargs={"email_id": message.id}))
+
+        self.assertContains(response, "Can you confirm the schedule?")
+        self.assertContains(response, "Questions")
+
+    def test_email_detail_shows_create_draft_form(self):
+        message, _question = self._email_with_question()
+
+        response = self.client.get(reverse("workspace:inbox_detail", kwargs={"email_id": message.id}))
+
+        self.assertContains(response, "Create Draft Reply")
+        self.assertContains(response, reverse("workspace:email_draft_create", kwargs={"email_id": message.id}))
+        self.assertContains(response, 'name="draft_text"', html=False)
+
+    def test_create_draft_endpoint_requires_post(self):
+        message, _question = self._email_with_question()
+
+        response = self.client.get(reverse("workspace:email_draft_create", kwargs={"email_id": message.id}))
+
+        self.assertEqual(response.status_code, 405)
+
+    def test_create_draft_creates_email_answer_draft(self):
+        message, _question = self._email_with_question()
+
+        response = self.client.post(
+            reverse("workspace:email_draft_create", kwargs={"email_id": message.id}),
+            {"draft_text": "Please find my reply below."},
+            follow=True,
+        )
+
+        self.assertRedirects(response, reverse("workspace:inbox_detail", kwargs={"email_id": message.id}))
+        draft = EmailAnswerDraft.objects.get(email_message=message)
+        self.assertEqual(draft.draft_text, "Please find my reply below.")
+        self.assertEqual(draft.generated_by, EmailAnswerDraft.GeneratedBy.RULE_BASED)
+
+    def test_create_draft_includes_selected_question(self):
+        message, question = self._email_with_question()
+
+        self.client.post(
+            reverse("workspace:email_draft_create", kwargs={"email_id": message.id}),
+            {
+                "question_id": question.id,
+                "draft_text": "Question-specific reply.",
+            },
+        )
+
+        draft = EmailAnswerDraft.objects.get(email_message=message)
+        self.assertEqual(draft.question, question)
+
+    def test_create_draft_stores_context_snapshot(self):
+        message, question = self._email_with_question()
+        project = create_project(message.organization, code="26400", name="Context Project")
+        EmailProjectLink.objects.create(
+            organization=message.organization,
+            email_message=message,
+            project=project,
+            evidence={"matched_project_code": "26400"},
+        )
+
+        self.client.post(
+            reverse("workspace:email_draft_create", kwargs={"email_id": message.id}),
+            {"question_id": question.id, "draft_text": "Context-aware reply."},
+        )
+
+        draft = EmailAnswerDraft.objects.get(email_message=message)
+        self.assertEqual(draft.context_snapshot["email_message_id"], message.id)
+        self.assertEqual(draft.context_snapshot["question_ids"], [question.id])
+        self.assertEqual(draft.context_snapshot["evidence_count"], 2)
+
+    def test_needs_review_endpoint_requires_post(self):
+        draft = self._draft()
+
+        response = self.client.get(reverse("workspace:draft_needs_review", kwargs={"draft_id": draft.id}))
+
+        self.assertEqual(response.status_code, 405)
+
+    def test_approve_endpoint_requires_post(self):
+        draft = self._draft()
+
+        response = self.client.get(reverse("workspace:draft_approve", kwargs={"draft_id": draft.id}))
+
+        self.assertEqual(response.status_code, 405)
+
+    def test_reject_endpoint_requires_post(self):
+        draft = self._draft()
+
+        response = self.client.get(reverse("workspace:draft_reject", kwargs={"draft_id": draft.id}))
+
+        self.assertEqual(response.status_code, 405)
+
+    def test_needs_review_changes_status(self):
+        draft = self._draft()
+
+        response = self.client.post(
+            reverse("workspace:draft_needs_review", kwargs={"draft_id": draft.id}),
+            follow=True,
+        )
+
+        draft.refresh_from_db()
+        self.assertRedirects(response, reverse("workspace:inbox_detail", kwargs={"email_id": draft.email_message_id}))
+        self.assertEqual(draft.status, EmailAnswerDraft.Status.NEEDS_REVIEW)
+
+    def test_approve_changes_status(self):
+        draft = self._draft(status=EmailAnswerDraft.Status.NEEDS_REVIEW)
+
+        response = self.client.post(
+            reverse("workspace:draft_approve", kwargs={"draft_id": draft.id}),
+            {"final_text": "Approved final reply"},
+            follow=True,
+        )
+
+        draft.refresh_from_db()
+        self.assertRedirects(response, reverse("workspace:inbox_detail", kwargs={"email_id": draft.email_message_id}))
+        self.assertEqual(draft.status, EmailAnswerDraft.Status.APPROVED)
+        self.assertEqual(draft.final_text, "Approved final reply")
+        self.assertIsNotNone(draft.approved_at)
+
+    def test_reject_changes_status(self):
+        draft = self._draft(status=EmailAnswerDraft.Status.NEEDS_REVIEW)
+
+        response = self.client.post(
+            reverse("workspace:draft_reject", kwargs={"draft_id": draft.id}),
+            {"reason": "Needs a better answer"},
+            follow=True,
+        )
+
+        draft.refresh_from_db()
+        self.assertRedirects(response, reverse("workspace:inbox_detail", kwargs={"email_id": draft.email_message_id}))
+        self.assertEqual(draft.status, EmailAnswerDraft.Status.REJECTED)
+        self.assertEqual(draft.metadata["rejection_reason"], "Needs a better answer")
+
+    def test_reviews_page_lists_drafts_needing_review(self):
+        draft = self._draft(status=EmailAnswerDraft.Status.NEEDS_REVIEW)
+
+        response = self.client.get(reverse("workspace:reviews"))
+
+        self.assertContains(response, "Answer Drafts Needing Review")
+        self.assertContains(response, draft.email_message.subject)
+        self.assertContains(response, "Initial draft reply")
+        self.assertContains(response, reverse("workspace:draft_approve", kwargs={"draft_id": draft.id}))
+
+    def test_no_get_mutation(self):
+        draft = self._draft()
+
+        self.client.get(reverse("workspace:draft_approve", kwargs={"draft_id": draft.id}))
+        self.client.get(reverse("workspace:draft_reject", kwargs={"draft_id": draft.id}))
+        self.client.get(reverse("workspace:draft_needs_review", kwargs={"draft_id": draft.id}))
+
+        draft.refresh_from_db()
+        self.assertEqual(draft.status, EmailAnswerDraft.Status.DRAFT)

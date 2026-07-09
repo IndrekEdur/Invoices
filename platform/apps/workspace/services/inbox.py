@@ -43,6 +43,9 @@ class InboxContextBuilder:
         project_links = list(email.project_links.select_related("project").order_by("-confidence", "-created_at", "-id"))
         questions = list(email.questions.order_by("-confidence", "id"))
         attachments = list(email.attachments.select_related("document").order_by("original_filename", "id"))
+        answer_drafts = list(
+            email.answer_drafts.select_related("question").order_by("-created_at", "-id")
+        )
 
         return {
             "email": email,
@@ -51,6 +54,7 @@ class InboxContextBuilder:
             "project_links": [InboxContextBuilder._project_link_context(link) for link in project_links],
             "questions": questions,
             "attachments": attachments,
+            "answer_drafts": answer_drafts,
             "evidence_json": InboxContextBuilder._format_evidence(project_links, questions),
             "projects": Project.objects.filter(organization=email.organization).order_by("code", "id"),
         }

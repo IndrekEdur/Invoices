@@ -36,6 +36,82 @@
             </article>
 
             <article class="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                {% include "workspace/partials/components/section_header.html" with title="Create Draft Reply" body="Create a stored reply draft for human review. Sending will be added later." %}
+                <form method="post" action="{% url 'workspace:email_draft_create' email.id %}" class="mt-4 space-y-4">
+                    {% csrf_token %}
+                    <input type="hidden" name="generated_by" value="rule_based">
+                    <div>
+                        <label class="text-xs font-semibold uppercase text-slate-500" for="question_id">Question</label>
+                        <select id="question_id" name="question_id" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100">
+                            <option value="">General reply</option>
+                            {% for question in questions %}
+                                <option value="{{ question.id }}">{{ question.question_text|truncatechars:120 }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-xs font-semibold uppercase text-slate-500" for="draft_text">Draft text</label>
+                        <textarea id="draft_text" name="draft_text" rows="5" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100" placeholder="Write a draft reply for review."></textarea>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-3">
+                        <button type="submit" class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-300">Create draft reply</button>
+                        <span class="text-xs text-slate-500">No e-mail will be sent.</span>
+                    </div>
+                </form>
+            </article>
+
+            <article class="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                {% include "workspace/partials/components/section_header.html" with title="Answer Drafts" body="Stored reply drafts and review actions." %}
+                <div class="mt-4 space-y-4">
+                    {% for draft in answer_drafts %}
+                        <div class="rounded-lg border border-slate-200 p-4">
+                            <div class="flex flex-wrap items-start justify-between gap-3">
+                                <div>
+                                    <div class="text-sm font-semibold text-slate-950">Draft #{{ draft.id }}</div>
+                                    <div class="mt-1 text-xs text-slate-500">
+                                        {{ draft.generated_by }}{% if draft.question %} · {{ draft.question.question_text|truncatechars:90 }}{% endif %}
+                                    </div>
+                                </div>
+                                {% include "workspace/partials/components/status_badge.html" with label=draft.status status=draft.status %}
+                            </div>
+                            <pre class="mt-4 whitespace-pre-wrap rounded-md bg-slate-50 p-3 text-sm leading-6 text-slate-800">{{ draft.draft_text|default:"No draft text." }}</pre>
+                            {% if draft.final_text %}
+                                <div class="mt-4 text-xs font-semibold uppercase text-slate-500">Final text</div>
+                                <pre class="mt-2 whitespace-pre-wrap rounded-md bg-green-50 p-3 text-sm leading-6 text-green-900">{{ draft.final_text }}</pre>
+                            {% endif %}
+                            {% if draft.evidence %}
+                                <div class="mt-4 text-xs font-semibold uppercase text-slate-500">Evidence</div>
+                                <pre class="mt-2 overflow-x-auto rounded-md bg-slate-950 p-3 text-xs text-slate-100">{{ draft.evidence }}</pre>
+                            {% endif %}
+                            {% if draft.context_snapshot %}
+                                <div class="mt-4 text-xs font-semibold uppercase text-slate-500">Context snapshot</div>
+                                <pre class="mt-2 overflow-x-auto rounded-md bg-slate-950 p-3 text-xs text-slate-100">{{ draft.context_snapshot }}</pre>
+                            {% endif %}
+                            <div class="mt-4 grid gap-3 lg:grid-cols-3">
+                                <form method="post" action="{% url 'workspace:draft_needs_review' draft.id %}">
+                                    {% csrf_token %}
+                                    <button type="submit" class="w-full rounded-lg border border-orange-300 bg-orange-50 px-3 py-2 text-xs font-semibold text-orange-800 hover:bg-orange-100">Needs review</button>
+                                </form>
+                                <form method="post" action="{% url 'workspace:draft_approve' draft.id %}" class="space-y-2">
+                                    {% csrf_token %}
+                                    <textarea name="final_text" rows="2" class="w-full rounded-lg border border-slate-300 px-2 py-2 text-xs" placeholder="Optional final text"></textarea>
+                                    <button type="submit" class="w-full rounded-lg bg-green-700 px-3 py-2 text-xs font-semibold text-white hover:bg-green-800">Approve</button>
+                                </form>
+                                <form method="post" action="{% url 'workspace:draft_reject' draft.id %}" class="space-y-2">
+                                    {% csrf_token %}
+                                    <input name="reason" class="w-full rounded-lg border border-slate-300 px-2 py-2 text-xs" placeholder="Optional reason">
+                                    <button type="submit" class="w-full rounded-lg bg-red-700 px-3 py-2 text-xs font-semibold text-white hover:bg-red-800">Reject</button>
+                                </form>
+                            </div>
+                            <button type="button" disabled class="mt-4 rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-400">Sending will be added later.</button>
+                        </div>
+                    {% empty %}
+                        {% include "workspace/partials/components/empty_state.html" with icon="0" title="No answer drafts" body="Create a draft reply from this e-mail when a response is needed." %}
+                    {% endfor %}
+                </div>
+            </article>
+
+            <article class="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                 {% include "workspace/partials/components/section_header.html" with title="Evidence JSON" body="Stored evidence from project suggestions and question detection." %}
                 <pre class="mt-4 overflow-x-auto rounded-md bg-slate-950 p-4 text-xs leading-5 text-slate-100">{{ evidence_json }}</pre>
             </article>

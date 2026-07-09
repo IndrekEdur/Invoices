@@ -32,6 +32,8 @@ The Project Workspace at `/workspace/projects/<id>/` uses ProjectKnowledgeBuilde
 
 Project link review actions are available in the Inbox, e-mail detail and Reviews workspace so users can confirm, reject or correct e-mail to project suggestions through audited service-layer actions.
 
+E-mail reply draft actions are available from the Inbox detail and Reviews workspace so users can create, mark for review, approve, or reject stored answer drafts before any future sending step exists.
+
 ## Testide käivitamine
 
 Käivita testid repo juurkaustast:

@@ -3,12 +3,25 @@ from django.shortcuts import get_object_or_404, redirect
 from django.views import View
 from django.views.generic import TemplateView
 
-from apps.communications.models import EmailAccount, EmailProjectLink
+from apps.communications.models import (
+    EmailAccount,
+    EmailAnswerDraft,
+    EmailMessage,
+    EmailProjectLink,
+    EmailQuestion,
+)
 from apps.communications.services import (
+    ApproveEmailAnswerDraftCommand,
+    BuildConversationContextCommand,
     ConfirmEmailProjectLinkCommand,
+    ConversationContextBuilder,
     CorrectEmailProjectLinkCommand,
+    CreateEmailAnswerDraftCommand,
+    EmailAnswerDraftService,
     EmailProjectLinkService,
     EmailSyncService,
+    MarkEmailAnswerDraftNeedsReviewCommand,
+    RejectEmailAnswerDraftCommand,
     RejectEmailProjectLinkCommand,
     SyncEmailAccountCommand,
 )
@@ -192,6 +205,138 @@ class ProjectLinkCorrectView(ProjectLinkActionMixin, View):
             f"Project link corrected and confirmed: {confirmed_link.project.code} {confirmed_link.project.name}.",
         )
         return self._redirect_back(request)
+
+
+class EmailDraftActionMixin:
+    def _actor(self, request):
+        return request.user if request.user.is_authenticated else None
+
+    def _redirect_to_email(self, email_message):
+        return redirect("workspace:inbox_detail", email_id=email_message.id)
+
+    def _draft(self, draft_id):
+        return get_object_or_404(
+            EmailAnswerDraft.objects.select_related("email_message", "question"),
+            id=draft_id,
+        )
+
+
+class EmailDraftCreateView(EmailDraftActionMixin, View):
+    """Creates a stored answer draft through the communication service layer."""
+
+    def post(self, request, email_id, *args, **kwargs):
+        email_message = get_object_or_404(EmailMessage, id=email_id)
+        question = self._selected_question(request, email_message)
+
+        try:
+            EmailAnswerDraftService.create_draft(
+                CreateEmailAnswerDraftCommand(
+                    email_message=email_message,
+                    question=question,
+                    draft_text=request.POST.get("draft_text", "").strip(),
+                    evidence={
+                        "source": "workspace_email_detail",
+                        "question_id": question.id if question else None,
+                    },
+                    context_snapshot=self._context_snapshot(email_message),
+                    generated_by=EmailAnswerDraft.GeneratedBy.RULE_BASED,
+                    actor=self._actor(request),
+                    metadata={"source": "workspace_email_detail"},
+                )
+            )
+        except Exception:
+            messages.error(request, "Draft reply creation failed.")
+            return self._redirect_to_email(email_message)
+
+        messages.success(request, "Draft reply created.")
+        return self._redirect_to_email(email_message)
+
+    def _selected_question(self, request, email_message):
+        question_id = request.POST.get("question_id")
+        if not question_id:
+            return None
+        return EmailQuestion.objects.filter(
+            organization=email_message.organization,
+            email_message=email_message,
+            id=question_id,
+        ).first()
+
+    def _context_snapshot(self, email_message):
+        context = ConversationContextBuilder.build(
+            BuildConversationContextCommand(email_message=email_message)
+        )
+        return {
+            "email_message_id": email_message.id,
+            "thread_message_ids": [message.id for message in context.thread_messages],
+            "project_link_ids": [link.id for link in context.project_links],
+            "question_ids": [question.id for question in context.questions],
+            "attachment_ids": [attachment.id for attachment in context.attachments],
+            "document_ids": [document.id for document in context.documents],
+            "evidence_count": len(context.evidence),
+        }
+
+
+class EmailDraftNeedsReviewView(EmailDraftActionMixin, View):
+    def post(self, request, draft_id, *args, **kwargs):
+        draft = self._draft(draft_id)
+        try:
+            EmailAnswerDraftService.mark_needs_review(
+                MarkEmailAnswerDraftNeedsReviewCommand(
+                    draft=draft,
+                    actor=self._actor(request),
+                    metadata={"source": "workspace_email_detail"},
+                )
+            )
+        except Exception:
+            messages.error(request, "Draft review status update failed.")
+            return self._redirect_to_email(draft.email_message)
+
+        messages.success(request, "Draft marked as needing review.")
+        return self._redirect_to_email(draft.email_message)
+
+
+class EmailDraftApproveView(EmailDraftActionMixin, View):
+    def post(self, request, draft_id, *args, **kwargs):
+        draft = self._draft(draft_id)
+        final_text = request.POST.get("final_text")
+        if final_text is not None:
+            final_text = final_text.strip()
+
+        try:
+            EmailAnswerDraftService.approve(
+                ApproveEmailAnswerDraftCommand(
+                    draft=draft,
+                    actor=self._actor(request),
+                    final_text=final_text or None,
+                    metadata={"source": "workspace_email_detail"},
+                )
+            )
+        except Exception:
+            messages.error(request, "Draft approval failed.")
+            return self._redirect_to_email(draft.email_message)
+
+        messages.success(request, "Draft approved. Sending will be added later.")
+        return self._redirect_to_email(draft.email_message)
+
+
+class EmailDraftRejectView(EmailDraftActionMixin, View):
+    def post(self, request, draft_id, *args, **kwargs):
+        draft = self._draft(draft_id)
+        try:
+            EmailAnswerDraftService.reject(
+                RejectEmailAnswerDraftCommand(
+                    draft=draft,
+                    actor=self._actor(request),
+                    reason=request.POST.get("reason", "").strip(),
+                    metadata={"source": "workspace_email_detail"},
+                )
+            )
+        except Exception:
+            messages.error(request, "Draft rejection failed.")
+            return self._redirect_to_email(draft.email_message)
+
+        messages.success(request, "Draft rejected.")
+        return self._redirect_to_email(draft.email_message)
 
 
 class ProjectsView(WorkspacePageView):

@@ -69,5 +69,55 @@
             {% include "workspace/partials/components/empty_state.html" with title="No pending project suggestions" body="Suggested e-mail to project links will appear here for confirmation." %}
         {% endif %}
     </section>
+
+    <section class="space-y-4">
+        {% include "workspace/partials/components/section_header.html" with title="Answer Drafts Needing Review" body="Approve or reject stored reply drafts before any future sending step is allowed." %}
+        {% if answer_drafts_needing_review %}
+            <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-slate-200 text-sm">
+                        <thead class="bg-slate-50">
+                            <tr>
+                                <th class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Email</th>
+                                <th class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Draft Preview</th>
+                                <th class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Status</th>
+                                <th class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Created</th>
+                                <th class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-100">
+                            {% for item in answer_drafts_needing_review %}
+                                <tr class="hover:bg-orange-50/60">
+                                    <td class="px-5 py-4">
+                                        <a class="font-semibold text-blue-700 hover:text-blue-900" href="{{ item.email_detail_url }}">{{ item.email.subject }}</a>
+                                        <div class="mt-1 text-xs text-slate-500">{{ item.email.sender_name|default:item.email.sender_email }}</div>
+                                    </td>
+                                    <td class="max-w-lg px-5 py-4 text-slate-800">{{ item.draft.draft_text|truncatechars:180 }}</td>
+                                    <td class="px-5 py-4">{% include "workspace/partials/components/status_badge.html" with label=item.draft.status status=item.draft.status %}</td>
+                                    <td class="px-5 py-4 text-xs text-slate-500">{{ item.draft.created_at }}</td>
+                                    <td class="px-5 py-4">
+                                        <div class="grid min-w-64 gap-3">
+                                            <form method="post" action="{{ item.approve_url }}" class="space-y-2">
+                                                {% csrf_token %}
+                                                <textarea name="final_text" rows="2" class="w-full rounded-lg border border-slate-300 px-2 py-2 text-xs" placeholder="Optional final text"></textarea>
+                                                <button type="submit" class="rounded-lg bg-green-700 px-3 py-2 text-xs font-semibold text-white hover:bg-green-800">Approve</button>
+                                            </form>
+                                            <form method="post" action="{{ item.reject_url }}" class="flex gap-2">
+                                                {% csrf_token %}
+                                                <input name="reason" placeholder="Reason" class="w-36 rounded-lg border border-slate-300 px-2 py-2 text-xs">
+                                                <button type="submit" class="rounded-lg bg-red-700 px-3 py-2 text-xs font-semibold text-white hover:bg-red-800">Reject</button>
+                                            </form>
+                                        </div>
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        {% else %}
+            {% include "workspace/partials/components/empty_state.html" with title="No answer drafts waiting for review" body="Draft replies marked as needs review will appear here." %}
+        {% endif %}
+    </section>
 </div>
 {% endblock %}
