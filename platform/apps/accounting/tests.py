@@ -1,4 +1,5 @@
 from io import BytesIO
+from dataclasses import FrozenInstanceError
 from django.db import IntegrityError
 from django.test import TestCase
 from unittest.mock import patch
@@ -12,6 +13,7 @@ from apps.accounting.connectors import (
     AccountingUnexpectedResponseError,
     MeritAPIClient,
 )
+from apps.accounting.dto import MeritDimensionDTO
 from apps.accounting.models import AccountingDimension, AccountingIntegration
 from apps.accounting.secrets import SecretMissingError, SecretProvider
 from apps.accounting.services import ProjectCodeAllocationService, SuggestNextProjectCodeCommand
@@ -443,6 +445,176 @@ class MeritAPIClientTests(TestCase):
         request_object = urlopen_mock.call_args.args[0]
         self.assertIn("signature=", request_object.full_url)
         self.assertEqual(secret_provider.calls, 2)
+
+
+class MeritDimensionAPITests(TestCase):
+    @patch("apps.accounting.connectors.merit.request.urlopen")
+    def test_list_dimensions_empty_list(self, urlopen_mock):
+        integration = create_merit_integration()
+        urlopen_mock.return_value = FakeHTTPResponse('{"Dimensions": []}')
+
+        dimensions = MeritAPIClient(integration).list_dimensions()
+
+        self.assertEqual(dimensions, [])
+
+    @patch("apps.accounting.connectors.merit.request.urlopen")
+    def test_list_dimensions_single_dimension(self, urlopen_mock):
+        integration = create_merit_integration()
+        urlopen_mock.return_value = FakeHTTPResponse(
+            '{"Dimensions": [{"Id": "m-1", "Code": "26124", "Name": "Kanarbiku", "DimensionType": "project"}]}'
+        )
+
+        dimensions = MeritAPIClient(integration).list_dimensions()
+
+        self.assertEqual(len(dimensions), 1)
+        self.assertEqual(dimensions[0].external_id, "m-1")
+        self.assertEqual(dimensions[0].code, "26124")
+        self.assertEqual(dimensions[0].name, "Kanarbiku")
+        self.assertEqual(dimensions[0].dimension_type, "project")
+        self.assertTrue(dimensions[0].active)
+
+    @patch("apps.accounting.connectors.merit.request.urlopen")
+    def test_list_dimensions_multiple_dimensions(self, urlopen_mock):
+        integration = create_merit_integration()
+        urlopen_mock.return_value = FakeHTTPResponse(
+            '{"Dimensions": ['
+            '{"Id": "m-1", "Code": "26124", "Name": "Kanarbiku"},'
+            '{"Id": "m-2", "Code": "26125", "Name": "Lennujaama", "Active": false}'
+            "]}"
+        )
+
+        dimensions = MeritAPIClient(integration).list_dimensions()
+
+        self.assertEqual([dimension.code for dimension in dimensions], ["26124", "26125"])
+        self.assertFalse(dimensions[1].active)
+
+    @patch("apps.accounting.connectors.merit.request.urlopen")
+    def test_list_dimensions_flattens_merit_values_shape(self, urlopen_mock):
+        integration = create_merit_integration()
+        urlopen_mock.return_value = FakeHTTPResponse(
+            '{"Dimensions": [{"Name": "project", "Values": ['
+            '{"Id": "v-1", "Code": "26124", "Name": "Kanarbiku"}'
+            "]}]}"
+        )
+
+        dimensions = MeritAPIClient(integration).list_dimensions()
+
+        self.assertEqual(len(dimensions), 1)
+        self.assertEqual(dimensions[0].external_id, "v-1")
+        self.assertEqual(dimensions[0].dimension_type, "project")
+
+    @patch("apps.accounting.connectors.merit.request.urlopen")
+    def test_list_dimensions_missing_fields(self, urlopen_mock):
+        integration = create_merit_integration()
+        urlopen_mock.return_value = FakeHTTPResponse('{"Dimensions": [{}]}')
+
+        dimensions = MeritAPIClient(integration).list_dimensions()
+
+        self.assertEqual(dimensions[0].external_id, "")
+        self.assertEqual(dimensions[0].code, "")
+        self.assertEqual(dimensions[0].name, "")
+        self.assertEqual(dimensions[0].dimension_type, "project")
+        self.assertTrue(dimensions[0].active)
+
+    @patch("apps.accounting.connectors.merit.request.urlopen")
+    def test_list_dimensions_invalid_json(self, urlopen_mock):
+        integration = create_merit_integration()
+        urlopen_mock.return_value = FakeHTTPResponse("{not-json", headers={"Content-Type": "application/json"})
+
+        with self.assertRaises(AccountingUnexpectedResponseError):
+            MeritAPIClient(integration).list_dimensions()
+
+    @patch("apps.accounting.connectors.merit.request.urlopen")
+    def test_get_dimension_returns_dto(self, urlopen_mock):
+        integration = create_merit_integration()
+        urlopen_mock.return_value = FakeHTTPResponse('{"Id": "m-1", "Code": "26124", "Name": "Kanarbiku"}')
+
+        dimension = MeritAPIClient(integration).get_dimension("m-1")
+
+        self.assertEqual(dimension.external_id, "m-1")
+        self.assertEqual(dimension.code, "26124")
+        request_object = urlopen_mock.call_args.args[0]
+        self.assertIn("/api/v2/getdimension?", request_object.full_url)
+        self.assertIn("Id=m-1", request_object.full_url)
+
+    @patch("apps.accounting.connectors.merit.request.urlopen")
+    def test_get_dimension_404_returns_none(self, urlopen_mock):
+        integration = create_merit_integration()
+        urlopen_mock.side_effect = http_error(404, '{"Message":"Not found"}')
+
+        dimension = MeritAPIClient(integration).get_dimension("missing")
+
+        self.assertIsNone(dimension)
+
+    @patch("apps.accounting.connectors.merit.request.urlopen")
+    def test_dimension_401_maps_to_authentication_error(self, urlopen_mock):
+        integration = create_merit_integration()
+        urlopen_mock.side_effect = http_error(401, '{"Message":"Unauthorized"}')
+
+        with self.assertRaises(AccountingAuthenticationError):
+            MeritAPIClient(integration).list_dimensions()
+
+    @patch("apps.accounting.connectors.merit.request.urlopen")
+    def test_dimension_429_maps_to_rate_limit_error(self, urlopen_mock):
+        integration = create_merit_integration()
+        urlopen_mock.side_effect = http_error(429, '{"Message":"Too many requests"}')
+
+        with self.assertRaises(AccountingRateLimitError):
+            MeritAPIClient(integration).list_dimensions()
+
+    @patch("apps.accounting.connectors.merit.request.urlopen")
+    def test_dimension_500_maps_to_api_error(self, urlopen_mock):
+        integration = create_merit_integration()
+        urlopen_mock.side_effect = http_error(500, '{"Message":"Server error"}')
+
+        with self.assertRaises(AccountingAPIError):
+            MeritAPIClient(integration).list_dimensions()
+
+    @patch("apps.accounting.connectors.merit.request.urlopen")
+    def test_create_dimension_payload(self, urlopen_mock):
+        integration = create_merit_integration()
+        urlopen_mock.return_value = FakeHTTPResponse(
+            '{"Dimensions": [{"Id": "new-1", "Code": "26126", "Name": "New Project"}]}'
+        )
+
+        dimension = MeritAPIClient(integration).create_dimension(
+            code="26126",
+            name="New Project",
+            dimension_type="project",
+        )
+
+        request_object = urlopen_mock.call_args.args[0]
+        payload = request_object.data.decode("utf-8")
+        self.assertIn("/api/v2/senddimvalues?", request_object.full_url)
+        self.assertIn('"Dimensions":[{"Name":"project","Values":[{"Code":"26126","Name":"New Project"}]}]', payload)
+        self.assertEqual(dimension.external_id, "new-1")
+        self.assertEqual(dimension.code, "26126")
+
+    def test_dimension_dto_is_immutable(self):
+        dimension = MeritDimensionDTO(
+            external_id="m-1",
+            code="26124",
+            name="Kanarbiku",
+            dimension_type="project",
+            active=True,
+            raw={"Id": "m-1"},
+        )
+
+        with self.assertRaises(FrozenInstanceError):
+            dimension.code = "changed"
+
+    def test_dimension_methods_do_not_write_database(self):
+        organization = create_organization()
+        integration = create_merit_integration(organization)
+        project_count = Project.objects.count()
+        dimension_count = AccountingDimension.objects.count()
+
+        with patch("apps.accounting.connectors.merit.request.urlopen") as urlopen_mock:
+            urlopen_mock.return_value = FakeHTTPResponse('{"Dimensions": []}')
+            MeritAPIClient(integration).list_dimensions()
+
+        self.assertEqual(Project.objects.count(), project_count)
+        self.assertEqual(AccountingDimension.objects.count(), dimension_count)
 
 
 class ProjectCodeAllocationServiceTests(TestCase):

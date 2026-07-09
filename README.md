@@ -28,6 +28,8 @@ The projects app includes a controlled project creation service that creates a P
 
 The accounting app includes a reusable Merit API client connector for signed HTTP communication, health checks, JSON parsing, timeout handling, and sanitized exception mapping. Future Merit services should use this connector instead of performing direct HTTP calls.
 
+The Merit API client exposes dimension read/create methods that return immutable DTOs without writing Workspace or accounting database records.
+
 The accounting app includes a minimal SecretProvider abstraction so external API credentials can be centralized before real encrypted storage or vault integration is added.
 
 The Workspace Projects UI at `/workspace/projects/` shows Workspace projects together with cached accounting project dimensions, project code status indicators, filters, search, detail placeholders, and a controlled create-project flow using suggested project codes.
