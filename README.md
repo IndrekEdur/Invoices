@@ -22,6 +22,8 @@ This repository is evolving from a local invoice automation prototype into an Op
 
 `MERIT_INTEGRATION_ARCHITECTURE.md` describes how Workspace project codes synchronize with Merit Aktiva dimensions through explicit, auditable integration services.
 
+The accounting app includes a project code allocation service that suggests the next available numeric project code from existing Workspace projects and cached accounting dimensions.
+
 ## Testide käivitamine
 
 Käivita testid repo juurkaustast:

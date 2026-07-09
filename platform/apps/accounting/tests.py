@@ -2,7 +2,9 @@ from django.db import IntegrityError
 from django.test import TestCase
 
 from apps.accounting.models import AccountingDimension, AccountingIntegration
+from apps.accounting.services import ProjectCodeAllocationService, SuggestNextProjectCodeCommand
 from apps.core.services import CreateOrganizationCommand, OrganizationService
+from apps.projects.models import Project
 
 
 def create_organization(name="Accounting Org"):
@@ -167,3 +169,141 @@ class AccountingDimensionTests(TestCase):
         )
 
         self.assertEqual(str(dimension), "26131 Display name")
+
+
+class ProjectCodeAllocationServiceTests(TestCase):
+    def test_suggests_next_code_from_projects(self):
+        organization = create_organization()
+        Project.objects.create(organization=organization, code="26124", name="Existing 1")
+        Project.objects.create(organization=organization, code="26125", name="Existing 2")
+
+        suggestion = ProjectCodeAllocationService.suggest_next_code(
+            SuggestNextProjectCodeCommand(organization=organization)
+        )
+
+        self.assertEqual(suggestion.suggested_code, "26126")
+
+    def test_suggests_next_code_from_accounting_dimensions(self):
+        organization = create_organization()
+        AccountingDimension.objects.create(organization=organization, code="26124", name="Existing 1")
+        AccountingDimension.objects.create(organization=organization, code="26125", name="Existing 2")
+
+        suggestion = ProjectCodeAllocationService.suggest_next_code(
+            SuggestNextProjectCodeCommand(organization=organization)
+        )
+
+        self.assertEqual(suggestion.suggested_code, "26126")
+
+    def test_merges_project_and_accounting_dimension_codes(self):
+        organization = create_organization()
+        Project.objects.create(organization=organization, code="26124", name="Workspace project")
+        AccountingDimension.objects.create(organization=organization, code="26125", name="Merit dimension")
+
+        suggestion = ProjectCodeAllocationService.suggest_next_code(
+            SuggestNextProjectCodeCommand(organization=organization)
+        )
+
+        self.assertEqual(suggestion.suggested_code, "26126")
+        self.assertEqual(suggestion.used_codes, ["26124", "26125"])
+
+    def test_ignores_non_numeric_codes(self):
+        organization = create_organization()
+        Project.objects.create(organization=organization, code="ABC", name="Non numeric")
+        AccountingDimension.objects.create(organization=organization, code="26125", name="Numeric")
+
+        suggestion = ProjectCodeAllocationService.suggest_next_code(
+            SuggestNextProjectCodeCommand(organization=organization)
+        )
+
+        self.assertEqual(suggestion.suggested_code, "26126")
+        self.assertIn("ABC", suggestion.used_codes)
+
+    def test_respects_min_code(self):
+        organization = create_organization()
+        Project.objects.create(organization=organization, code="26124", name="Existing")
+
+        suggestion = ProjectCodeAllocationService.suggest_next_code(
+            SuggestNextProjectCodeCommand(organization=organization, min_code=27000)
+        )
+
+        self.assertEqual(suggestion.suggested_code, "27000")
+
+    def test_prefix_considers_matching_codes_and_preserves_suffix_width(self):
+        organization = create_organization()
+        Project.objects.create(organization=organization, code="26001", name="Matching 1")
+        Project.objects.create(organization=organization, code="26002", name="Matching 2")
+        Project.objects.create(organization=organization, code="27099", name="Other prefix")
+
+        suggestion = ProjectCodeAllocationService.suggest_next_code(
+            SuggestNextProjectCodeCommand(organization=organization, prefix="26")
+        )
+
+        self.assertEqual(suggestion.suggested_code, "26003")
+
+    def test_organization_isolation(self):
+        organization = create_organization()
+        other_organization = create_organization("Other Org")
+        Project.objects.create(organization=other_organization, code="99999", name="Other")
+        Project.objects.create(organization=organization, code="26124", name="Own")
+
+        suggestion = ProjectCodeAllocationService.suggest_next_code(
+            SuggestNextProjectCodeCommand(organization=organization)
+        )
+
+        self.assertEqual(suggestion.suggested_code, "26125")
+        self.assertNotIn("99999", suggestion.used_codes)
+
+    def test_inactive_dimensions_are_ignored_for_allocation(self):
+        organization = create_organization()
+        Project.objects.create(organization=organization, code="26124", name="Workspace project")
+        AccountingDimension.objects.create(
+            organization=organization,
+            code="26125",
+            name="Inactive dimension",
+            is_active=False,
+        )
+
+        suggestion = ProjectCodeAllocationService.suggest_next_code(
+            SuggestNextProjectCodeCommand(organization=organization)
+        )
+
+        self.assertEqual(suggestion.suggested_code, "26125")
+        self.assertNotIn("26125", suggestion.used_codes)
+
+    def test_metadata_is_not_mutated(self):
+        organization = create_organization()
+        metadata = {"source": {"requested_by": "test"}}
+        original_metadata = {"source": {"requested_by": "test"}}
+
+        suggestion = ProjectCodeAllocationService.suggest_next_code(
+            SuggestNextProjectCodeCommand(organization=organization, metadata=metadata)
+        )
+
+        suggestion.metadata["source"] = "changed"
+        self.assertEqual(metadata, original_metadata)
+
+    def test_returns_source_summary(self):
+        organization = create_organization()
+        Project.objects.create(organization=organization, code="26124", name="Workspace project")
+        AccountingDimension.objects.create(organization=organization, code="26125", name="Merit dimension")
+
+        suggestion = ProjectCodeAllocationService.suggest_next_code(
+            SuggestNextProjectCodeCommand(organization=organization)
+        )
+
+        self.assertEqual(suggestion.source_summary["project_codes_count"], 1)
+        self.assertEqual(suggestion.source_summary["accounting_dimension_codes_count"], 1)
+        self.assertEqual(suggestion.source_summary["used_numeric_codes_count"], 2)
+
+    def test_no_database_writes_except_test_setup(self):
+        organization = create_organization()
+        Project.objects.create(organization=organization, code="26124", name="Workspace project")
+        project_count = Project.objects.count()
+        dimension_count = AccountingDimension.objects.count()
+
+        ProjectCodeAllocationService.suggest_next_code(
+            SuggestNextProjectCodeCommand(organization=organization)
+        )
+
+        self.assertEqual(Project.objects.count(), project_count)
+        self.assertEqual(AccountingDimension.objects.count(), dimension_count)
