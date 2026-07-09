@@ -25,6 +25,8 @@ from apps.communications.services import (
     RejectEmailProjectLinkCommand,
     SyncEmailAccountCommand,
 )
+from apps.accounting.models import AccountingIntegration
+from apps.accounting.services import AccountingDimensionSyncService, SyncAccountingDimensionsCommand
 from apps.projects.models import Project
 from apps.projects.services import CreateProjectWithSuggestedCodeCommand, ProjectCreationService
 
@@ -401,6 +403,48 @@ class ProjectCreateView(WorkspacePageView):
             f"Project {result.project.code} {result.project.name} created. "
             "Merit dimension creation will be added in future integration step.",
         )
+        return redirect("workspace:projects")
+
+
+class MeritDimensionSyncView(View):
+    """Manual Merit dimension sync action; sync and API logic stay in accounting services."""
+
+    def post(self, request, *args, **kwargs):
+        integration = AccountingIntegration.objects.filter(
+            provider=AccountingIntegration.Provider.MERIT,
+            is_active=True,
+        ).order_by("id").first()
+
+        if not integration:
+            messages.warning(request, "No active Merit integration is configured yet.")
+            return redirect("workspace:projects")
+
+        actor = request.user if request.user.is_authenticated else None
+
+        try:
+            result = AccountingDimensionSyncService.sync(
+                SyncAccountingDimensionsCommand(
+                    integration=integration,
+                    actor=actor,
+                    metadata={"source": "workspace_merit_dimension_sync"},
+                )
+            )
+        except Exception:
+            messages.error(request, "Merit dimension sync failed. Check integration configuration and try again.")
+            return redirect("workspace:projects")
+
+        message = (
+            "Merit dimension sync completed: "
+            f"created {result.created_count}, "
+            f"updated {result.updated_count}, "
+            f"unchanged {result.unchanged_count}, "
+            f"archived {result.archived_count}, "
+            f"conflicts {result.conflict_count}."
+        )
+        if result.conflict_count:
+            messages.warning(request, message)
+        else:
+            messages.success(request, message)
         return redirect("workspace:projects")
 
 

@@ -36,6 +36,8 @@ The accounting app includes a minimal SecretProvider abstraction so external API
 
 The Workspace Projects UI at `/workspace/projects/` shows Workspace projects together with cached accounting project dimensions, project code status indicators, filters, search, detail placeholders, and a controlled create-project flow using suggested project codes.
 
+The Workspace Projects UI includes a CSRF-protected manual `Sync Merit dimensions` action that refreshes cached Merit project dimensions through the accounting sync service and reports created, updated, unchanged, archived and conflict counts.
+
 The Project Workspace at `/workspace/projects/<id>/` uses ProjectKnowledgeBuilder to show project overview, timeline, communications, documents, people, addresses, knowledge evidence, questions and audit history.
 
 Project link review actions are available in the Inbox, e-mail detail and Reviews workspace so users can confirm, reject or correct e-mail to project suggestions through audited service-layer actions.

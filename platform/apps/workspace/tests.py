@@ -13,7 +13,8 @@ from apps.communications.models import (
     EmailProjectLink,
     EmailQuestion,
 )
-from apps.accounting.models import AccountingDimension
+from apps.accounting.models import AccountingDimension, AccountingIntegration
+from apps.accounting.services import SyncAccountingDimensionsResult
 from apps.core.models import AuditEvent
 from apps.core.services import CreateOrganizationCommand, OrganizationService
 from apps.documents.models import Document
@@ -53,6 +54,17 @@ def create_email_message(organization, subject="Workspace email"):
 
 def create_project(organization, code="26070", name="Workspace Project"):
     return Project.objects.create(organization=organization, code=code, name=name)
+
+
+def create_merit_integration(organization):
+    return AccountingIntegration.objects.create(
+        organization=organization,
+        provider=AccountingIntegration.Provider.MERIT,
+        display_name="Merit Aktiva",
+        api_base_url="https://merit.example.test",
+        api_id="api-id",
+        encrypted_secret_placeholder="api-secret",
+    )
 
 
 class WorkspaceRouteTests(TestCase):
@@ -653,6 +665,92 @@ class ProjectListManagementUITests(TestCase):
         self.assertContains(response, "Searchable Dimension")
         self.assertNotContains(response, "Searchable Workspace")
         self.assertNotContains(response, "Other project")
+
+
+class MeritDimensionSyncUITests(TestCase):
+    def _result(self, integration, conflict_count=0):
+        return SyncAccountingDimensionsResult(
+            integration=integration,
+            created_count=2,
+            updated_count=1,
+            unchanged_count=3,
+            archived_count=1,
+            conflict_count=conflict_count,
+            dimensions=[],
+            conflicts=[{"type": "duplicate_incoming_code"}] if conflict_count else [],
+            metadata={},
+        )
+
+    def test_sync_endpoint_requires_post(self):
+        response = self.client.get(reverse("workspace:merit_dimensions_sync"))
+
+        self.assertEqual(response.status_code, 405)
+
+    @patch("apps.workspace.views.AccountingDimensionSyncService.sync")
+    def test_sync_endpoint_calls_accounting_dimension_sync_service(self, sync_mock):
+        organization = create_organization()
+        integration = create_merit_integration(organization)
+        sync_mock.return_value = self._result(integration)
+
+        self.client.post(reverse("workspace:merit_dimensions_sync"))
+
+        sync_mock.assert_called_once()
+        command = sync_mock.call_args.args[0]
+        self.assertEqual(command.integration, integration)
+        self.assertEqual(command.metadata, {"source": "workspace_merit_dimension_sync"})
+
+    @patch("apps.workspace.views.AccountingDimensionSyncService.sync")
+    def test_sync_success_redirects_to_projects_and_message_contains_counts(self, sync_mock):
+        organization = create_organization()
+        integration = create_merit_integration(organization)
+        sync_mock.return_value = self._result(integration)
+
+        response = self.client.post(reverse("workspace:merit_dimensions_sync"), follow=True)
+
+        self.assertRedirects(response, reverse("workspace:projects"))
+        messages = [str(message) for message in get_messages(response.wsgi_request)]
+        self.assertTrue(any("created 2" in message for message in messages))
+        self.assertTrue(any("updated 1" in message for message in messages))
+        self.assertTrue(any("unchanged 3" in message for message in messages))
+        self.assertTrue(any("archived 1" in message for message in messages))
+        self.assertTrue(any("conflicts 0" in message for message in messages))
+
+    def test_no_active_merit_integration_handled_safely(self):
+        response = self.client.post(reverse("workspace:merit_dimensions_sync"), follow=True)
+
+        self.assertRedirects(response, reverse("workspace:projects"))
+        self.assertContains(response, "No active Merit integration is configured yet")
+
+    @patch("apps.workspace.views.AccountingDimensionSyncService.sync")
+    def test_sync_error_handled_safely(self, sync_mock):
+        organization = create_organization()
+        create_merit_integration(organization)
+        sync_mock.side_effect = RuntimeError("secret api error")
+
+        response = self.client.post(reverse("workspace:merit_dimensions_sync"), follow=True)
+
+        self.assertRedirects(response, reverse("workspace:projects"))
+        self.assertContains(response, "Merit dimension sync failed")
+        self.assertNotContains(response, "secret api error")
+
+    def test_projects_page_renders_sync_button(self):
+        response = self.client.get(reverse("workspace:projects"))
+
+        self.assertContains(response, "Sync Merit dimensions")
+        self.assertContains(response, reverse("workspace:merit_dimensions_sync"))
+        self.assertContains(response, "csrfmiddlewaretoken")
+
+    @patch("apps.workspace.views.AccountingDimensionSyncService.sync")
+    def test_conflicts_produce_warning_message(self, sync_mock):
+        organization = create_organization()
+        integration = create_merit_integration(organization)
+        sync_mock.return_value = self._result(integration, conflict_count=2)
+
+        response = self.client.post(reverse("workspace:merit_dimensions_sync"), follow=True)
+
+        messages = list(get_messages(response.wsgi_request))
+        self.assertTrue(any(message.level_tag == "warning" for message in messages))
+        self.assertTrue(any("conflicts 2" in str(message) for message in messages))
 
 
 class ProjectWorkspaceTests(TestCase):

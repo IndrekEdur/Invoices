@@ -12,7 +12,7 @@ Current engineering phase: Engineering Standards.
 
 Current implementation phase: Platform Core.
 
-Current implementation: Merit Dimension Sync Engine.
+Current implementation: Merit Dimension Sync UI.
 
 Current implementation focus: End-to-End Email Processing.
 
