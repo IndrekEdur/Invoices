@@ -30,6 +30,8 @@ The accounting app includes a reusable Merit API client connector for signed HTT
 
 The Merit API client exposes dimension read/create methods that return immutable DTOs without writing Workspace or accounting database records.
 
+The accounting app includes a Merit dimension sync engine that copies Merit dimension DTOs into the local AccountingDimension cache, records audit events, and reports conflicts without creating projects or resolving conflicts silently.
+
 The accounting app includes a minimal SecretProvider abstraction so external API credentials can be centralized before real encrypted storage or vault integration is added.
 
 The Workspace Projects UI at `/workspace/projects/` shows Workspace projects together with cached accounting project dimensions, project code status indicators, filters, search, detail placeholders, and a controlled create-project flow using suggested project codes.

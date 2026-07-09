@@ -15,3 +15,23 @@ class ProjectCodeSuggestion:
     used_codes: list[str]
     source_summary: dict = field(default_factory=dict)
     metadata: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class SyncAccountingDimensionsCommand:
+    integration: object
+    actor: object = None
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class SyncAccountingDimensionsResult:
+    integration: object
+    created_count: int
+    updated_count: int
+    unchanged_count: int
+    archived_count: int
+    conflict_count: int
+    dimensions: list
+    conflicts: list[dict]
+    metadata: dict = field(default_factory=dict)
