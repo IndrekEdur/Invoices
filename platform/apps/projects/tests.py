@@ -1,7 +1,12 @@
 from django.db import IntegrityError
 from django.test import TestCase
+from unittest.mock import patch
 
+from apps.accounting.models import AccountingDimension
+from apps.accounting.services import ProjectCodeSuggestion
+from apps.core.models import AuditEvent
 from apps.core.services import CreateOrganizationCommand, OrganizationService
+from apps.projects.services import CreateProjectWithSuggestedCodeCommand, ProjectCreationService
 
 from .models import Project, ProjectAddress, ProjectParty
 
@@ -284,3 +289,158 @@ class ProjectAddressModelTests(TestCase):
         )
 
         self.assertEqual(str(address), "26080 billing: Billing address")
+
+
+class ProjectCreationServiceTests(TestCase):
+    def test_creates_project_with_next_suggested_code(self):
+        organization = create_organization()
+        Project.objects.create(organization=organization, code="26124", name="Existing")
+
+        result = ProjectCreationService.create_with_suggested_code(
+            CreateProjectWithSuggestedCodeCommand(
+                organization=organization,
+                name="New project",
+            )
+        )
+
+        self.assertEqual(result.suggested_code, "26125")
+        self.assertEqual(result.project.code, "26125")
+        self.assertEqual(result.project.name, "New project")
+
+    def test_uses_project_code_allocation_service_result(self):
+        organization = create_organization()
+        allocation = ProjectCodeSuggestion(
+            suggested_code="27001",
+            used_codes=["27000"],
+            source_summary={"source": "mocked"},
+        )
+
+        with patch(
+            "apps.projects.services.project_creation.ProjectCodeAllocationService.suggest_next_code",
+            return_value=allocation,
+        ) as suggest_next_code:
+            result = ProjectCreationService.create_with_suggested_code(
+                CreateProjectWithSuggestedCodeCommand(
+                    organization=organization,
+                    name="Mocked allocation",
+                    min_code=27000,
+                    prefix="27",
+                )
+            )
+
+        suggest_next_code.assert_called_once()
+        self.assertEqual(result.project.code, "27001")
+        self.assertEqual(result.allocation_summary, {"source": "mocked"})
+
+    def test_respects_min_code(self):
+        organization = create_organization()
+        Project.objects.create(organization=organization, code="26124", name="Existing")
+
+        result = ProjectCreationService.create_with_suggested_code(
+            CreateProjectWithSuggestedCodeCommand(
+                organization=organization,
+                name="Minimum code project",
+                min_code=27000,
+            )
+        )
+
+        self.assertEqual(result.project.code, "27000")
+
+    def test_respects_prefix_if_supported_by_allocator(self):
+        organization = create_organization()
+        Project.objects.create(organization=organization, code="26001", name="Existing 1")
+        Project.objects.create(organization=organization, code="26002", name="Existing 2")
+        Project.objects.create(organization=organization, code="27099", name="Other prefix")
+
+        result = ProjectCreationService.create_with_suggested_code(
+            CreateProjectWithSuggestedCodeCommand(
+                organization=organization,
+                name="Prefixed project",
+                prefix="26",
+            )
+        )
+
+        self.assertEqual(result.project.code, "26003")
+
+    def test_stores_project_fields(self):
+        organization = create_organization()
+
+        result = ProjectCreationService.create_with_suggested_code(
+            CreateProjectWithSuggestedCodeCommand(
+                organization=organization,
+                name="Detailed project",
+                description="Project description",
+                project_type=Project.Type.ELECTRICAL,
+                status=Project.Status.PLANNED,
+            )
+        )
+
+        project = result.project
+        self.assertEqual(project.name, "Detailed project")
+        self.assertEqual(project.description, "Project description")
+        self.assertEqual(project.project_type, Project.Type.ELECTRICAL)
+        self.assertEqual(project.status, Project.Status.PLANNED)
+
+    def test_creates_audit_event(self):
+        organization = create_organization()
+
+        result = ProjectCreationService.create_with_suggested_code(
+            CreateProjectWithSuggestedCodeCommand(
+                organization=organization,
+                name="Audited project",
+            )
+        )
+
+        audit_event = AuditEvent.objects.get(
+            event_type="project.created_with_suggested_code",
+            object_type="Project",
+            object_id=str(result.project.id),
+        )
+        self.assertEqual(audit_event.organization, organization)
+        self.assertEqual(audit_event.metadata["suggested_code"], result.suggested_code)
+
+    def test_metadata_is_not_mutated(self):
+        organization = create_organization()
+        metadata = {"source": {"requested_by": "test"}}
+        original_metadata = {"source": {"requested_by": "test"}}
+
+        result = ProjectCreationService.create_with_suggested_code(
+            CreateProjectWithSuggestedCodeCommand(
+                organization=organization,
+                name="Metadata project",
+                metadata=metadata,
+            )
+        )
+
+        result.metadata["source"] = "changed"
+        self.assertEqual(metadata, original_metadata)
+
+    def test_transaction_rollback(self):
+        organization = create_organization()
+
+        with patch(
+            "apps.projects.services.project_creation.AuditService.record",
+            side_effect=RuntimeError("audit failed"),
+        ):
+            with self.assertRaises(RuntimeError):
+                ProjectCreationService.create_with_suggested_code(
+                    CreateProjectWithSuggestedCodeCommand(
+                        organization=organization,
+                        name="Rolled back project",
+                    )
+                )
+
+        self.assertFalse(Project.objects.filter(name="Rolled back project").exists())
+
+    def test_does_not_create_accounting_dimension(self):
+        organization = create_organization()
+        dimension_count = AccountingDimension.objects.count()
+
+        ProjectCreationService.create_with_suggested_code(
+            CreateProjectWithSuggestedCodeCommand(
+                organization=organization,
+                name="No dimension project",
+            )
+        )
+
+        self.assertEqual(AccountingDimension.objects.count(), dimension_count)

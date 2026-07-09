@@ -24,6 +24,8 @@ This repository is evolving from a local invoice automation prototype into an Op
 
 The accounting app includes a project code allocation service that suggests the next available numeric project code from existing Workspace projects and cached accounting dimensions.
 
+The projects app includes a controlled project creation service that creates a Project with the suggested next available code and records an audit event, while leaving Merit dimension creation as a future explicit integration step.
+
 ## Testide käivitamine
 
 Käivita testid repo juurkaustast:

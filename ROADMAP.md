@@ -12,7 +12,7 @@ Current engineering phase: Engineering Standards.
 
 Current implementation phase: Platform Core.
 
-Current implementation: Project Code Allocation.
+Current implementation: Project Creation with Suggested Code.
 
 Current implementation focus: End-to-End Email Processing.
 
