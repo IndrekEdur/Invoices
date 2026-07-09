@@ -13,7 +13,7 @@ from apps.accounting.connectors import (
     AccountingUnexpectedResponseError,
     MeritAPIClient,
 )
-from apps.accounting.dto import MeritDimensionDTO
+from apps.accounting.dto import MeritDimensionDTO, MeritDimensionValueDTO
 from apps.accounting.models import AccountingDimension, AccountingIntegration
 from apps.accounting.secrets import SecretMissingError, SecretProvider
 from apps.accounting.services import (
@@ -618,6 +618,126 @@ class MeritDimensionAPITests(TestCase):
         with patch("apps.accounting.connectors.merit.request.urlopen") as urlopen_mock:
             urlopen_mock.return_value = FakeHTTPResponse('{"Dimensions": []}')
             MeritAPIClient(integration).list_dimensions()
+
+        self.assertEqual(Project.objects.count(), project_count)
+        self.assertEqual(AccountingDimension.objects.count(), dimension_count)
+
+    @patch("apps.accounting.connectors.merit.request.urlopen")
+    def test_create_dimension_value_builds_correct_payload(self, urlopen_mock):
+        integration = create_merit_integration()
+        urlopen_mock.return_value = FakeHTTPResponse(
+            '{"Dimensions": [{"DimValueId": "dv-1", "DimValueCode": "26126", "DimValueName": "New Project"}]}'
+        )
+
+        value = MeritAPIClient(integration).create_dimension_value(
+            code="26126",
+            name="New Project",
+            dimension_type="project",
+            dimension_id="dim-project",
+            external_id="dv-1",
+            end_date="2026-12-31",
+        )
+
+        request_object = urlopen_mock.call_args.args[0]
+        payload = request_object.data.decode("utf-8")
+        self.assertIn("/api/v2/senddimvalues?", request_object.full_url)
+        self.assertIn(
+            '"Dimensions":[{"DimId":"dim-project","DimValueCode":"26126","DimValueName":"New Project",'
+            '"DimValueId":"dv-1","EndDate":"2026-12-31"}]',
+            payload,
+        )
+        self.assertEqual(value.external_id, "dv-1")
+        self.assertEqual(value.code, "26126")
+        self.assertEqual(value.name, "New Project")
+        self.assertEqual(value.dimension_type, "project")
+
+    def test_create_dimension_value_requires_dimension_id(self):
+        integration = create_merit_integration()
+
+        with self.assertRaises(ValueError):
+            MeritAPIClient(integration).create_dimension_value(code="26126", name="New Project")
+
+    @patch("apps.accounting.connectors.merit.request.urlopen")
+    def test_create_dimension_value_maps_response_to_dto(self, urlopen_mock):
+        integration = create_merit_integration()
+        urlopen_mock.return_value = FakeHTTPResponse(
+            '{"Dimensions": [{"DimValueId": "dv-1", "DimValueCode": "26126", "DimValueName": "New Project", "Active": true}]}'
+        )
+
+        value = MeritAPIClient(integration).create_dimension_value(
+            code="26126",
+            name="New Project",
+            dimension_id="dim-project",
+        )
+
+        self.assertIsInstance(value, MeritDimensionValueDTO)
+        self.assertEqual(value.external_id, "dv-1")
+        self.assertEqual(value.raw["DimValueId"], "dv-1")
+        self.assertTrue(value.active)
+
+    @patch("apps.accounting.connectors.merit.request.urlopen")
+    def test_create_dimension_value_401_maps_to_authentication_error(self, urlopen_mock):
+        integration = create_merit_integration()
+        urlopen_mock.side_effect = http_error(401, '{"Message":"Unauthorized"}')
+
+        with self.assertRaises(AccountingAuthenticationError):
+            MeritAPIClient(integration).create_dimension_value(
+                code="26126",
+                name="New Project",
+                dimension_id="dim-project",
+            )
+
+    @patch("apps.accounting.connectors.merit.request.urlopen")
+    def test_create_dimension_value_429_maps_to_rate_limit_error(self, urlopen_mock):
+        integration = create_merit_integration()
+        urlopen_mock.side_effect = http_error(429, '{"Message":"Too many requests"}')
+
+        with self.assertRaises(AccountingRateLimitError):
+            MeritAPIClient(integration).create_dimension_value(
+                code="26126",
+                name="New Project",
+                dimension_id="dim-project",
+            )
+
+    @patch("apps.accounting.connectors.merit.request.urlopen")
+    def test_create_dimension_value_500_maps_to_api_error(self, urlopen_mock):
+        integration = create_merit_integration()
+        urlopen_mock.side_effect = http_error(500, '{"Message":"Server error"}')
+
+        with self.assertRaises(AccountingAPIError):
+            MeritAPIClient(integration).create_dimension_value(
+                code="26126",
+                name="New Project",
+                dimension_id="dim-project",
+            )
+
+    @patch("apps.accounting.connectors.merit.request.urlopen")
+    def test_create_dimension_value_invalid_json(self, urlopen_mock):
+        integration = create_merit_integration()
+        urlopen_mock.return_value = FakeHTTPResponse("{not-json", headers={"Content-Type": "application/json"})
+
+        with self.assertRaises(AccountingUnexpectedResponseError):
+            MeritAPIClient(integration).create_dimension_value(
+                code="26126",
+                name="New Project",
+                dimension_id="dim-project",
+            )
+
+    def test_dimension_value_methods_do_not_write_database(self):
+        organization = create_organization()
+        integration = create_merit_integration(organization)
+        project_count = Project.objects.count()
+        dimension_count = AccountingDimension.objects.count()
+
+        with patch("apps.accounting.connectors.merit.request.urlopen") as urlopen_mock:
+            urlopen_mock.return_value = FakeHTTPResponse(
+                '{"Dimensions": [{"DimValueId": "dv-1", "DimValueCode": "26126", "DimValueName": "New Project"}]}'
+            )
+            MeritAPIClient(integration).create_dimension_value(
+                code="26126",
+                name="New Project",
+                dimension_id="dim-project",
+            )
 
         self.assertEqual(Project.objects.count(), project_count)
         self.assertEqual(AccountingDimension.objects.count(), dimension_count)

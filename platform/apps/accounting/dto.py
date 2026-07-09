@@ -9,3 +9,13 @@ class MeritDimensionDTO:
     dimension_type: str
     active: bool
     raw: dict
+
+
+@dataclass(frozen=True)
+class MeritDimensionValueDTO:
+    external_id: str
+    code: str
+    name: str
+    dimension_type: str
+    active: bool
+    raw: dict

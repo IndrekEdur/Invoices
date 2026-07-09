@@ -9,7 +9,7 @@ from urllib import request
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urljoin
 
-from apps.accounting.dto import MeritDimensionDTO
+from apps.accounting.dto import MeritDimensionDTO, MeritDimensionValueDTO
 from apps.accounting.models import AccountingIntegration
 from apps.accounting.secrets import SecretMissingError, SecretProvider
 
@@ -37,6 +37,7 @@ class MeritAPIClient(AccountingConnector):
     DIMENSIONS_LIST_ENDPOINT = "/api/v2/getdimensions"
     DIMENSION_DETAIL_ENDPOINT = "/api/v2/getdimension"
     DIMENSIONS_CREATE_ENDPOINT = "/api/v2/senddimvalues"
+    DIMENSION_VALUES_CREATE_ENDPOINT = "/api/v2/senddimvalues"
 
     def __init__(self, integration: AccountingIntegration, *, timeout=DEFAULT_TIMEOUT_SECONDS, secret_provider=None):
         if integration.provider != AccountingIntegration.Provider.MERIT:
@@ -146,6 +147,46 @@ class MeritAPIClient(AccountingConnector):
 
         return MeritDimensionDTO(
             external_id="",
+            code=str(code or ""),
+            name=str(name or ""),
+            dimension_type=str(dimension_type or "project"),
+            active=True,
+            raw={},
+        )
+
+    def create_dimension_value(
+        self,
+        code,
+        name,
+        dimension_type="project",
+        dimension_id=None,
+        external_id=None,
+        end_date=None,
+    ):
+        if dimension_id is None:
+            raise ValueError("Merit dimension_id is required to create or update a dimension value.")
+
+        dimension_value = {
+            "DimId": dimension_id,
+            "DimValueCode": code,
+            "DimValueName": name,
+        }
+        if external_id:
+            dimension_value["DimValueId"] = external_id
+        if end_date:
+            dimension_value["EndDate"] = end_date
+
+        response_data = self.request(
+            "POST",
+            self.DIMENSION_VALUES_CREATE_ENDPOINT,
+            payload={"Dimensions": [dimension_value]},
+        )
+        created_items = self._dimension_items(response_data)
+        if created_items:
+            return self._dimension_value_dto_from_raw(created_items[0], default_dimension_type=dimension_type)
+
+        return MeritDimensionValueDTO(
+            external_id=str(external_id or ""),
             code=str(code or ""),
             name=str(name or ""),
             dimension_type=str(dimension_type or "project"),
@@ -271,6 +312,41 @@ class MeritAPIClient(AccountingConnector):
         active = self._as_bool(self._first_value(raw_copy, "Active", "active", "IsActive", "is_active", default=True))
 
         return MeritDimensionDTO(
+            external_id=str(external_id or ""),
+            code=str(code or ""),
+            name=str(name or ""),
+            dimension_type=str(dimension_type or default_dimension_type),
+            active=active,
+            raw=raw_copy,
+        )
+
+    def _dimension_value_dto_from_raw(self, raw, default_dimension_type="project"):
+        raw_copy = deepcopy(raw or {})
+        external_id = self._first_value(
+            raw_copy,
+            "DimValueId",
+            "dim_value_id",
+            "ExternalId",
+            "external_id",
+            "Id",
+            "ID",
+            "id",
+            "ValueId",
+            "value_id",
+        )
+        code = self._first_value(raw_copy, "DimValueCode", "dim_value_code", "Code", "code")
+        name = self._first_value(raw_copy, "DimValueName", "dim_value_name", "Name", "name")
+        dimension_type = self._first_value(
+            raw_copy,
+            "DimensionType",
+            "dimension_type",
+            "Type",
+            "type",
+            default=default_dimension_type,
+        )
+        active = self._as_bool(self._first_value(raw_copy, "Active", "active", "IsActive", "is_active", default=True))
+
+        return MeritDimensionValueDTO(
             external_id=str(external_id or ""),
             code=str(code or ""),
             name=str(name or ""),
