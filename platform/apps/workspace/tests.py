@@ -823,3 +823,150 @@ class ProjectWorkspaceTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         build_mock.assert_called_once()
+
+
+class ProjectLinkReviewUITests(TestCase):
+    def _suggested_link(self):
+        organization = create_organization()
+        message = create_email_message(organization, subject="Review suggestion email")
+        suggested_project = create_project(organization, code="26300", name="Suggested Project")
+        other_project = create_project(organization, code="26301", name="Correct Project")
+        link = EmailProjectLink.objects.create(
+            organization=organization,
+            email_message=message,
+            project=suggested_project,
+            status=EmailProjectLink.Status.SUGGESTED,
+            confidence=91,
+            evidence={"matched_project_code": "26300"},
+        )
+        return link, other_project
+
+    def test_confirm_endpoint_requires_post(self):
+        link, _other_project = self._suggested_link()
+
+        response = self.client.get(reverse("workspace:project_link_confirm", kwargs={"link_id": link.id}))
+
+        self.assertEqual(response.status_code, 405)
+
+    def test_reject_endpoint_requires_post(self):
+        link, _other_project = self._suggested_link()
+
+        response = self.client.get(reverse("workspace:project_link_reject", kwargs={"link_id": link.id}))
+
+        self.assertEqual(response.status_code, 405)
+
+    def test_correct_endpoint_requires_post(self):
+        link, _other_project = self._suggested_link()
+
+        response = self.client.get(reverse("workspace:project_link_correct", kwargs={"link_id": link.id}))
+
+        self.assertEqual(response.status_code, 405)
+
+    def test_confirm_changes_link_status(self):
+        link, _other_project = self._suggested_link()
+
+        response = self.client.post(
+            reverse("workspace:project_link_confirm", kwargs={"link_id": link.id}),
+            {"next": reverse("workspace:reviews")},
+            follow=True,
+        )
+
+        link.refresh_from_db()
+        self.assertRedirects(response, reverse("workspace:reviews"))
+        self.assertEqual(link.status, EmailProjectLink.Status.CONFIRMED)
+        self.assertIsNotNone(link.confirmed_at)
+
+    def test_reject_changes_link_status(self):
+        link, _other_project = self._suggested_link()
+
+        response = self.client.post(
+            reverse("workspace:project_link_reject", kwargs={"link_id": link.id}),
+            {"reason": "Wrong project", "next": reverse("workspace:reviews")},
+            follow=True,
+        )
+
+        link.refresh_from_db()
+        self.assertRedirects(response, reverse("workspace:reviews"))
+        self.assertEqual(link.status, EmailProjectLink.Status.REJECTED)
+        self.assertEqual(link.metadata["rejection_reason"], "Wrong project")
+
+    def test_correct_creates_confirmed_link_for_new_project(self):
+        link, other_project = self._suggested_link()
+
+        response = self.client.post(
+            reverse("workspace:project_link_correct", kwargs={"link_id": link.id}),
+            {
+                "new_project_id": other_project.id,
+                "reason": "Better match",
+                "next": reverse("workspace:reviews"),
+            },
+            follow=True,
+        )
+
+        link.refresh_from_db()
+        confirmed_link = EmailProjectLink.objects.get(email_message=link.email_message, project=other_project)
+        self.assertRedirects(response, reverse("workspace:reviews"))
+        self.assertEqual(link.status, EmailProjectLink.Status.CORRECTED)
+        self.assertEqual(confirmed_link.status, EmailProjectLink.Status.CONFIRMED)
+
+    def test_inbox_renders_confirm_action_for_suggested_link(self):
+        self._suggested_link()
+
+        response = self.client.get(reverse("workspace:inbox"))
+
+        self.assertContains(response, "Confirm")
+        self.assertContains(response, "Reject")
+        self.assertContains(response, "Change project")
+
+    def test_email_detail_renders_project_link_actions(self):
+        link, other_project = self._suggested_link()
+
+        response = self.client.get(reverse("workspace:inbox_detail", kwargs={"email_id": link.email_message_id}))
+
+        self.assertContains(response, "matched_project_code")
+        self.assertContains(response, "Confirm")
+        self.assertContains(response, "Reject")
+        self.assertContains(response, f"{other_project.code} {other_project.name}")
+
+    def test_reviews_page_lists_pending_project_links(self):
+        link, _other_project = self._suggested_link()
+
+        response = self.client.get(reverse("workspace:reviews"))
+
+        self.assertContains(response, "Pending Project Link Suggestions")
+        self.assertContains(response, link.email_message.subject)
+        self.assertContains(response, "Suggested Project")
+        self.assertContains(response, "matched_project_code")
+
+    def test_messages_are_created(self):
+        link, _other_project = self._suggested_link()
+
+        response = self.client.post(
+            reverse("workspace:project_link_confirm", kwargs={"link_id": link.id}),
+            {"next": reverse("workspace:reviews")},
+            follow=True,
+        )
+
+        messages = [str(message) for message in get_messages(response.wsgi_request)]
+        self.assertTrue(any("Project link confirmed" in message for message in messages))
+
+    def test_invalid_project_id_handled_safely(self):
+        link, _other_project = self._suggested_link()
+
+        response = self.client.post(
+            reverse("workspace:project_link_correct", kwargs={"link_id": link.id}),
+            {"new_project_id": "999999", "next": reverse("workspace:reviews")},
+            follow=True,
+        )
+
+        link.refresh_from_db()
+        self.assertEqual(link.status, EmailProjectLink.Status.SUGGESTED)
+        self.assertContains(response, "choose a valid project")
+
+    def test_no_get_mutation(self):
+        link, _other_project = self._suggested_link()
+
+        self.client.get(reverse("workspace:project_link_confirm", kwargs={"link_id": link.id}))
+
+        link.refresh_from_db()
+        self.assertEqual(link.status, EmailProjectLink.Status.SUGGESTED)

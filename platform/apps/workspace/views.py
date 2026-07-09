@@ -1,13 +1,26 @@
 from django.contrib import messages
-from django.shortcuts import redirect
+from django.shortcuts import get_object_or_404, redirect
 from django.views import View
 from django.views.generic import TemplateView
 
-from apps.communications.models import EmailAccount
-from apps.communications.services import EmailSyncService, SyncEmailAccountCommand
+from apps.communications.models import EmailAccount, EmailProjectLink
+from apps.communications.services import (
+    ConfirmEmailProjectLinkCommand,
+    CorrectEmailProjectLinkCommand,
+    EmailProjectLinkService,
+    EmailSyncService,
+    RejectEmailProjectLinkCommand,
+    SyncEmailAccountCommand,
+)
+from apps.projects.models import Project
 from apps.projects.services import CreateProjectWithSuggestedCodeCommand, ProjectCreationService
 
-from .services import DashboardContextBuilder, InboxContextBuilder, ProjectsContextBuilder
+from .services import (
+    DashboardContextBuilder,
+    InboxContextBuilder,
+    ProjectLinkReviewContextBuilder,
+    ProjectsContextBuilder,
+)
 
 
 class WorkspacePageView(TemplateView):
@@ -98,6 +111,89 @@ class InboxSyncView(View):
         return redirect(redirect_to)
 
 
+class ProjectLinkActionMixin:
+    def _actor(self, request):
+        return request.user if request.user.is_authenticated else None
+
+    def _redirect_back(self, request):
+        return redirect(request.POST.get("next") or request.META.get("HTTP_REFERER") or "workspace:inbox")
+
+    def _link(self, link_id):
+        return get_object_or_404(EmailProjectLink.objects.select_related("email_message", "project"), id=link_id)
+
+
+class ProjectLinkConfirmView(ProjectLinkActionMixin, View):
+    def post(self, request, link_id, *args, **kwargs):
+        link = self._link(link_id)
+        try:
+            EmailProjectLinkService.confirm(
+                ConfirmEmailProjectLinkCommand(
+                    link=link,
+                    actor=self._actor(request),
+                    metadata={"source": "workspace_project_link_review"},
+                )
+            )
+        except Exception:
+            messages.error(request, "Project link confirmation failed.")
+            return self._redirect_back(request)
+
+        messages.success(request, f"Project link confirmed: {link.project.code} {link.project.name}.")
+        return self._redirect_back(request)
+
+
+class ProjectLinkRejectView(ProjectLinkActionMixin, View):
+    def post(self, request, link_id, *args, **kwargs):
+        link = self._link(link_id)
+        try:
+            EmailProjectLinkService.reject(
+                RejectEmailProjectLinkCommand(
+                    link=link,
+                    actor=self._actor(request),
+                    reason=request.POST.get("reason", "").strip(),
+                    metadata={"source": "workspace_project_link_review"},
+                )
+            )
+        except Exception:
+            messages.error(request, "Project link rejection failed.")
+            return self._redirect_back(request)
+
+        messages.success(request, f"Project link rejected: {link.project.code} {link.project.name}.")
+        return self._redirect_back(request)
+
+
+class ProjectLinkCorrectView(ProjectLinkActionMixin, View):
+    def post(self, request, link_id, *args, **kwargs):
+        link = self._link(link_id)
+        new_project = Project.objects.filter(
+            organization=link.organization,
+            id=request.POST.get("new_project_id"),
+        ).first()
+
+        if not new_project:
+            messages.error(request, "Project link correction failed: choose a valid project.")
+            return self._redirect_back(request)
+
+        try:
+            confirmed_link = EmailProjectLinkService.correct(
+                CorrectEmailProjectLinkCommand(
+                    link=link,
+                    new_project=new_project,
+                    actor=self._actor(request),
+                    reason=request.POST.get("reason", "").strip(),
+                    metadata={"source": "workspace_project_link_review"},
+                )
+            )
+        except Exception:
+            messages.error(request, "Project link correction failed.")
+            return self._redirect_back(request)
+
+        messages.success(
+            request,
+            f"Project link corrected and confirmed: {confirmed_link.project.code} {confirmed_link.project.name}.",
+        )
+        return self._redirect_back(request)
+
+
 class ProjectsView(WorkspacePageView):
     template_name = "workspace/projects.html"
     page_title = "Projects"
@@ -184,6 +280,11 @@ class ReviewsView(WorkspacePageView):
     template_name = "workspace/reviews.html"
     page_title = "Reviews"
     section = "reviews"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(ProjectLinkReviewContextBuilder.build())
+        return context
 
 
 class SearchView(WorkspacePageView):

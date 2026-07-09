@@ -5,6 +5,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from apps.communications.models import EmailMessage, EmailProjectLink
+from apps.projects.models import Project
 
 
 class InboxContextBuilder:
@@ -47,10 +48,11 @@ class InboxContextBuilder:
             "email": email,
             "recipients_display": InboxContextBuilder._format_recipients(email.recipients),
             "cc_display": InboxContextBuilder._format_recipients(email.cc),
-            "project_links": project_links,
+            "project_links": [InboxContextBuilder._project_link_context(link) for link in project_links],
             "questions": questions,
             "attachments": attachments,
             "evidence_json": InboxContextBuilder._format_evidence(project_links, questions),
+            "projects": Project.objects.filter(organization=email.organization).order_by("code", "id"),
         }
 
     @staticmethod
@@ -122,6 +124,7 @@ class InboxContextBuilder:
             "question_count": email.question_count,
             "attachment_count": email.attachment_count,
             "review_status": InboxContextBuilder._review_status(email, project_link),
+            "project_link": InboxContextBuilder._project_link_context(project_link) if project_link else None,
         }
 
     @staticmethod
@@ -177,3 +180,16 @@ class InboxContextBuilder:
             ],
         }
         return json.dumps(evidence, indent=2, ensure_ascii=False)
+
+    @staticmethod
+    def _project_link_context(link):
+        return {
+            "link": link,
+            "project": link.project,
+            "status": link.status,
+            "confidence": link.confidence,
+            "evidence": link.evidence,
+            "confirm_url": reverse("workspace:project_link_confirm", kwargs={"link_id": link.id}),
+            "reject_url": reverse("workspace:project_link_reject", kwargs={"link_id": link.id}),
+            "correct_url": reverse("workspace:project_link_correct", kwargs={"link_id": link.id}),
+        }
