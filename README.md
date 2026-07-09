@@ -28,6 +28,8 @@ The projects app includes a controlled project creation service that creates a P
 
 The Workspace Projects UI at `/workspace/projects/` shows Workspace projects together with cached accounting project dimensions, project code status indicators, filters, search, detail placeholders, and a controlled create-project flow using suggested project codes.
 
+The Project Workspace at `/workspace/projects/<id>/` uses ProjectKnowledgeBuilder to show project overview, timeline, communications, documents, people, addresses, knowledge evidence, questions and audit history.
+
 ## Testide käivitamine
 
 Käivita testid repo juurkaustast:

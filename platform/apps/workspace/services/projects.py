@@ -2,8 +2,8 @@ from django.db.models import Q
 
 from apps.accounting.models import AccountingDimension
 from apps.accounting.services import ProjectCodeAllocationService, SuggestNextProjectCodeCommand
-from apps.communications.models import EmailProjectLink
 from apps.core.models import Organization
+from apps.knowledge.services import BuildProjectKnowledgeCommand, ProjectKnowledgeBuilder
 from apps.projects.models import Project
 
 
@@ -107,6 +107,7 @@ class ProjectsContextBuilder:
     @staticmethod
     def build_detail(*, project_id):
         project = Project.objects.get(id=project_id)
+        knowledge = ProjectKnowledgeBuilder.build(BuildProjectKnowledgeCommand(project=project))
         dimension = AccountingDimension.objects.filter(
             organization=project.organization,
             dimension_type=AccountingDimension.DimensionType.PROJECT,
@@ -116,13 +117,16 @@ class ProjectsContextBuilder:
 
         return {
             "project": project,
+            "knowledge": knowledge,
             "dimension": dimension,
-            "parties_count": project.parties.count(),
-            "addresses_count": project.addresses.count(),
-            "related_email_count": EmailProjectLink.objects.filter(
-                organization=project.organization,
-                project=project,
-            ).count(),
+            "parties_count": len(knowledge.parties),
+            "addresses_count": len(knowledge.addresses),
+            "related_email_count": len(knowledge.emails),
+            "related_document_count": len(knowledge.documents),
+            "question_count": len(knowledge.questions),
+            "evidence_count": len(knowledge.evidence),
+            "latest_activity": tuple(reversed(knowledge.timeline))[:5],
+            "timeline_entries": tuple(reversed(knowledge.timeline)),
             "sync_status": ProjectsContextBuilder._sync_status(project, dimension),
         }
 

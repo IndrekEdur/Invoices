@@ -17,7 +17,8 @@ from apps.accounting.models import AccountingDimension
 from apps.core.models import AuditEvent
 from apps.core.services import CreateOrganizationCommand, OrganizationService
 from apps.documents.models import Document
-from apps.projects.models import Project
+from apps.knowledge.services import ProjectKnowledgeBuilder
+from apps.projects.models import Project, ProjectAddress, ProjectParty
 from apps.projects.services import CreateProjectWithSuggestedCodeResult
 from apps.workflow.models import WorkflowDefinition, WorkflowInstance, WorkflowState
 
@@ -606,7 +607,7 @@ class ProjectListManagementUITests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Detail project")
         self.assertContains(response, "Parties")
-        self.assertContains(response, "Related emails")
+        self.assertContains(response, "Communications")
 
     def test_filter_active_works(self):
         organization = create_organization()
@@ -652,3 +653,173 @@ class ProjectListManagementUITests(TestCase):
         self.assertContains(response, "Searchable Dimension")
         self.assertNotContains(response, "Searchable Workspace")
         self.assertNotContains(response, "Other project")
+
+
+class ProjectWorkspaceTests(TestCase):
+    def test_project_workspace_returns_200(self):
+        organization = create_organization()
+        project = create_project(organization, code="26200", name="Workspace detail")
+
+        response = self.client.get(reverse("workspace:project_detail", kwargs={"project_id": project.id}))
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_overview_shows_project_code_and_name(self):
+        organization = create_organization()
+        project = create_project(organization, code="26201", name="Overview project")
+
+        response = self.client.get(reverse("workspace:project_detail", kwargs={"project_id": project.id}))
+
+        self.assertContains(response, "26201")
+        self.assertContains(response, "Overview project")
+        self.assertContains(response, "Overview")
+
+    def test_shows_parties(self):
+        organization = create_organization()
+        project = create_project(organization, code="26202", name="People project")
+        ProjectParty.objects.create(
+            organization=organization,
+            project=project,
+            role=ProjectParty.Role.SUPPLIER,
+            name="Project Supplier",
+            company_name="Supplier OÜ",
+            email="supplier@example.com",
+            phone="+372 5555",
+        )
+
+        response = self.client.get(reverse("workspace:project_detail", kwargs={"project_id": project.id}))
+
+        self.assertContains(response, "Project Supplier")
+        self.assertContains(response, "supplier")
+        self.assertContains(response, "Supplier OÜ")
+
+    def test_shows_addresses(self):
+        organization = create_organization()
+        project = create_project(organization, code="26203", name="Address project")
+        ProjectAddress.objects.create(
+            organization=organization,
+            project=project,
+            address_type=ProjectAddress.Type.SITE,
+            label="Main site",
+            city="Tallinn",
+            street="Example 1",
+            is_primary=True,
+        )
+
+        response = self.client.get(reverse("workspace:project_detail", kwargs={"project_id": project.id}))
+
+        self.assertContains(response, "Main site")
+        self.assertContains(response, "Tallinn")
+        self.assertContains(response, "primary")
+
+    def test_shows_related_emails(self):
+        organization = create_organization()
+        project = create_project(organization, code="26204", name="Email project")
+        message = create_email_message(organization, subject="Project communication")
+        EmailProjectLink.objects.create(
+            organization=organization,
+            email_message=message,
+            project=project,
+            confidence=88,
+            status=EmailProjectLink.Status.SUGGESTED,
+        )
+
+        response = self.client.get(reverse("workspace:project_detail", kwargs={"project_id": project.id}))
+
+        self.assertContains(response, "Project communication")
+        self.assertContains(response, "88%")
+        self.assertContains(response, "suggested")
+
+    def test_shows_questions(self):
+        organization = create_organization()
+        project = create_project(organization, code="26205", name="Question project")
+        message = create_email_message(organization, subject="Question communication")
+        EmailProjectLink.objects.create(
+            organization=organization,
+            email_message=message,
+            project=project,
+        )
+        EmailQuestion.objects.create(
+            organization=organization,
+            email_message=message,
+            question_text="Kas saab kinnitada?",
+            evidence={"keyword": "kas"},
+        )
+
+        response = self.client.get(reverse("workspace:project_detail", kwargs={"project_id": project.id}))
+
+        self.assertContains(response, "Questions")
+        self.assertContains(response, ">1<", html=False)
+
+    def test_shows_evidence(self):
+        organization = create_organization()
+        project = create_project(organization, code="26206", name="Evidence project")
+        message = create_email_message(organization, subject="Evidence communication")
+        EmailProjectLink.objects.create(
+            organization=organization,
+            email_message=message,
+            project=project,
+            confidence=90,
+            evidence={"matched_project_code": "26206"},
+        )
+
+        response = self.client.get(reverse("workspace:project_detail", kwargs={"project_id": project.id}))
+
+        self.assertContains(response, "Evidence")
+        self.assertContains(response, "email_project_link")
+        self.assertContains(response, "matched_project_code")
+
+    def test_shows_documents_when_attachments_linked_to_documents(self):
+        organization = create_organization()
+        project = create_project(organization, code="26207", name="Document project")
+        message = create_email_message(organization, subject="Document communication")
+        EmailProjectLink.objects.create(
+            organization=organization,
+            email_message=message,
+            project=project,
+        )
+        document = Document.objects.create(
+            organization=organization,
+            title="Project contract",
+            original_filename="contract.pdf",
+            source=Document.Source.MANUAL_UPLOAD,
+            status=Document.Status.PARSED,
+        )
+        EmailAttachment.objects.create(
+            organization=organization,
+            email_message=message,
+            document=document,
+            original_filename="contract.pdf",
+        )
+
+        response = self.client.get(reverse("workspace:project_detail", kwargs={"project_id": project.id}))
+
+        self.assertContains(response, "Project contract")
+        self.assertContains(response, "contract.pdf")
+        self.assertContains(response, "parsed")
+
+    def test_empty_project_renders_empty_states(self):
+        organization = create_organization()
+        project = create_project(organization, code="26208", name="Empty project")
+
+        response = self.client.get(reverse("workspace:project_detail", kwargs={"project_id": project.id}))
+
+        self.assertContains(response, "No timeline yet")
+        self.assertContains(response, "No related emails")
+        self.assertContains(response, "No related documents")
+        self.assertContains(response, "No people yet")
+        self.assertContains(response, "No addresses yet")
+        self.assertContains(response, "No evidence yet")
+
+    def test_project_knowledge_builder_is_used(self):
+        organization = create_organization()
+        project = create_project(organization, code="26209", name="Knowledge builder project")
+
+        with patch(
+            "apps.workspace.services.projects.ProjectKnowledgeBuilder.build",
+            wraps=ProjectKnowledgeBuilder.build,
+        ) as build_mock:
+            response = self.client.get(reverse("workspace:project_detail", kwargs={"project_id": project.id}))
+
+        self.assertEqual(response.status_code, 200)
+        build_mock.assert_called_once()

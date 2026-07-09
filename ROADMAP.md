@@ -12,7 +12,7 @@ Current engineering phase: Engineering Standards.
 
 Current implementation phase: Platform Core.
 
-Current implementation: Project List Management UI.
+Current implementation: Project Workspace MVP.
 
 Current implementation focus: End-to-End Email Processing.
 
