@@ -28,12 +28,20 @@ def create_organization(name="Workspace Org"):
     return OrganizationService.create(CreateOrganizationCommand(name=name))
 
 
-def create_email_account(organization):
+def create_email_account(organization, **kwargs):
+    defaults = {
+        "provider": EmailAccount.Provider.IMAP,
+        "display_name": "Workspace mailbox",
+        "email_address": "workspace@example.com",
+        "username": "workspace@example.com",
+        "host": "mail.example.com",
+        "port": 993,
+        "encrypted_secret_placeholder": "stored-secret",
+    }
+    defaults.update(kwargs)
     return EmailAccount.objects.create(
         organization=organization,
-        provider=EmailAccount.Provider.IMAP,
-        display_name="Workspace mailbox",
-        email_address="workspace@example.com",
+        **defaults,
     )
 
 
@@ -371,6 +379,166 @@ class SettingsWorkspaceTests(TestCase):
         ]:
             with self.subTest(label=label):
                 self.assertContains(response, label)
+
+
+class EmailAccountManagementUITests(TestCase):
+    def test_list_returns_200(self):
+        response = self.client.get(reverse("workspace:settings_email_accounts"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Email Account Management")
+
+    def test_create_page_returns_200(self):
+        create_organization()
+
+        response = self.client.get(reverse("workspace:settings_email_account_create"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Create Email Account")
+
+    def test_create_post_creates_email_account(self):
+        organization = create_organization()
+
+        response = self.client.post(
+            reverse("workspace:settings_email_account_create"),
+            {
+                "provider": EmailAccount.Provider.IMAP,
+                "display_name": "Zone mailbox",
+                "email_address": "zone@example.com",
+                "username": "zone@example.com",
+                "host": "imap.zone.eu",
+                "port": "993",
+                "use_ssl": "on",
+                "auth_type": "password",
+                "secret": "super-secret-password",
+                "is_active": "on",
+            },
+        )
+
+        account = EmailAccount.objects.get(email_address="zone@example.com")
+        self.assertRedirects(response, reverse("workspace:settings_email_account_detail", kwargs={"account_id": account.id}))
+        self.assertEqual(account.organization, organization)
+        self.assertEqual(account.encrypted_secret_placeholder, "super-secret-password")
+
+    def test_edit_page_returns_200(self):
+        organization = create_organization()
+        account = create_email_account(organization)
+
+        response = self.client.get(reverse("workspace:settings_email_account_edit", kwargs={"account_id": account.id}))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Edit Email Account")
+
+    def test_edit_post_updates_non_secret_fields(self):
+        organization = create_organization()
+        account = create_email_account(organization, encrypted_secret_placeholder="keep-me")
+
+        response = self.client.post(
+            reverse("workspace:settings_email_account_edit", kwargs={"account_id": account.id}),
+            {
+                "provider": EmailAccount.Provider.IMAP,
+                "display_name": "Updated mailbox",
+                "email_address": "updated@example.com",
+                "username": "updated@example.com",
+                "host": "imap.updated.test",
+                "port": "143",
+                "use_tls": "on",
+                "auth_type": "password",
+                "is_active": "on",
+            },
+        )
+
+        account.refresh_from_db()
+        self.assertRedirects(response, reverse("workspace:settings_email_account_detail", kwargs={"account_id": account.id}))
+        self.assertEqual(account.display_name, "Updated mailbox")
+        self.assertEqual(account.email_address, "updated@example.com")
+        self.assertEqual(account.host, "imap.updated.test")
+        self.assertEqual(account.encrypted_secret_placeholder, "keep-me")
+
+    def test_edit_post_with_empty_secret_keeps_existing_secret(self):
+        organization = create_organization()
+        account = create_email_account(organization, encrypted_secret_placeholder="existing-secret")
+
+        self.client.post(
+            reverse("workspace:settings_email_account_edit", kwargs={"account_id": account.id}),
+            {
+                "provider": EmailAccount.Provider.IMAP,
+                "display_name": account.display_name,
+                "email_address": account.email_address,
+                "username": account.username,
+                "host": account.host,
+                "port": "993",
+                "use_ssl": "on",
+                "auth_type": account.auth_type,
+                "secret": "",
+                "is_active": "on",
+            },
+        )
+
+        account.refresh_from_db()
+        self.assertEqual(account.encrypted_secret_placeholder, "existing-secret")
+
+    def test_detail_page_masks_secret(self):
+        organization = create_organization()
+        account = create_email_account(organization, encrypted_secret_placeholder="super-secret-password")
+
+        response = self.client.get(reverse("workspace:settings_email_account_detail", kwargs={"account_id": account.id}))
+
+        self.assertContains(response, "su****rd")
+        self.assertNotContains(response, "super-secret-password")
+
+    def test_list_shows_account(self):
+        organization = create_organization()
+        create_email_account(organization, display_name="Visible mailbox", email_address="visible@example.com")
+
+        response = self.client.get(reverse("workspace:settings_email_accounts"))
+
+        self.assertContains(response, "Visible mailbox")
+        self.assertContains(response, "visible@example.com")
+
+    def test_no_secret_leaked_in_rendered_html(self):
+        organization = create_organization()
+        account = create_email_account(organization, encrypted_secret_placeholder="do-not-render-this")
+
+        list_response = self.client.get(reverse("workspace:settings_email_accounts"))
+        detail_response = self.client.get(reverse("workspace:settings_email_account_detail", kwargs={"account_id": account.id}))
+        edit_response = self.client.get(reverse("workspace:settings_email_account_edit", kwargs={"account_id": account.id}))
+
+        self.assertNotContains(list_response, "do-not-render-this")
+        self.assertNotContains(detail_response, "do-not-render-this")
+        self.assertNotContains(edit_response, "do-not-render-this")
+
+    def test_invalid_form_shows_errors(self):
+        create_organization()
+
+        response = self.client.post(
+            reverse("workspace:settings_email_account_create"),
+            {
+                "provider": EmailAccount.Provider.IMAP,
+                "display_name": "",
+                "email_address": "not-an-email",
+                "secret": "",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "id_display_name_error")
+        self.assertContains(response, "id_email_address_error")
+        self.assertContains(response, "id_secret_error")
+
+    def test_sync_button_rendered(self):
+        organization = create_organization()
+        account = create_email_account(organization)
+
+        response = self.client.get(reverse("workspace:settings_email_accounts"))
+
+        self.assertContains(response, "Sync Now")
+        self.assertContains(response, f'name="email_account_id" value="{account.id}"')
+
+    def test_settings_workspace_email_accounts_card_links_to_management_page(self):
+        response = self.client.get(reverse("workspace:settings"))
+
+        self.assertContains(response, reverse("workspace:settings_email_accounts"))
 
 
 class InboxMVPTests(TestCase):

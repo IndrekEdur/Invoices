@@ -48,6 +48,8 @@ The Workspace Project Create UI can optionally create and cache a matching Merit
 
 The Settings Workspace at `/workspace/settings/` provides a read-only operational control center for summary counts, settings areas, e-mail accounts, accounting integrations, Merit configuration, project numbering and system health.
 
+Email Account Management at `/workspace/settings/email-accounts/` lets administrators list, create, view and edit IMAP/email accounts while keeping stored secrets masked and out of rendered HTML.
+
 The Project Workspace at `/workspace/projects/<id>/` uses ProjectKnowledgeBuilder to show project overview, timeline, communications, documents, people, addresses, knowledge evidence, questions and audit history.
 
 Project link review actions are available in the Inbox, e-mail detail and Reviews workspace so users can confirm, reject or correct e-mail to project suggestions through audited service-layer actions.

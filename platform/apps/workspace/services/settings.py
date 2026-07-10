@@ -154,3 +154,30 @@ class SettingsContextBuilder:
                 "body": f"{Document.objects.count()} stored documents tracked.",
             },
         ]
+
+
+class EmailAccountSettingsContextBuilder:
+    """Read-only context builder for e-mail account settings pages."""
+
+    @staticmethod
+    def build_list():
+        return {
+            "email_accounts": EmailAccount.objects.select_related("organization").order_by("display_name", "id"),
+        }
+
+    @staticmethod
+    def build_detail(email_account):
+        return {
+            "email_account": email_account,
+            "masked_secret": EmailAccountSettingsContextBuilder.mask_secret(
+                email_account.encrypted_secret_placeholder
+            ),
+        }
+
+    @staticmethod
+    def mask_secret(value):
+        if not value:
+            return ""
+        if len(value) <= 4:
+            return "****"
+        return f"{value[:2]}****{value[-2:]}"

@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Email Accounts | Operations Workspace Platform{% endblock %}
+{% block actions %}
+<a href="{% url 'workspace:settings_email_account_create' %}" class="inline-flex items-center justify-center rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-slate-300">Add Email Account</a>
+{% endblock %}
+{% block content %}
+<div class="space-y-8">
+    {% include "workspace/partials/components/page_header.html" with eyebrow="Settings" title="Email Account Management" body="Manage IMAP and future e-mail provider accounts without Django shell access." %}
+
+    <section class="space-y-4">
+        {% include "workspace/partials/components/section_header.html" with title="Configured Email Accounts" body="Provider configuration is stored safely; secrets are never displayed in plain text." %}
+        {% if email_accounts %}
+            <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-slate-200 text-sm">
+                        <thead class="bg-slate-50">
+                            <tr>
+                                <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Name</th>
+                                <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Email</th>
+                                <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Provider</th>
+                                <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Host</th>
+                                <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Port</th>
+                                <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">SSL/TLS</th>
+                                <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Active</th>
+                                <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Last sync</th>
+                                <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-100">
+                            {% for account in email_accounts %}
+                                <tr class="odd:bg-white even:bg-slate-50/50 transition hover:bg-blue-50/60">
+                                    <td class="px-5 py-4 font-semibold text-slate-950">{{ account.display_name }}</td>
+                                    <td class="px-5 py-4 text-slate-700">{{ account.email_address }}</td>
+                                    <td class="px-5 py-4">{% include "workspace/partials/components/badge.html" with tone="info" label=account.provider %}</td>
+                                    <td class="px-5 py-4 text-slate-700">{{ account.host|default:"-" }}</td>
+                                    <td class="px-5 py-4 text-slate-700">{{ account.port|default:"-" }}</td>
+                                    <td class="px-5 py-4 text-slate-700">SSL {{ account.use_ssl|yesno:"yes,no" }} / TLS {{ account.use_tls|yesno:"yes,no" }}</td>
+                                    <td class="px-5 py-4">
+                                        {% if account.is_active %}
+                                            {% include "workspace/partials/components/status_badge.html" with status="success" label="active" %}
+                                        {% else %}
+                                            {% include "workspace/partials/components/status_badge.html" with status="neutral" label="inactive" %}
+                                        {% endif %}
+                                    </td>
+                                    <td class="px-5 py-4 text-slate-700">{{ account.last_sync_at|date:"Y-m-d H:i"|default:"Never" }}</td>
+                                    <td class="px-5 py-4">
+                                        <div class="flex flex-wrap gap-2">
+                                            <a href="{% url 'workspace:settings_email_account_detail' account.id %}" class="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700">View</a>
+                                            <a href="{% url 'workspace:settings_email_account_edit' account.id %}" class="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700">Edit</a>
+                                            <form method="post" action="{% url 'workspace:inbox_sync' %}">
+                                                {% csrf_token %}
+                                                <input type="hidden" name="email_account_id" value="{{ account.id }}">
+                                                <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                                                <button type="submit" class="rounded-xl bg-slate-950 px-3 py-2 text-xs font-semibold text-white">Sync Now</button>
+                                            </form>
+                                        </div>
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        {% else %}
+            {% include "workspace/partials/components/empty_state.html" with title="No email accounts yet" body="Add an IMAP account to start syncing business e-mail into the Workspace." %}
+        {% endif %}
+    </section>
+</div>
+{% endblock %}

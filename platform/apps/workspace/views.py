@@ -32,11 +32,14 @@ from apps.accounting.services import (
     CreateAccountingDimensionValueCommand,
     SyncAccountingDimensionsCommand,
 )
+from apps.core.models import Organization
 from apps.projects.models import Project
 from apps.projects.services import CreateProjectWithSuggestedCodeCommand, ProjectCreationService
 
+from .forms import EmailAccountForm
 from .services import (
     DashboardContextBuilder,
+    EmailAccountSettingsContextBuilder,
     InboxContextBuilder,
     ProjectLinkReviewContextBuilder,
     ProjectsContextBuilder,
@@ -99,11 +102,18 @@ class InboxSyncView(View):
     """Manual sync action; provider-specific sync logic remains in EmailSyncService."""
 
     def post(self, request, *args, **kwargs):
-        email_account = EmailAccount.objects.filter(is_active=True).order_by("id").first()
+        email_account_id = request.POST.get("email_account_id")
+        if email_account_id:
+            email_account = get_object_or_404(EmailAccount, id=email_account_id)
+        else:
+            email_account = EmailAccount.objects.filter(is_active=True).order_by("id").first()
         redirect_to = request.POST.get("next") or "workspace:inbox"
 
         if not email_account:
             messages.warning(request, "No active email account is configured yet. Add an EmailAccount before syncing.")
+            return redirect(redirect_to)
+        if not email_account.is_active:
+            messages.warning(request, "Selected email account is inactive. Activate it before syncing.")
             return redirect(redirect_to)
 
         actor = request.user if request.user.is_authenticated else None
@@ -569,6 +579,92 @@ class SettingsSectionView(WorkspacePageView):
         context = super().get_context_data(**kwargs)
         context["settings_section"] = self.kwargs["section_slug"]
         return context
+
+
+class EmailAccountSettingsMixin:
+    section = "settings"
+
+    def _current_organization(self):
+        if self.request.user.is_authenticated and hasattr(self.request.user, "app_profile"):
+            profile = self.request.user.app_profile
+            if profile.active_organization:
+                return profile.active_organization
+        return Organization.objects.order_by("id").first()
+
+    def _account(self):
+        return get_object_or_404(EmailAccount.objects.select_related("organization"), id=self.kwargs["account_id"])
+
+
+class EmailAccountListView(EmailAccountSettingsMixin, WorkspacePageView):
+    template_name = "workspace/settings_email_accounts.html"
+    page_title = "Email Accounts"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(EmailAccountSettingsContextBuilder.build_list())
+        return context
+
+
+class EmailAccountCreateView(EmailAccountSettingsMixin, WorkspacePageView):
+    template_name = "workspace/settings_email_account_form.html"
+    page_title = "Create Email Account"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["form"] = kwargs.get("form") or EmailAccountForm(organization=self._current_organization())
+        context["mode"] = "create"
+        context["masked_secret"] = ""
+        return context
+
+    def post(self, request, *args, **kwargs):
+        organization = self._current_organization()
+        if not organization:
+            messages.error(request, "Create an Organization before adding email accounts.")
+            return redirect("workspace:settings_email_accounts")
+
+        form = EmailAccountForm(request.POST, organization=organization)
+        if not form.is_valid():
+            return self.render_to_response(self.get_context_data(form=form))
+
+        email_account = form.save()
+        messages.success(request, f"Email account {email_account.email_address} created.")
+        return redirect("workspace:settings_email_account_detail", account_id=email_account.id)
+
+
+class EmailAccountDetailView(EmailAccountSettingsMixin, WorkspacePageView):
+    template_name = "workspace/settings_email_account_detail.html"
+    page_title = "Email Account"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(EmailAccountSettingsContextBuilder.build_detail(self._account()))
+        return context
+
+
+class EmailAccountEditView(EmailAccountSettingsMixin, WorkspacePageView):
+    template_name = "workspace/settings_email_account_form.html"
+    page_title = "Edit Email Account"
+
+    def get_context_data(self, **kwargs):
+        email_account = self._account()
+        context = super().get_context_data(**kwargs)
+        context["email_account"] = email_account
+        context["form"] = kwargs.get("form") or EmailAccountForm(instance=email_account)
+        context["mode"] = "edit"
+        context["masked_secret"] = EmailAccountSettingsContextBuilder.mask_secret(
+            email_account.encrypted_secret_placeholder
+        )
+        return context
+
+    def post(self, request, *args, **kwargs):
+        email_account = self._account()
+        form = EmailAccountForm(request.POST, instance=email_account)
+        if not form.is_valid():
+            return self.render_to_response(self.get_context_data(form=form))
+
+        email_account = form.save()
+        messages.success(request, f"Email account {email_account.email_address} updated.")
+        return redirect("workspace:settings_email_account_detail", account_id=email_account.id)
 
 
 class DesignSystemView(WorkspacePageView):
