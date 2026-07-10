@@ -1,7 +1,3 @@
-import base64
-from datetime import datetime, timezone
-import hashlib
-import hmac
 import json
 import time
 from copy import deepcopy
@@ -11,8 +7,9 @@ from urllib.parse import urlencode, urljoin
 
 from apps.accounting.dto import MeritDimensionDTO, MeritDimensionValueDTO
 from apps.accounting.models import AccountingIntegration
-from apps.accounting.secrets import SecretMissingError, SecretProvider
+from apps.accounting.secrets import SecretProvider
 
+from .authentication import MeritAuthenticationService
 from .base import AccountingConnector
 from .exceptions import (
     AccountingAPIError,
@@ -39,7 +36,14 @@ class MeritAPIClient(AccountingConnector):
     DIMENSIONS_CREATE_ENDPOINT = "/api/v2/senddimvalues"
     DIMENSION_VALUES_CREATE_ENDPOINT = "/api/v2/senddimvalues"
 
-    def __init__(self, integration: AccountingIntegration, *, timeout=DEFAULT_TIMEOUT_SECONDS, secret_provider=None):
+    def __init__(
+        self,
+        integration: AccountingIntegration,
+        *,
+        timeout=DEFAULT_TIMEOUT_SECONDS,
+        secret_provider=None,
+        authentication_service=None,
+    ):
         if integration.provider != AccountingIntegration.Provider.MERIT:
             raise ValueError("MeritAPIClient requires an AccountingIntegration with provider='merit'.")
 
@@ -47,26 +51,27 @@ class MeritAPIClient(AccountingConnector):
         self.api_base_url = (integration.api_base_url or DEFAULT_MERIT_BASE_URL).rstrip("/")
         self.api_id = integration.api_id.strip()
         self.secret_provider = secret_provider or SecretProvider()
+        self.authentication_service = authentication_service or MeritAuthenticationService(
+            secret_provider=self.secret_provider
+        )
         self.timeout = timeout
 
     def authenticate(self):
-        if not self.api_id:
-            raise AccountingAuthenticationError("Merit API credentials are not configured.")
-        try:
-            self.secret_provider.get_secret(self.integration)
-        except SecretMissingError as exc:
-            raise AccountingAuthenticationError("Merit API credentials are not configured.") from exc
+        self.authentication_service.create_authentication(self.integration)
         return True
 
     def request(self, method, path, *, payload=None, params=None, headers=None, timeout=None):
-        self.authenticate()
         method = method.upper()
         if method not in {"GET", "POST"}:
             raise ValueError("MeritAPIClient supports only GET and POST requests.")
 
         body = self._json_body(payload if payload is not None else {})
-        url = self._signed_url(path, body if method == "POST" else "", params=params)
-        request_headers = self._headers(headers)
+        authentication = self.authentication_service.create_authentication(
+            self.integration,
+            body=body if method == "POST" else "",
+        )
+        url = self._authenticated_url(path, authentication, params=params)
+        request_headers = self._headers(headers, authentication_headers=authentication.headers)
         data = body.encode("utf-8") if method == "POST" else None
         http_request = request.Request(url, data=data, headers=request_headers, method=method)
 
@@ -194,32 +199,26 @@ class MeritAPIClient(AccountingConnector):
             raw={},
         )
 
-    def _signed_url(self, path, body, *, params=None):
+    def _authenticated_url(self, path, authentication, *, params=None):
         clean_path = path.lstrip("/")
-        timestamp = self._timestamp()
         query_params = {
             **(params or {}),
             **{
-                "apiId": self.api_id,
-                "timestamp": timestamp,
-                "signature": self._signature(timestamp, body),
+                "apiId": authentication.api_id,
+                "timestamp": authentication.timestamp,
+                "signature": authentication.signature,
             },
         }
         query = urlencode(query_params)
         return f"{urljoin(f'{self.api_base_url}/', clean_path)}?{query}"
 
-    def _signature(self, timestamp, body):
-        data = f"{self.api_id}{timestamp}{body}".encode("utf-8")
-        api_secret = self.secret_provider.get_secret(self.integration)
-        digest = hmac.new(api_secret.encode("ascii"), data, hashlib.sha256).digest()
-        return base64.b64encode(digest).decode("ascii")
-
-    def _headers(self, extra_headers):
+    def _headers(self, extra_headers, *, authentication_headers=None):
         headers = {
             "Accept": "application/json",
             "Content-Type": "application/json; charset=utf-8",
             "User-Agent": "OperationsWorkspacePlatform/1.0",
         }
+        headers.update(authentication_headers or {})
         headers.update(extra_headers or {})
         return headers
 
@@ -373,6 +372,3 @@ class MeritAPIClient(AccountingConnector):
         if not raw:
             return f"Merit API returned HTTP {exc.code}."
         return f"Merit API returned HTTP {exc.code}: {raw}"
-
-    def _timestamp(self):
-        return datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")

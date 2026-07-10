@@ -30,6 +30,8 @@ The projects app includes a controlled project creation service that creates a P
 
 The accounting app includes a reusable Merit API client connector for signed HTTP communication, health checks, JSON parsing, timeout handling, and sanitized exception mapping. Future Merit services should use this connector instead of performing direct HTTP calls.
 
+Merit API authentication is isolated in `MeritAuthenticationService`, which creates official `apiId`, `timestamp`, and `signature` query authentication values without exposing API secrets.
+
 The Merit API client exposes dimension read/create methods that return immutable DTOs without writing Workspace or accounting database records.
 
 The Merit API client exposes a `create_dimension_value(...)` method for creating or updating Merit dimension values such as project codes through `senddimvalues`, while keeping database persistence in separate services.

@@ -1,3 +1,4 @@
+from .authentication import MeritAuthentication, MeritAuthenticationService
 from .base import AccountingConnector
 from .exceptions import (
     AccountingAPIError,
@@ -21,6 +22,8 @@ __all__ = [
     "AccountingUnexpectedResponseError",
     "AuthenticationError",
     "ConnectionError",
+    "MeritAuthentication",
+    "MeritAuthenticationService",
     "MeritAPIClient",
     "RateLimitError",
     "UnexpectedResponseError",

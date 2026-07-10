@@ -11,6 +11,8 @@ from apps.accounting.connectors import (
     AccountingConnectionError,
     AccountingRateLimitError,
     AccountingUnexpectedResponseError,
+    MeritAuthentication,
+    MeritAuthenticationService,
     MeritAPIClient,
 )
 from apps.accounting.dto import MeritDimensionDTO, MeritDimensionValueDTO
@@ -63,6 +65,16 @@ class FakeHTTPResponse:
 
 class StaticSecretProvider:
     def __init__(self, secret="provider-secret"):
+        self.secret = secret
+        self.calls = 0
+
+    def get_secret(self, integration):
+        self.calls += 1
+        return self.secret
+
+
+class TrackingSecretProvider:
+    def __init__(self, secret="api-secret"):
         self.secret = secret
         self.calls = 0
 
@@ -289,6 +301,79 @@ class SecretProviderTests(TestCase):
         self.assertEqual(integration.api_id, original_api_id)
 
 
+class MeritAuthenticationServiceTests(TestCase):
+    def test_timestamp_generation_uses_merit_format(self):
+        integration = create_merit_integration()
+        service = MeritAuthenticationService()
+
+        with patch.object(service, "_timestamp", return_value="20260102030405"):
+            authentication = service.create_authentication(integration)
+
+        self.assertEqual(authentication.timestamp, "20260102030405")
+        self.assertEqual(len(authentication.timestamp), 14)
+
+    def test_signature_is_deterministic(self):
+        integration = create_merit_integration()
+        service = MeritAuthenticationService()
+
+        with patch.object(service, "_timestamp", return_value="20260102030405"):
+            first = service.create_authentication(integration, body='{"hello":"world"}')
+            second = service.create_authentication(integration, body='{"hello":"world"}')
+
+        self.assertEqual(first.signature, second.signature)
+        self.assertEqual(first.signature, "N2+UH9qs5blm/lqcpfJjedwse0cfUaY9JFkqDSMjRqQ=")
+
+    def test_headers_generated_correctly(self):
+        integration = create_merit_integration()
+        service = MeritAuthenticationService()
+
+        with patch.object(service, "_timestamp", return_value="20260102030405"):
+            authentication = service.create_authentication(integration, body="{}")
+
+        self.assertEqual(authentication.api_id, "api-id")
+        self.assertEqual(authentication.headers, {})
+
+    def test_secret_provider_called(self):
+        integration = create_merit_integration()
+        secret_provider = TrackingSecretProvider()
+        service = MeritAuthenticationService(secret_provider=secret_provider)
+
+        with patch.object(service, "_timestamp", return_value="20260102030405"):
+            service.create_authentication(integration)
+
+        self.assertEqual(secret_provider.calls, 1)
+
+    def test_authentication_does_not_expose_secret(self):
+        integration = create_merit_integration()
+        service = MeritAuthenticationService()
+
+        with patch.object(service, "_timestamp", return_value="20260102030405"):
+            authentication = service.create_authentication(integration)
+
+        self.assertNotIn("api-secret", repr(authentication))
+        self.assertNotIn("api-secret", authentication.signature)
+
+    def test_merit_authentication_is_immutable(self):
+        authentication = MeritAuthentication(api_id="api-id", timestamp="20260102030405", signature="sig", headers={})
+
+        with self.assertRaises(FrozenInstanceError):
+            authentication.api_id = "changed"
+
+    def test_missing_api_id_raises_authentication_error(self):
+        integration = create_merit_integration()
+        integration.api_id = ""
+
+        with self.assertRaises(AccountingAuthenticationError):
+            MeritAuthenticationService().create_authentication(integration)
+
+    def test_missing_secret_raises_authentication_error(self):
+        integration = create_merit_integration()
+        integration.encrypted_secret_placeholder = ""
+
+        with self.assertRaises(AccountingAuthenticationError):
+            MeritAuthenticationService().create_authentication(integration)
+
+
 class MeritAPIClientTests(TestCase):
     def test_health_returns_structured_local_check_result(self):
         integration = create_merit_integration()
@@ -452,7 +537,37 @@ class MeritAPIClientTests(TestCase):
 
         request_object = urlopen_mock.call_args.args[0]
         self.assertIn("signature=", request_object.full_url)
-        self.assertEqual(secret_provider.calls, 2)
+        self.assertEqual(secret_provider.calls, 1)
+
+    @patch("apps.accounting.connectors.merit.request.urlopen")
+    def test_authentication_is_attached_to_request(self, urlopen_mock):
+        integration = create_merit_integration()
+        urlopen_mock.return_value = FakeHTTPResponse('{"ok": true}')
+        authentication_service = MeritAuthenticationService()
+
+        with patch.object(authentication_service, "_timestamp", return_value="20260102030405"):
+            MeritAPIClient(integration, authentication_service=authentication_service).request(
+                "POST",
+                "/api/v1/gettaxes",
+                payload={"hello": "world"},
+            )
+
+        request_object = urlopen_mock.call_args.args[0]
+        self.assertIn("apiId=api-id", request_object.full_url)
+        self.assertIn("timestamp=20260102030405", request_object.full_url)
+        self.assertIn("signature=", request_object.full_url)
+        self.assertNotIn("api-secret", request_object.full_url)
+
+    def test_authentication_error_mapping_from_service(self):
+        integration = create_merit_integration()
+        integration.encrypted_secret_placeholder = ""
+
+        with self.assertRaises(AccountingAuthenticationError):
+            MeritAPIClient(integration).request(
+                "POST",
+                "/api/v1/gettaxes",
+                payload={},
+            )
 
 
 class MeritDimensionAPITests(TestCase):

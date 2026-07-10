@@ -12,7 +12,7 @@ Current engineering phase: Engineering Standards.
 
 Current implementation phase: Platform Core.
 
-Current implementation: Merit Connection Test.
+Current implementation: Merit Authentication.
 
 Current implementation focus: End-to-End Email Processing.
 
