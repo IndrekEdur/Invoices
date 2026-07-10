@@ -17,7 +17,9 @@ from apps.accounting.dto import MeritDimensionDTO, MeritDimensionValueDTO
 from apps.accounting.models import AccountingDimension, AccountingIntegration
 from apps.accounting.secrets import SecretMissingError, SecretProvider
 from apps.accounting.services import (
+    AccountingDimensionValueService,
     AccountingDimensionSyncService,
+    CreateAccountingDimensionValueCommand,
     ProjectCodeAllocationService,
     SuggestNextProjectCodeCommand,
     SyncAccountingDimensionsCommand,
@@ -931,6 +933,232 @@ class AccountingDimensionSyncServiceTests(TestCase):
 
         with patch.object(MeritAPIClient, "list_dimensions", return_value=[dto]):
             AccountingDimensionSyncService.sync(SyncAccountingDimensionsCommand(integration=integration))
+
+        self.assertEqual(Project.objects.count(), project_count)
+
+
+class AccountingDimensionValueServiceTests(TestCase):
+    def _dto(self, external_id="dv-1", code="26124", name="Kanarbiku", active=True):
+        return MeritDimensionValueDTO(
+            external_id=external_id,
+            code=code,
+            name=name,
+            dimension_type="project",
+            active=active,
+            raw={"DimValueId": external_id, "DimValueCode": code, "DimValueName": name},
+        )
+
+    def test_creates_dimension_via_mocked_merit_api_client(self):
+        integration = create_merit_integration()
+        dto = self._dto()
+
+        with patch.object(MeritAPIClient, "create_dimension_value", return_value=dto) as create_mock:
+            result = AccountingDimensionValueService.create(
+                CreateAccountingDimensionValueCommand(
+                    integration=integration,
+                    code="26124",
+                    name="Kanarbiku",
+                    dimension_id="dim-project",
+                )
+            )
+
+        create_mock.assert_called_once_with(
+            code="26124",
+            name="Kanarbiku",
+            dimension_type="project",
+            dimension_id="dim-project",
+            external_id=None,
+            end_date=None,
+        )
+        self.assertTrue(result.created)
+        self.assertFalse(result.updated)
+        self.assertEqual(result.dto, dto)
+        self.assertEqual(result.dimension.organization, integration.organization)
+        self.assertEqual(result.dimension.provider, integration.provider)
+        self.assertEqual(result.dimension.integration, integration)
+        self.assertEqual(result.dimension.external_id, "dv-1")
+        self.assertEqual(result.dimension.code, "26124")
+        self.assertEqual(result.dimension.name, "Kanarbiku")
+        self.assertEqual(result.dimension.raw_data, dto.raw)
+
+    def test_updates_existing_accounting_dimension(self):
+        integration = create_merit_integration()
+        dimension = AccountingDimension.objects.create(
+            organization=integration.organization,
+            integration=integration,
+            provider=integration.provider,
+            external_id="dv-1",
+            code="26124",
+            name="Old name",
+        )
+        dto = self._dto(name="New name")
+
+        with patch.object(MeritAPIClient, "create_dimension_value", return_value=dto):
+            result = AccountingDimensionValueService.create(
+                CreateAccountingDimensionValueCommand(
+                    integration=integration,
+                    code="26124",
+                    name="New name",
+                    dimension_id="dim-project",
+                    external_id="dv-1",
+                )
+            )
+
+        dimension.refresh_from_db()
+        self.assertFalse(result.created)
+        self.assertTrue(result.updated)
+        self.assertEqual(dimension.name, "New name")
+        self.assertIsNotNone(dimension.last_synced_at)
+
+    def test_does_not_duplicate_same_code(self):
+        integration = create_merit_integration()
+        AccountingDimension.objects.create(
+            organization=integration.organization,
+            integration=integration,
+            provider=integration.provider,
+            external_id="old-id",
+            code="26124",
+            name="Existing",
+        )
+        dto = self._dto(external_id="dv-1", code="26124", name="Updated")
+
+        with patch.object(MeritAPIClient, "create_dimension_value", return_value=dto):
+            result = AccountingDimensionValueService.create(
+                CreateAccountingDimensionValueCommand(
+                    integration=integration,
+                    code="26124",
+                    name="Updated",
+                    dimension_id="dim-project",
+                )
+            )
+
+        self.assertFalse(result.created)
+        self.assertEqual(AccountingDimension.objects.filter(code="26124").count(), 1)
+        self.assertEqual(AccountingDimension.objects.get(code="26124").external_id, "dv-1")
+
+    def test_sets_last_synced_at(self):
+        integration = create_merit_integration()
+
+        with patch.object(MeritAPIClient, "create_dimension_value", return_value=self._dto()):
+            result = AccountingDimensionValueService.create(
+                CreateAccountingDimensionValueCommand(
+                    integration=integration,
+                    code="26124",
+                    name="Kanarbiku",
+                    dimension_id="dim-project",
+                )
+            )
+
+        self.assertIsNotNone(result.dimension.last_synced_at)
+
+    def test_creates_audit_event(self):
+        integration = create_merit_integration()
+
+        with patch.object(MeritAPIClient, "create_dimension_value", return_value=self._dto()):
+            AccountingDimensionValueService.create(
+                CreateAccountingDimensionValueCommand(
+                    integration=integration,
+                    code="26124",
+                    name="Kanarbiku",
+                    dimension_id="dim-project",
+                )
+            )
+
+        event = AuditEvent.objects.get(event_type="accounting_dimension_value_created")
+        self.assertEqual(event.organization, integration.organization)
+        self.assertEqual(event.object_type, "AccountingDimension")
+        self.assertEqual(event.metadata["created"], True)
+
+    def test_metadata_is_not_mutated(self):
+        integration = create_merit_integration()
+        metadata = {"source": {"requested_by": "test"}}
+        original_metadata = {"source": {"requested_by": "test"}}
+
+        with patch.object(MeritAPIClient, "create_dimension_value", return_value=self._dto()):
+            result = AccountingDimensionValueService.create(
+                CreateAccountingDimensionValueCommand(
+                    integration=integration,
+                    code="26124",
+                    name="Kanarbiku",
+                    dimension_id="dim-project",
+                    metadata=metadata,
+                )
+            )
+
+        result.metadata["source"]["requested_by"] = "changed"
+        self.assertEqual(metadata, original_metadata)
+
+    def test_api_error_prevents_db_write(self):
+        integration = create_merit_integration()
+
+        with patch.object(
+            MeritAPIClient,
+            "create_dimension_value",
+            side_effect=AccountingAPIError("Merit down"),
+        ):
+            with self.assertRaises(AccountingAPIError):
+                AccountingDimensionValueService.create(
+                    CreateAccountingDimensionValueCommand(
+                        integration=integration,
+                        code="26124",
+                        name="Kanarbiku",
+                        dimension_id="dim-project",
+                    )
+                )
+
+        self.assertFalse(AccountingDimension.objects.exists())
+        self.assertFalse(AuditEvent.objects.filter(event_type="accounting_dimension_value_created").exists())
+
+    def test_requires_dimension_id(self):
+        integration = create_merit_integration()
+
+        with self.assertRaises(ValueError):
+            AccountingDimensionValueService.create(
+                CreateAccountingDimensionValueCommand(
+                    integration=integration,
+                    code="26124",
+                    name="Kanarbiku",
+                )
+            )
+
+    def test_organization_scoped(self):
+        integration = create_merit_integration()
+        other_integration = create_merit_integration(create_organization("Other Org"))
+        AccountingDimension.objects.create(
+            organization=other_integration.organization,
+            integration=other_integration,
+            provider=other_integration.provider,
+            external_id="dv-1",
+            code="26124",
+            name="Other org dimension",
+        )
+
+        with patch.object(MeritAPIClient, "create_dimension_value", return_value=self._dto()):
+            result = AccountingDimensionValueService.create(
+                CreateAccountingDimensionValueCommand(
+                    integration=integration,
+                    code="26124",
+                    name="Kanarbiku",
+                    dimension_id="dim-project",
+                )
+            )
+
+        self.assertTrue(result.created)
+        self.assertEqual(AccountingDimension.objects.filter(code="26124").count(), 2)
+
+    def test_no_project_created(self):
+        integration = create_merit_integration()
+        project_count = Project.objects.count()
+
+        with patch.object(MeritAPIClient, "create_dimension_value", return_value=self._dto()):
+            AccountingDimensionValueService.create(
+                CreateAccountingDimensionValueCommand(
+                    integration=integration,
+                    code="26124",
+                    name="Kanarbiku",
+                    dimension_id="dim-project",
+                )
+            )
 
         self.assertEqual(Project.objects.count(), project_count)
 

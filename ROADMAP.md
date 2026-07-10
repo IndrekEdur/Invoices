@@ -12,7 +12,7 @@ Current engineering phase: Engineering Standards.
 
 Current implementation phase: Platform Core.
 
-Current implementation: Merit Dimension Value API.
+Current implementation: Accounting Dimension Value Service.
 
 Current implementation focus: End-to-End Email Processing.
 

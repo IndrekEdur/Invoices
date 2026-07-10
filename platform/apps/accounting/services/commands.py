@@ -35,3 +35,25 @@ class SyncAccountingDimensionsResult:
     dimensions: list
     conflicts: list[dict]
     metadata: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class CreateAccountingDimensionValueCommand:
+    integration: object
+    code: str
+    name: str
+    dimension_type: str = "project"
+    dimension_id: object = None
+    external_id: object = None
+    end_date: object = None
+    actor: object = None
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class CreateAccountingDimensionValueResult:
+    dimension: object
+    dto: object
+    created: bool
+    updated: bool
+    metadata: dict = field(default_factory=dict)
