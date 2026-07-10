@@ -57,3 +57,30 @@ class CreateAccountingDimensionValueResult:
     created: bool
     updated: bool
     metadata: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ResolveDimensionConflictCommand:
+    organization: object
+    conflict: dict
+    resolution_type: str
+    actor: object = None
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class IgnoreDimensionConflictCommand:
+    organization: object
+    conflict: dict
+    reason: str = ""
+    actor: object = None
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class DimensionConflictResolutionResult:
+    resolution_type: str
+    affected_dimension: object
+    resolved: bool
+    message: str
+    metadata: dict = field(default_factory=dict)

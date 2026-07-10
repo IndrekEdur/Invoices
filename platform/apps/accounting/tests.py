@@ -22,10 +22,13 @@ from apps.accounting.dto import MeritDimensionDTO, MeritDimensionValueDTO
 from apps.accounting.models import AccountingDimension, AccountingIntegration
 from apps.accounting.secrets import SecretMissingError, SecretProvider
 from apps.accounting.services import (
+    AccountingDimensionConflictResolutionService,
     AccountingDimensionValueService,
     AccountingDimensionSyncService,
     CreateAccountingDimensionValueCommand,
+    IgnoreDimensionConflictCommand,
     ProjectCodeAllocationService,
+    ResolveDimensionConflictCommand,
     SuggestNextProjectCodeCommand,
     SyncAccountingDimensionsCommand,
     SyncAccountingDimensionsResult,
@@ -1404,6 +1407,244 @@ class AccountingDimensionValueServiceTests(TestCase):
             )
 
         self.assertEqual(Project.objects.count(), project_count)
+
+
+class AccountingDimensionConflictResolutionServiceTests(TestCase):
+    def _dimension(self, organization=None, **kwargs):
+        organization = organization or create_organization()
+        defaults = {
+            "provider": AccountingDimension.Provider.MERIT,
+            "external_id": "m-existing",
+            "code": "26124",
+            "name": "Local Kanarbiku",
+            "dimension_type": AccountingDimension.DimensionType.PROJECT,
+            "raw_data": {"Id": "m-existing", "Name": "Local Kanarbiku"},
+        }
+        defaults.update(kwargs)
+        return AccountingDimension.objects.create(organization=organization, **defaults)
+
+    def _conflict(self):
+        return {
+            "type": "same_code_different_external_id",
+            "code": "26124",
+            "dimension_type": "project",
+            "existing_external_id": "m-existing",
+            "incoming_external_id": "m-incoming",
+            "incoming_name": "Incoming Kanarbiku",
+            "incoming_raw": {"Id": "m-incoming", "Name": "Incoming Kanarbiku"},
+        }
+
+    def test_keep_local_does_not_change_dimension(self):
+        organization = create_organization()
+        dimension = self._dimension(organization)
+
+        result = AccountingDimensionConflictResolutionService.resolve(
+            ResolveDimensionConflictCommand(
+                organization=organization,
+                conflict=self._conflict(),
+                resolution_type="keep_local",
+            )
+        )
+
+        dimension.refresh_from_db()
+        self.assertTrue(result.resolved)
+        self.assertEqual(result.affected_dimension, dimension)
+        self.assertEqual(dimension.external_id, "m-existing")
+        self.assertEqual(dimension.name, "Local Kanarbiku")
+
+    def test_accept_incoming_updates_dimension(self):
+        organization = create_organization()
+        dimension = self._dimension(organization)
+
+        result = AccountingDimensionConflictResolutionService.resolve(
+            ResolveDimensionConflictCommand(
+                organization=organization,
+                conflict=self._conflict(),
+                resolution_type="accept_incoming",
+            )
+        )
+
+        dimension.refresh_from_db()
+        self.assertTrue(result.resolved)
+        self.assertEqual(dimension.external_id, "m-incoming")
+        self.assertEqual(dimension.name, "Incoming Kanarbiku")
+        self.assertEqual(dimension.raw_data, {"Id": "m-incoming", "Name": "Incoming Kanarbiku"})
+
+    def test_mark_inactive_sets_is_active_false(self):
+        organization = create_organization()
+        dimension = self._dimension(organization)
+
+        result = AccountingDimensionConflictResolutionService.resolve(
+            ResolveDimensionConflictCommand(
+                organization=organization,
+                conflict=self._conflict(),
+                resolution_type="mark_inactive",
+            )
+        )
+
+        dimension.refresh_from_db()
+        self.assertTrue(result.resolved)
+        self.assertFalse(dimension.is_active)
+
+    def test_manual_review_required_records_audit_but_unresolved(self):
+        organization = create_organization()
+        self._dimension(organization)
+
+        result = AccountingDimensionConflictResolutionService.resolve(
+            ResolveDimensionConflictCommand(
+                organization=organization,
+                conflict=self._conflict(),
+                resolution_type="manual_review_required",
+            )
+        )
+
+        self.assertFalse(result.resolved)
+        event = AuditEvent.objects.get(event_type="accounting_dimension_conflict_resolved")
+        self.assertEqual(event.metadata["resolution_type"], "manual_review_required")
+        self.assertFalse(event.metadata["resolved"])
+
+    def test_ignore_records_audit_and_does_not_change_dimension(self):
+        organization = create_organization()
+        dimension = self._dimension(organization)
+
+        result = AccountingDimensionConflictResolutionService.ignore(
+            IgnoreDimensionConflictCommand(
+                organization=organization,
+                conflict=self._conflict(),
+                reason="Known duplicate from Merit cleanup",
+            )
+        )
+
+        dimension.refresh_from_db()
+        self.assertTrue(result.resolved)
+        self.assertEqual(dimension.external_id, "m-existing")
+        event = AuditEvent.objects.get(event_type="accounting_dimension_conflict_resolved")
+        self.assertEqual(event.metadata["resolution_type"], "ignore")
+        self.assertEqual(event.metadata["reason"], "Known duplicate from Merit cleanup")
+
+    def test_metadata_is_not_mutated(self):
+        organization = create_organization()
+        self._dimension(organization)
+        metadata = {"source": {"view": "conflicts"}}
+        original_metadata = {"source": {"view": "conflicts"}}
+
+        result = AccountingDimensionConflictResolutionService.resolve(
+            ResolveDimensionConflictCommand(
+                organization=organization,
+                conflict=self._conflict(),
+                resolution_type="keep_local",
+                metadata=metadata,
+            )
+        )
+
+        result.metadata["source"]["view"] = "changed"
+        self.assertEqual(metadata, original_metadata)
+
+    def test_conflict_is_not_mutated(self):
+        organization = create_organization()
+        self._dimension(organization)
+        conflict = self._conflict()
+        original_conflict = self._conflict()
+
+        AccountingDimensionConflictResolutionService.resolve(
+            ResolveDimensionConflictCommand(
+                organization=organization,
+                conflict=conflict,
+                resolution_type="accept_incoming",
+            )
+        )
+
+        self.assertEqual(conflict, original_conflict)
+
+    def test_invalid_resolution_type_raises_clear_error(self):
+        organization = create_organization()
+
+        with self.assertRaisesMessage(ValueError, "Unsupported dimension conflict resolution type"):
+            AccountingDimensionConflictResolutionService.resolve(
+                ResolveDimensionConflictCommand(
+                    organization=organization,
+                    conflict=self._conflict(),
+                    resolution_type="auto_fix",
+                )
+            )
+
+    def test_no_merit_api_calls(self):
+        organization = create_organization()
+        self._dimension(organization)
+
+        with patch.object(MeritAPIClient, "list_dimensions") as list_mock:
+            with patch.object(MeritAPIClient, "create_dimension_value") as create_mock:
+                AccountingDimensionConflictResolutionService.resolve(
+                    ResolveDimensionConflictCommand(
+                        organization=organization,
+                        conflict=self._conflict(),
+                        resolution_type="keep_local",
+                    )
+                )
+
+        list_mock.assert_not_called()
+        create_mock.assert_not_called()
+
+    def test_no_project_changes(self):
+        organization = create_organization()
+        self._dimension(organization)
+        project_count = Project.objects.count()
+
+        AccountingDimensionConflictResolutionService.resolve(
+            ResolveDimensionConflictCommand(
+                organization=organization,
+                conflict=self._conflict(),
+                resolution_type="accept_incoming",
+            )
+        )
+
+        self.assertEqual(Project.objects.count(), project_count)
+
+    def test_organization_scoping_respected(self):
+        organization = create_organization()
+        other_organization = create_organization("Other Org")
+        dimension = self._dimension(organization)
+        other_dimension = self._dimension(
+            other_organization,
+            external_id="m-other",
+            code="26124",
+            name="Other org dimension",
+        )
+
+        result = AccountingDimensionConflictResolutionService.resolve(
+            ResolveDimensionConflictCommand(
+                organization=organization,
+                conflict=self._conflict(),
+                resolution_type="mark_inactive",
+            )
+        )
+
+        dimension.refresh_from_db()
+        other_dimension.refresh_from_db()
+        self.assertEqual(result.affected_dimension, dimension)
+        self.assertFalse(dimension.is_active)
+        self.assertTrue(other_dimension.is_active)
+
+    def test_audit_event_created_for_each_action(self):
+        organization = create_organization()
+        self._dimension(organization)
+
+        AccountingDimensionConflictResolutionService.resolve(
+            ResolveDimensionConflictCommand(
+                organization=organization,
+                conflict=self._conflict(),
+                resolution_type="keep_local",
+            )
+        )
+        AccountingDimensionConflictResolutionService.ignore(
+            IgnoreDimensionConflictCommand(
+                organization=organization,
+                conflict=self._conflict(),
+                reason="Reviewed",
+            )
+        )
+
+        self.assertEqual(AuditEvent.objects.filter(event_type="accounting_dimension_conflict_resolved").count(), 2)
 
 
 class ProjectCodeAllocationServiceTests(TestCase):

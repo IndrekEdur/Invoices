@@ -12,7 +12,7 @@ Current engineering phase: Engineering Standards.
 
 Current implementation phase: Platform Core.
 
-Current implementation: Merit Dimension Conflict Review UI.
+Current implementation: Dimension Conflict Resolution Service.
 
 Current implementation focus: End-to-End Email Processing.
 
