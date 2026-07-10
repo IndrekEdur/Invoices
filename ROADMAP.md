@@ -12,7 +12,7 @@ Current engineering phase: Engineering Standards.
 
 Current implementation phase: Platform Core.
 
-Current implementation: Accounting Integration Management UI.
+Current implementation: Merit Connection Test.
 
 Current implementation focus: End-to-End Email Processing.
 

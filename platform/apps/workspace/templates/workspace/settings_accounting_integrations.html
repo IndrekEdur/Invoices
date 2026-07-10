@@ -43,6 +43,10 @@
                                         <div class="flex flex-wrap gap-2">
                                             <a href="{% url 'workspace:settings_accounting_integration_detail' integration.id %}" class="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700">View</a>
                                             <a href="{% url 'workspace:settings_accounting_integration_edit' integration.id %}" class="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700">Edit</a>
+                                            <form method="post" action="{% url 'workspace:settings_accounting_integration_test_connection' integration.id %}">
+                                                {% csrf_token %}
+                                                <button type="submit" class="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700">Test connection</button>
+                                            </form>
                                             {% if integration.provider == "merit" %}
                                                 <form method="post" action="{% url 'workspace:merit_dimensions_sync' %}">
                                                     {% csrf_token %}

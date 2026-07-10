@@ -825,6 +825,129 @@ class AccountingIntegrationManagementUITests(TestCase):
 
         self.assertContains(response, reverse("workspace:settings_accounting_integrations"))
 
+    def test_connection_test_endpoint_requires_post(self):
+        organization = create_organization()
+        integration = create_merit_integration(organization)
+
+        response = self.client.get(
+            reverse("workspace:settings_accounting_integration_test_connection", kwargs={"integration_id": integration.id})
+        )
+
+        self.assertEqual(response.status_code, 405)
+
+    @patch("apps.workspace.views.MeritAPIClient")
+    def test_merit_api_client_health_called(self, client_mock):
+        organization = create_organization()
+        integration = create_merit_integration(organization)
+        client_mock.return_value.health.return_value = {
+            "healthy": True,
+            "provider": "merit",
+            "mode": "local_check",
+            "response_time_ms": 1.25,
+        }
+
+        self.client.post(
+            reverse("workspace:settings_accounting_integration_test_connection", kwargs={"integration_id": integration.id})
+        )
+
+        client_mock.assert_called_once_with(integration)
+        client_mock.return_value.health.assert_called_once()
+
+    @patch("apps.workspace.views.MeritAPIClient")
+    def test_success_message_rendered(self, client_mock):
+        organization = create_organization()
+        integration = create_merit_integration(organization)
+        client_mock.return_value.health.return_value = {
+            "healthy": True,
+            "provider": "merit",
+            "mode": "local_check",
+            "response_time_ms": 2.5,
+        }
+
+        response = self.client.post(
+            reverse("workspace:settings_accounting_integration_test_connection", kwargs={"integration_id": integration.id}),
+            follow=True,
+        )
+
+        self.assertContains(response, "Merit connection/configuration check successful")
+        self.assertContains(response, "provider merit")
+        self.assertContains(response, "mode local_check")
+        self.assertContains(response, "response time 2.5 ms")
+
+    @patch("apps.workspace.views.MeritAPIClient")
+    def test_unsupported_provider_handled_safely(self, client_mock):
+        organization = create_organization()
+        integration = AccountingIntegration.objects.create(
+            organization=organization,
+            provider=AccountingIntegration.Provider.XERO,
+            display_name="Xero",
+            encrypted_secret_placeholder="xero-secret",
+        )
+
+        response = self.client.post(
+            reverse("workspace:settings_accounting_integration_test_connection", kwargs={"integration_id": integration.id}),
+            follow=True,
+        )
+
+        client_mock.assert_not_called()
+        self.assertContains(response, "Connection test not implemented for this provider yet.")
+        self.assertNotContains(response, "xero-secret")
+
+    @patch("apps.workspace.views.MeritAPIClient")
+    def test_error_handled_safely(self, client_mock):
+        organization = create_organization()
+        integration = create_merit_integration(organization)
+        integration.encrypted_secret_placeholder = "very-secret-value"
+        integration.save()
+        client_mock.return_value.health.side_effect = RuntimeError("very-secret-value failed")
+
+        response = self.client.post(
+            reverse("workspace:settings_accounting_integration_test_connection", kwargs={"integration_id": integration.id}),
+            follow=True,
+        )
+
+        self.assertContains(response, "Merit connection test failed. Check integration settings and try again.")
+        self.assertNotContains(response, "very-secret-value")
+
+    def test_list_renders_test_connection_button(self):
+        organization = create_organization()
+        integration = create_merit_integration(organization)
+
+        response = self.client.get(reverse("workspace:settings_accounting_integrations"))
+
+        self.assertContains(response, "Test connection")
+        self.assertContains(
+            response,
+            reverse("workspace:settings_accounting_integration_test_connection", kwargs={"integration_id": integration.id}),
+        )
+
+    def test_detail_renders_test_connection_button(self):
+        organization = create_organization()
+        integration = create_merit_integration(organization)
+
+        response = self.client.get(
+            reverse("workspace:settings_accounting_integration_detail", kwargs={"integration_id": integration.id})
+        )
+
+        self.assertContains(response, "Test Connection")
+        self.assertContains(
+            response,
+            reverse("workspace:settings_accounting_integration_test_connection", kwargs={"integration_id": integration.id}),
+        )
+
+    @patch("apps.workspace.views.MeritAPIClient")
+    def test_connection_test_does_not_sync_dimensions(self, client_mock):
+        organization = create_organization()
+        integration = create_merit_integration(organization)
+        client_mock.return_value.health.return_value = {"healthy": True, "provider": "merit"}
+
+        self.client.post(
+            reverse("workspace:settings_accounting_integration_test_connection", kwargs={"integration_id": integration.id})
+        )
+
+        self.assertFalse(AccountingDimension.objects.exists())
+        self.assertFalse(client_mock.return_value.list_dimensions.called)
+
 
 class InboxMVPTests(TestCase):
     def test_inbox_returns_200_with_empty_db(self):

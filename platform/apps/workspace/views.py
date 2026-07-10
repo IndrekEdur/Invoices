@@ -27,6 +27,7 @@ from apps.communications.services import (
     SyncEmailAccountCommand,
 )
 from apps.accounting.models import AccountingIntegration
+from apps.accounting.connectors import MeritAPIClient
 from apps.accounting.services import (
     AccountingDimensionSyncService,
     AccountingDimensionValueService,
@@ -779,6 +780,33 @@ class AccountingIntegrationEditView(AccountingIntegrationSettingsMixin, Workspac
 
         integration = form.save()
         messages.success(request, f"Accounting integration {integration.display_name} updated.")
+        return redirect("workspace:settings_accounting_integration_detail", integration_id=integration.id)
+
+
+class AccountingIntegrationTestConnectionView(AccountingIntegrationSettingsMixin, View):
+    def post(self, request, integration_id, *args, **kwargs):
+        integration = self._integration()
+
+        if integration.provider != AccountingIntegration.Provider.MERIT:
+            messages.warning(request, "Connection test not implemented for this provider yet.")
+            return redirect("workspace:settings_accounting_integration_detail", integration_id=integration.id)
+
+        try:
+            health = MeritAPIClient(integration).health()
+        except Exception:
+            messages.error(request, "Merit connection test failed. Check integration settings and try again.")
+            return redirect("workspace:settings_accounting_integration_detail", integration_id=integration.id)
+
+        detail_parts = [f"provider {health.get('provider', integration.provider)}"]
+        if health.get("mode"):
+            detail_parts.append(f"mode {health['mode']}")
+        if health.get("response_time_ms") is not None:
+            detail_parts.append(f"response time {health['response_time_ms']} ms")
+
+        messages.success(
+            request,
+            "Merit connection/configuration check successful: " + ", ".join(detail_parts) + ".",
+        )
         return redirect("workspace:settings_accounting_integration_detail", integration_id=integration.id)
 
 
