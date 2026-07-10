@@ -40,6 +40,7 @@ from .services import (
     InboxContextBuilder,
     ProjectLinkReviewContextBuilder,
     ProjectsContextBuilder,
+    SettingsContextBuilder,
 )
 
 
@@ -550,8 +551,24 @@ class AssistantView(WorkspacePageView):
 
 class SettingsView(WorkspacePageView):
     template_name = "workspace/settings.html"
-    page_title = "Administration"
+    page_title = "Settings"
     section = "settings"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(SettingsContextBuilder.build())
+        return context
+
+
+class SettingsSectionView(WorkspacePageView):
+    template_name = "workspace/settings_section.html"
+    page_title = "Settings"
+    section = "settings"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["settings_section"] = self.kwargs["section_slug"]
+        return context
 
 
 class DesignSystemView(WorkspacePageView):

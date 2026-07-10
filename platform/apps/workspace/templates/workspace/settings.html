@@ -1,8 +1,195 @@
 {% extends "base.html" %}
-{% block title %}Administration | Operations Workspace Platform{% endblock %}
+{% block title %}Settings | Operations Workspace Platform{% endblock %}
 {% block content %}
-<section class="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-    <h1 class="text-2xl font-semibold">Administration</h1>
-    <p class="mt-2 text-sm text-slate-600">Organization settings, users, integrations, permissions, and workspace configuration will appear here.</p>
-</section>
+<div class="space-y-10">
+    {% include "workspace/partials/components/page_header.html" with eyebrow="Settings" title="Platform Settings Workspace" body="Operational control center for integrations, sync health, project numbering, security, users and future system configuration." %}
+
+    <section class="grid gap-5 sm:grid-cols-2 xl:grid-cols-6">
+        {% for card in summary_cards %}
+            <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+                <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">{{ card.title }}</div>
+                <div class="mt-3 text-3xl font-semibold text-slate-950">{{ card.count }}</div>
+                <div class="mt-4">{% include "workspace/partials/components/status_badge.html" with status=card.status label="tracked" %}</div>
+            </article>
+        {% endfor %}
+    </section>
+
+    <section class="space-y-4">
+        {% include "workspace/partials/components/section_header.html" with title="Settings Areas" body="Read-only entry points for future editable configuration workflows." %}
+        <div class="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
+            {% for card in settings_cards %}
+                <a href="{% url 'workspace:settings_section' card.slug %}" class="group flex min-h-40 flex-col justify-between rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md">
+                    <div>
+                        <div class="flex items-start justify-between gap-3">
+                            <h2 class="text-base font-semibold text-slate-950">{{ card.title }}</h2>
+                            {% if card.status == "ready" %}
+                                {% include "workspace/partials/components/status_badge.html" with status="success" label="ready" %}
+                            {% elif card.status == "coming_soon" %}
+                                {% include "workspace/partials/components/status_badge.html" with status="pending" label="coming soon" %}
+                            {% else %}
+                                {% include "workspace/partials/components/status_badge.html" with status="neutral" label=card.status %}
+                            {% endif %}
+                        </div>
+                        <p class="mt-3 text-sm leading-6 text-slate-600">{{ card.body }}</p>
+                    </div>
+                    <div class="mt-5 text-sm font-semibold text-blue-700 transition group-hover:text-blue-900">Open placeholder</div>
+                </a>
+            {% endfor %}
+        </div>
+    </section>
+
+    <div class="grid gap-8 xl:grid-cols-2">
+        <section class="space-y-4">
+            {% include "workspace/partials/components/section_header.html" with title="Email Account Settings" body="Configured mailboxes, sync status and future connection tests." %}
+            <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <div class="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+                    <div class="text-sm font-semibold text-slate-950">Configured accounts</div>
+                    {% include "workspace/partials/sync_button.html" with next_url=request.get_full_path %}
+                </div>
+                {% if email_accounts %}
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full divide-y divide-slate-200 text-sm">
+                            <thead class="bg-slate-50">
+                                <tr>
+                                    <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Provider</th>
+                                    <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Email</th>
+                                    <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Active</th>
+                                    <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Last sync</th>
+                                    <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Test</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-100">
+                                {% for account in email_accounts %}
+                                    <tr class="odd:bg-white even:bg-slate-50/50">
+                                        <td class="px-5 py-4 font-medium text-slate-950">{{ account.provider }}</td>
+                                        <td class="px-5 py-4 text-slate-700">{{ account.email_address }}</td>
+                                        <td class="px-5 py-4">
+                                            {% if account.is_active %}
+                                                {% include "workspace/partials/components/status_badge.html" with status="success" label="active" %}
+                                            {% else %}
+                                                {% include "workspace/partials/components/status_badge.html" with status="neutral" label="inactive" %}
+                                            {% endif %}
+                                        </td>
+                                        <td class="px-5 py-4 text-slate-700">{{ account.last_sync_at|date:"Y-m-d H:i"|default:"Never" }}</td>
+                                        <td class="px-5 py-4">
+                                            <button type="button" class="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-600" disabled>Test Connection</button>
+                                        </td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% else %}
+                    {% include "workspace/partials/components/empty_state.html" with title="No email accounts configured" body="Email account management will be added in a later settings story." %}
+                {% endif %}
+            </div>
+        </section>
+
+        <section class="space-y-4">
+            {% include "workspace/partials/components/section_header.html" with title="Accounting Integration Settings" body="Provider configuration, sync state and future connection checks." %}
+            <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <div class="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+                    <div class="text-sm font-semibold text-slate-950">Active integrations</div>
+                    <form method="post" action="{% url 'workspace:merit_dimensions_sync' %}">
+                        {% csrf_token %}
+                        <button type="submit" class="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800 shadow-sm transition hover:bg-slate-50">Sync Merit Dimensions</button>
+                    </form>
+                </div>
+                {% if accounting_integrations %}
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full divide-y divide-slate-200 text-sm">
+                            <thead class="bg-slate-50">
+                                <tr>
+                                    <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Provider</th>
+                                    <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Status</th>
+                                    <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Last sync</th>
+                                    <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Test</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-100">
+                                {% for integration in accounting_integrations %}
+                                    <tr class="odd:bg-white even:bg-slate-50/50">
+                                        <td class="px-5 py-4">
+                                            <div class="font-medium text-slate-950">{{ integration.display_name }}</div>
+                                            <div class="text-xs text-slate-500">{{ integration.provider }}</div>
+                                        </td>
+                                        <td class="px-5 py-4">
+                                            {% if integration.is_active %}
+                                                {% include "workspace/partials/components/status_badge.html" with status="success" label="active" %}
+                                            {% else %}
+                                                {% include "workspace/partials/components/status_badge.html" with status="neutral" label="inactive" %}
+                                            {% endif %}
+                                        </td>
+                                        <td class="px-5 py-4 text-slate-700">{{ integration.last_sync_at|date:"Y-m-d H:i"|default:"Never" }}</td>
+                                        <td class="px-5 py-4">
+                                            <button type="button" class="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-600" disabled>Test Connection</button>
+                                        </td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% else %}
+                    {% include "workspace/partials/components/empty_state.html" with title="No accounting integrations configured" body="Merit and future accounting provider settings will appear here." %}
+                {% endif %}
+            </div>
+        </section>
+    </div>
+
+    <div class="grid gap-8 xl:grid-cols-3">
+        <section class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div class="flex items-start justify-between gap-4">
+                <div>
+                    <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Merit</div>
+                    <h2 class="mt-2 text-xl font-semibold text-slate-950">Merit Settings</h2>
+                </div>
+                {% if merit.integration %}
+                    {% include "workspace/partials/components/status_badge.html" with status="success" label="active" %}
+                {% else %}
+                    {% include "workspace/partials/components/status_badge.html" with status="warning" label="not configured" %}
+                {% endif %}
+            </div>
+            <dl class="mt-6 space-y-4 text-sm">
+                <div class="flex justify-between gap-4"><dt class="text-slate-500">Active integration</dt><dd class="font-medium text-slate-950">{{ merit.integration.display_name|default:"None" }}</dd></div>
+                <div class="flex justify-between gap-4"><dt class="text-slate-500">Project Dimension configured</dt><dd>{% if merit.project_dimension_configured %}{% include "workspace/partials/components/status_badge.html" with status="success" label="yes" %}{% else %}{% include "workspace/partials/components/status_badge.html" with status="warning" label="missing" %}{% endif %}</dd></div>
+                <div class="flex justify-between gap-4"><dt class="text-slate-500">Last sync</dt><dd class="text-slate-700">{{ merit.last_sync_at|date:"Y-m-d H:i"|default:"Never" }}</dd></div>
+                <div class="flex justify-between gap-4"><dt class="text-slate-500">Last error</dt><dd class="text-slate-700">{{ merit.last_error|default:"None" }}</dd></div>
+                <div class="flex justify-between gap-4"><dt class="text-slate-500">Dimension cache count</dt><dd class="font-medium text-slate-950">{{ merit.dimension_cache_count }}</dd></div>
+            </dl>
+        </section>
+
+        <section class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Projects</div>
+            <h2 class="mt-2 text-xl font-semibold text-slate-950">Project Numbering</h2>
+            <dl class="mt-6 space-y-4 text-sm">
+                <div class="flex justify-between gap-4"><dt class="text-slate-500">Highest project code</dt><dd class="font-medium text-slate-950">{{ project_numbering.highest_project_code|default:"None" }}</dd></div>
+                <div class="flex justify-between gap-4"><dt class="text-slate-500">Next suggested code</dt><dd class="font-medium text-slate-950">{{ project_numbering.next_suggested_code|default:"-" }}</dd></div>
+                <div class="flex justify-between gap-4"><dt class="text-slate-500">Cached project dimensions</dt><dd class="font-medium text-slate-950">{{ project_numbering.cached_project_dimensions }}</dd></div>
+            </dl>
+            <p class="mt-5 text-sm leading-6 text-slate-600">Suggestions use Workspace projects and cached accounting project dimensions.</p>
+        </section>
+
+        <section class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">System</div>
+            <h2 class="mt-2 text-xl font-semibold text-slate-950">System Health</h2>
+            <div class="mt-6 space-y-3">
+                {% for health in system_health_cards %}
+                    <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                        <div class="flex items-center justify-between gap-3">
+                            <div class="font-semibold text-slate-950">{{ health.title }}</div>
+                            {% if health.status == "healthy" %}
+                                {% include "workspace/partials/components/status_badge.html" with status="success" label="Healthy" %}
+                            {% elif health.status == "warning" %}
+                                {% include "workspace/partials/components/status_badge.html" with status="warning" label="Warning" %}
+                            {% else %}
+                                {% include "workspace/partials/components/status_badge.html" with status="neutral" label="Unknown" %}
+                            {% endif %}
+                        </div>
+                        <p class="mt-2 text-sm text-slate-600">{{ health.body }}</p>
+                    </div>
+                {% endfor %}
+            </div>
+        </section>
+    </div>
+</div>
 {% endblock %}

@@ -21,6 +21,7 @@ from .views import (
     ProjectsView,
     ReviewsView,
     SearchView,
+    SettingsSectionView,
     SettingsView,
 )
 
@@ -48,5 +49,6 @@ urlpatterns = [
     path("search/", SearchView.as_view(), name="search"),
     path("assistant/", AssistantView.as_view(), name="assistant"),
     path("settings/", SettingsView.as_view(), name="settings"),
+    path("settings/<slug:section_slug>/", SettingsSectionView.as_view(), name="settings_section"),
     path("design-system/", DesignSystemView.as_view(), name="design_system"),
 ]

@@ -265,6 +265,114 @@ class DashboardMVPTests(TestCase):
         self.assertContains(response, "dashboard.test")
 
 
+class SettingsWorkspaceTests(TestCase):
+    def test_settings_page_returns_200(self):
+        response = self.client.get(reverse("workspace:settings"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Platform Settings Workspace")
+
+    def test_summary_counts_render(self):
+        organization = create_organization()
+        create_email_account(organization)
+        create_merit_integration(organization)
+        create_project(organization, code="26150", name="Settings project")
+        AccountingDimension.objects.create(organization=organization, code="26151", name="Settings dimension")
+        AuditEvent.objects.create(event_type="settings.test", object_type="settings", object_id="1")
+
+        response = self.client.get(reverse("workspace:settings"))
+
+        for label in [
+            "Organizations",
+            "Email Accounts",
+            "Accounting Integrations",
+            "Projects",
+            "Accounting Dimensions",
+            "Recent Audit Events",
+        ]:
+            with self.subTest(label=label):
+                self.assertContains(response, label)
+
+    def test_email_accounts_shown(self):
+        organization = create_organization()
+        create_email_account(organization)
+
+        response = self.client.get(reverse("workspace:settings"))
+
+        self.assertContains(response, "Email Account Settings")
+        self.assertContains(response, "workspace@example.com")
+        self.assertContains(response, "Sync now")
+        self.assertContains(response, "Test Connection")
+
+    def test_accounting_integrations_shown(self):
+        organization = create_organization()
+        create_merit_integration(organization)
+
+        response = self.client.get(reverse("workspace:settings"))
+
+        self.assertContains(response, "Accounting Integration Settings")
+        self.assertContains(response, "Merit Aktiva")
+        self.assertContains(response, "Sync Merit Dimensions")
+
+    def test_merit_section_renders(self):
+        organization = create_organization()
+        create_merit_integration(organization, metadata={"project_dimension_id": "dim-project"})
+        AccountingDimension.objects.create(
+            organization=organization,
+            code="26152",
+            name="Merit cached dimension",
+            last_synced_at=timezone.now(),
+        )
+
+        response = self.client.get(reverse("workspace:settings"))
+
+        self.assertContains(response, "Merit Settings")
+        self.assertContains(response, "Project Dimension configured")
+        self.assertContains(response, "Dimension cache count")
+        self.assertContains(response, "yes")
+
+    def test_project_numbering_renders(self):
+        organization = create_organization()
+        create_project(organization, code="26153", name="Highest project")
+        AccountingDimension.objects.create(organization=organization, code="26154", name="Cached dimension")
+
+        response = self.client.get(reverse("workspace:settings"))
+
+        self.assertContains(response, "Project Numbering")
+        self.assertContains(response, "Highest project code")
+        self.assertContains(response, "26153")
+        self.assertContains(response, "Next suggested code")
+        self.assertContains(response, "26155")
+
+    def test_system_health_cards_render(self):
+        response = self.client.get(reverse("workspace:settings"))
+
+        for label in ["System Health", "Email", "Accounting", "Knowledge", "Database", "Storage"]:
+            with self.subTest(label=label):
+                self.assertContains(response, label)
+
+    def test_navigation_cards_render(self):
+        response = self.client.get(reverse("workspace:settings"))
+
+        for label in [
+            "General",
+            "Organizations",
+            "Email Accounts",
+            "Accounting",
+            "Merit",
+            "Project Numbering",
+            "Knowledge",
+            "Documents",
+            "Dropbox (Coming Soon)",
+            "Users &amp; Roles",
+            "Security",
+            "Audit",
+            "System Health",
+        ]:
+            with self.subTest(label=label):
+                self.assertContains(response, label)
+
+
 class InboxMVPTests(TestCase):
     def test_inbox_returns_200_with_empty_db(self):
         response = self.client.get(reverse("workspace:inbox"))
