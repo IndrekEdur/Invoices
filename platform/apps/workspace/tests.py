@@ -14,7 +14,7 @@ from apps.communications.models import (
     EmailQuestion,
 )
 from apps.accounting.models import AccountingDimension, AccountingIntegration
-from apps.accounting.services import SyncAccountingDimensionsResult
+from apps.accounting.services import CreateAccountingDimensionValueResult, SyncAccountingDimensionsResult
 from apps.core.models import AuditEvent
 from apps.core.services import CreateOrganizationCommand, OrganizationService
 from apps.documents.models import Document
@@ -56,7 +56,7 @@ def create_project(organization, code="26070", name="Workspace Project"):
     return Project.objects.create(organization=organization, code=code, name=name)
 
 
-def create_merit_integration(organization):
+def create_merit_integration(organization, metadata=None):
     return AccountingIntegration.objects.create(
         organization=organization,
         provider=AccountingIntegration.Provider.MERIT,
@@ -64,6 +64,7 @@ def create_merit_integration(organization):
         api_base_url="https://merit.example.test",
         api_id="api-id",
         encrypted_secret_placeholder="api-secret",
+        metadata=metadata or {},
     )
 
 
@@ -572,6 +573,25 @@ class ProjectListManagementUITests(TestCase):
         self.assertContains(response, "Suggested next code")
         self.assertContains(response, "26130")
 
+    def test_create_page_without_active_merit_integration_disables_checkbox(self):
+        create_organization()
+
+        response = self.client.get(reverse("workspace:project_create"))
+
+        self.assertContains(response, "No active Merit integration configured.")
+        self.assertContains(response, 'name="create_merit_dimension"', html=False)
+        self.assertContains(response, "disabled", html=False)
+
+    def test_create_page_with_merit_integration_shows_dimension_option(self):
+        organization = create_organization()
+        create_merit_integration(organization, metadata={"project_dimension_id": "dim-project"})
+
+        response = self.client.get(reverse("workspace:project_create"))
+
+        self.assertContains(response, "Create matching Merit dimension value")
+        self.assertContains(response, "dim-project")
+        self.assertNotContains(response, "No active Merit integration configured.")
+
     @patch("apps.workspace.views.ProjectCreationService.create_with_suggested_code")
     def test_submit_creates_project_through_service(self, create_mock):
         organization = create_organization()
@@ -609,6 +629,126 @@ class ProjectListManagementUITests(TestCase):
         self.assertEqual(command.status, Project.Status.PLANNED)
         self.assertEqual(command.min_code, "26131")
         self.assertEqual(command.prefix, "26")
+
+    @patch("apps.workspace.views.AccountingDimensionValueService.create")
+    @patch("apps.workspace.views.ProjectCreationService.create_with_suggested_code")
+    def test_create_project_without_merit_dimension_does_not_call_merit_service(self, create_mock, merit_mock):
+        organization = create_organization()
+        project = Project(id=1, organization=organization, code="26140", name="Workspace only")
+        create_mock.return_value = CreateProjectWithSuggestedCodeResult(
+            project=project,
+            suggested_code="26140",
+            allocation_summary={},
+        )
+
+        response = self.client.post(
+            reverse("workspace:project_create"),
+            {"name": "Workspace only"},
+            follow=True,
+        )
+
+        self.assertRedirects(response, reverse("workspace:projects"))
+        create_mock.assert_called_once()
+        merit_mock.assert_not_called()
+        messages = [str(message) for message in get_messages(response.wsgi_request)]
+        self.assertTrue(any("Project 26140 Workspace only created." in message for message in messages))
+
+    @patch("apps.workspace.views.AccountingDimensionValueService.create")
+    @patch("apps.workspace.views.ProjectCreationService.create_with_suggested_code")
+    def test_create_project_with_merit_dimension_calls_accounting_service(self, create_mock, merit_mock):
+        organization = create_organization()
+        integration = create_merit_integration(organization, metadata={"project_dimension_id": "dim-project"})
+        project = Project(id=1, organization=organization, code="26141", name="With Merit")
+        create_mock.return_value = CreateProjectWithSuggestedCodeResult(
+            project=project,
+            suggested_code="26141",
+            allocation_summary={},
+        )
+        merit_mock.return_value = CreateAccountingDimensionValueResult(
+            dimension=object(),
+            dto=object(),
+            created=True,
+            updated=False,
+            metadata={},
+        )
+
+        response = self.client.post(
+            reverse("workspace:project_create"),
+            {
+                "name": "With Merit",
+                "project_type": Project.Type.ELECTRICAL,
+                "status": Project.Status.ACTIVE,
+                "create_merit_dimension": "on",
+            },
+            follow=True,
+        )
+
+        self.assertRedirects(response, reverse("workspace:projects"))
+        merit_mock.assert_called_once()
+        command = merit_mock.call_args.args[0]
+        self.assertEqual(command.integration, integration)
+        self.assertEqual(command.code, "26141")
+        self.assertEqual(command.name, "With Merit")
+        self.assertEqual(command.dimension_type, "project")
+        self.assertEqual(command.dimension_id, "dim-project")
+        messages = [str(message) for message in get_messages(response.wsgi_request)]
+        self.assertTrue(any("Merit dimension value synced" in message for message in messages))
+
+    @patch("apps.workspace.views.AccountingDimensionValueService.create")
+    @patch("apps.workspace.views.ProjectCreationService.create_with_suggested_code")
+    def test_missing_project_dimension_id_handled_safely(self, create_mock, merit_mock):
+        organization = create_organization()
+        create_merit_integration(organization)
+        project = Project(id=1, organization=organization, code="26142", name="Missing dim id")
+        create_mock.return_value = CreateProjectWithSuggestedCodeResult(
+            project=project,
+            suggested_code="26142",
+            allocation_summary={},
+        )
+
+        response = self.client.post(
+            reverse("workspace:project_create"),
+            {"name": "Missing dim id", "create_merit_dimension": "on"},
+            follow=True,
+        )
+
+        self.assertRedirects(response, reverse("workspace:projects"))
+        merit_mock.assert_not_called()
+        self.assertContains(response, "Merit project dimension id is missing")
+
+    @patch("apps.workspace.views.AccountingDimensionValueService.create")
+    @patch("apps.workspace.views.ProjectCreationService.create_with_suggested_code")
+    def test_merit_service_error_handled_safely(self, create_mock, merit_mock):
+        organization = create_organization()
+        create_merit_integration(organization, metadata={"project_dimension_id": "dim-project"})
+        project = Project(id=1, organization=organization, code="26143", name="Merit fails")
+        create_mock.return_value = CreateProjectWithSuggestedCodeResult(
+            project=project,
+            suggested_code="26143",
+            allocation_summary={},
+        )
+        merit_mock.side_effect = RuntimeError("secret api error")
+
+        response = self.client.post(
+            reverse("workspace:project_create"),
+            {"name": "Merit fails", "create_merit_dimension": "on"},
+            follow=True,
+        )
+
+        self.assertRedirects(response, reverse("workspace:projects"))
+        self.assertContains(response, "Project was created, but Merit dimension value creation failed.")
+        self.assertNotContains(response, "secret api error")
+
+    def test_project_create_get_does_not_mutate(self):
+        create_organization()
+
+        with patch("apps.workspace.views.ProjectCreationService.create_with_suggested_code") as create_mock:
+            with patch("apps.workspace.views.AccountingDimensionValueService.create") as merit_mock:
+                response = self.client.get(reverse("workspace:project_create"))
+
+        self.assertEqual(response.status_code, 200)
+        create_mock.assert_not_called()
+        merit_mock.assert_not_called()
 
     def test_project_detail_page_returns_200(self):
         organization = create_organization()

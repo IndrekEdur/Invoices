@@ -2,7 +2,7 @@
 {% block title %}Create Project | Operations Workspace Platform{% endblock %}
 {% block content %}
 <div class="space-y-8">
-    {% include "workspace/partials/components/page_header.html" with eyebrow="Projects" title="Create Project" body="Create a Workspace project with the next suggested project code. Merit dimension creation will be added in future integration step." %}
+    {% include "workspace/partials/components/page_header.html" with eyebrow="Projects" title="Create Project" body="Create a Workspace project with the next suggested project code and optionally create the matching Merit project dimension value." %}
 
     {% if suggestion %}
         <section class="rounded-2xl border border-blue-200 bg-blue-50 p-5 shadow-sm">
@@ -51,8 +51,27 @@
                     <textarea id="project-description" name="description" rows="4" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm outline-none transition focus:border-slate-500 focus:ring-4 focus:ring-slate-200"></textarea>
                 </div>
             </div>
+            <div class="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+                <div class="flex items-start gap-3">
+                    <input id="create-merit-dimension"
+                           name="create_merit_dimension"
+                           type="checkbox"
+                           class="mt-1 h-4 w-4 rounded border-slate-300 text-slate-950 focus:ring-slate-500"
+                           {% if not merit_integration or not merit_project_dimension_id %}disabled{% endif %}>
+                    <div>
+                        <label for="create-merit-dimension" class="text-sm font-semibold text-slate-950">Create matching Merit dimension value</label>
+                        {% if merit_integration and merit_project_dimension_id %}
+                            <p class="mt-1 text-sm text-slate-600">Uses Merit integration {{ merit_integration.display_name }} and project dimension id {{ merit_project_dimension_id }}.</p>
+                        {% elif merit_integration %}
+                            <p class="mt-1 text-sm text-orange-700">Merit integration exists, but project dimension id is missing in integration settings.</p>
+                        {% else %}
+                            <p class="mt-1 text-sm text-orange-700">No active Merit integration configured.</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
             <div class="flex items-center justify-between border-t border-slate-200 pt-5">
-                <p class="text-sm text-slate-600">Merit dimension creation will be added in future integration step.</p>
+                <p class="text-sm text-slate-600">Project code is suggested from Workspace projects and cached accounting dimensions.</p>
                 <button type="submit" class="inline-flex items-center justify-center rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-slate-300">Create Project</button>
             </div>
         </form>

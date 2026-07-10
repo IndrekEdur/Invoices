@@ -26,7 +26,12 @@ from apps.communications.services import (
     SyncEmailAccountCommand,
 )
 from apps.accounting.models import AccountingIntegration
-from apps.accounting.services import AccountingDimensionSyncService, SyncAccountingDimensionsCommand
+from apps.accounting.services import (
+    AccountingDimensionSyncService,
+    AccountingDimensionValueService,
+    CreateAccountingDimensionValueCommand,
+    SyncAccountingDimensionsCommand,
+)
 from apps.projects.models import Project
 from apps.projects.services import CreateProjectWithSuggestedCodeCommand, ProjectCreationService
 
@@ -370,6 +375,7 @@ class ProjectCreateView(WorkspacePageView):
                 min_code=self.request.GET.get("min_code") or None,
             )
         )
+        context.update(self._merit_context())
         return context
 
     def post(self, request, *args, **kwargs):
@@ -379,6 +385,7 @@ class ProjectCreateView(WorkspacePageView):
             return redirect("workspace:project_create")
 
         actor = request.user if request.user.is_authenticated else None
+        create_merit_dimension = request.POST.get("create_merit_dimension") == "on"
 
         try:
             result = ProjectCreationService.create_with_suggested_code(
@@ -398,12 +405,65 @@ class ProjectCreateView(WorkspacePageView):
             messages.error(request, "Project creation failed. Check project data and try again.")
             return redirect("workspace:project_create")
 
-        messages.success(
-            request,
-            f"Project {result.project.code} {result.project.name} created. "
-            "Merit dimension creation will be added in future integration step.",
-        )
+        if create_merit_dimension:
+            merit_result = self._create_merit_dimension_value(request, result.project, actor)
+            if merit_result is None:
+                return redirect("workspace:projects")
+
+            messages.success(
+                request,
+                f"Project {result.project.code} {result.project.name} created and Merit dimension value synced.",
+            )
+            return redirect("workspace:projects")
+
+        messages.success(request, f"Project {result.project.code} {result.project.name} created.")
         return redirect("workspace:projects")
+
+    def _merit_context(self):
+        integration = self._active_merit_integration()
+        return {
+            "merit_integration": integration,
+            "merit_project_dimension_id": self._project_dimension_id(integration) if integration else "",
+        }
+
+    def _active_merit_integration(self):
+        return AccountingIntegration.objects.filter(
+            provider=AccountingIntegration.Provider.MERIT,
+            is_active=True,
+        ).order_by("id").first()
+
+    def _project_dimension_id(self, integration):
+        return (integration.metadata or {}).get("project_dimension_id") if integration else ""
+
+    def _create_merit_dimension_value(self, request, project, actor):
+        integration = self._active_merit_integration()
+        if not integration:
+            messages.error(request, "No active Merit integration configured.")
+            return None
+
+        project_dimension_id = self._project_dimension_id(integration)
+        if not project_dimension_id:
+            messages.error(request, "Merit project dimension id is missing in integration settings.")
+            return None
+
+        try:
+            # Project creation and the external Merit API call cannot be made
+            # one atomic database transaction. If Merit fails, the Workspace
+            # project remains and the user can retry dimension creation later.
+            return AccountingDimensionValueService.create(
+                CreateAccountingDimensionValueCommand(
+                    integration=integration,
+                    code=project.code,
+                    name=project.name,
+                    dimension_type="project",
+                    dimension_id=project_dimension_id,
+                    actor=actor,
+                    metadata={"source": "workspace_project_create"},
+                )
+            )
+        except Exception:
+            messages.error(request, "Project was created, but Merit dimension value creation failed.")
+            return None
 
 
 class MeritDimensionSyncView(View):
