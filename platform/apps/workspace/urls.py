@@ -13,6 +13,7 @@ from .views import (
     EmailAccountDetailView,
     EmailAccountEditView,
     EmailAccountListView,
+    EmailAccountTestConnectionView,
     InboxDetailView,
     InboxSyncView,
     MeritDimensionSyncView,
@@ -57,6 +58,11 @@ urlpatterns = [
     path("settings/email-accounts/create/", EmailAccountCreateView.as_view(), name="settings_email_account_create"),
     path("settings/email-accounts/<int:account_id>/", EmailAccountDetailView.as_view(), name="settings_email_account_detail"),
     path("settings/email-accounts/<int:account_id>/edit/", EmailAccountEditView.as_view(), name="settings_email_account_edit"),
+    path(
+        "settings/email-accounts/<int:account_id>/test-connection/",
+        EmailAccountTestConnectionView.as_view(),
+        name="settings_email_account_test_connection",
+    ),
     path("settings/<slug:section_slug>/", SettingsSectionView.as_view(), name="settings_section"),
     path("design-system/", DesignSystemView.as_view(), name="design_system"),
 ]

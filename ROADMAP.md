@@ -12,7 +12,7 @@ Current engineering phase: Engineering Standards.
 
 Current implementation phase: Platform Core.
 
-Current implementation: Email Account Management UI.
+Current implementation: Email Connection Test.
 
 Current implementation focus: End-to-End Email Processing.
 

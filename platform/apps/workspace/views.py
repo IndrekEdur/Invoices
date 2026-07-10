@@ -10,6 +10,7 @@ from apps.communications.models import (
     EmailProjectLink,
     EmailQuestion,
 )
+from apps.communications.connectors import IMAPEmailConnector
 from apps.communications.services import (
     ApproveEmailAnswerDraftCommand,
     BuildConversationContextCommand,
@@ -664,6 +665,28 @@ class EmailAccountEditView(EmailAccountSettingsMixin, WorkspacePageView):
 
         email_account = form.save()
         messages.success(request, f"Email account {email_account.email_address} updated.")
+        return redirect("workspace:settings_email_account_detail", account_id=email_account.id)
+
+
+class EmailAccountTestConnectionView(EmailAccountSettingsMixin, View):
+    def post(self, request, account_id, *args, **kwargs):
+        email_account = self._account()
+
+        if email_account.provider != EmailAccount.Provider.IMAP:
+            messages.warning(request, "Connection test not implemented for this provider yet.")
+            return redirect("workspace:settings_email_account_detail", account_id=email_account.id)
+
+        connector = IMAPEmailConnector(email_account)
+        try:
+            connector.connect()
+            mailboxes = connector.list_mailboxes()
+        except Exception:
+            messages.error(request, "Email connection test failed. Check account settings and try again.")
+            return redirect("workspace:settings_email_account_detail", account_id=email_account.id)
+        finally:
+            connector.disconnect()
+
+        messages.success(request, f"Email connection successful. Mailboxes found: {len(mailboxes)}.")
         return redirect("workspace:settings_email_account_detail", account_id=email_account.id)
 
 

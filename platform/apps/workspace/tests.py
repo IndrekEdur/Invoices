@@ -540,6 +540,113 @@ class EmailAccountManagementUITests(TestCase):
 
         self.assertContains(response, reverse("workspace:settings_email_accounts"))
 
+    def test_connection_test_endpoint_requires_post(self):
+        organization = create_organization()
+        account = create_email_account(organization)
+
+        response = self.client.get(
+            reverse("workspace:settings_email_account_test_connection", kwargs={"account_id": account.id})
+        )
+
+        self.assertEqual(response.status_code, 405)
+
+    @patch("apps.workspace.views.IMAPEmailConnector")
+    def test_imap_connector_connect_list_disconnect_called(self, connector_mock):
+        organization = create_organization()
+        account = create_email_account(organization)
+        connector = connector_mock.return_value
+        connector.list_mailboxes.return_value = ["INBOX", "Archive"]
+
+        self.client.post(reverse("workspace:settings_email_account_test_connection", kwargs={"account_id": account.id}))
+
+        connector_mock.assert_called_once_with(account)
+        connector.connect.assert_called_once()
+        connector.list_mailboxes.assert_called_once()
+        connector.disconnect.assert_called_once()
+
+    @patch("apps.workspace.views.IMAPEmailConnector")
+    def test_disconnect_called_on_connection_test_failure(self, connector_mock):
+        organization = create_organization()
+        account = create_email_account(organization)
+        connector = connector_mock.return_value
+        connector.connect.side_effect = RuntimeError("failed with secret stored-secret")
+
+        response = self.client.post(
+            reverse("workspace:settings_email_account_test_connection", kwargs={"account_id": account.id}),
+            follow=True,
+        )
+
+        connector.disconnect.assert_called_once()
+        self.assertContains(response, "Email connection test failed. Check account settings and try again.")
+        self.assertNotContains(response, "stored-secret")
+
+    @patch("apps.workspace.views.IMAPEmailConnector")
+    def test_success_message_contains_mailbox_count(self, connector_mock):
+        organization = create_organization()
+        account = create_email_account(organization)
+        connector_mock.return_value.list_mailboxes.return_value = ["INBOX", "Sent", "Archive"]
+
+        response = self.client.post(
+            reverse("workspace:settings_email_account_test_connection", kwargs={"account_id": account.id}),
+            follow=True,
+        )
+
+        self.assertContains(response, "Email connection successful. Mailboxes found: 3.")
+
+    @patch("apps.workspace.views.IMAPEmailConnector")
+    def test_provider_not_supported_handled_safely(self, connector_mock):
+        organization = create_organization()
+        account = create_email_account(organization, provider=EmailAccount.Provider.GMAIL)
+
+        response = self.client.post(
+            reverse("workspace:settings_email_account_test_connection", kwargs={"account_id": account.id}),
+            follow=True,
+        )
+
+        connector_mock.assert_not_called()
+        self.assertContains(response, "Connection test not implemented for this provider yet.")
+
+    @patch("apps.workspace.views.IMAPEmailConnector")
+    def test_error_handled_safely(self, connector_mock):
+        organization = create_organization()
+        account = create_email_account(organization, encrypted_secret_placeholder="very-secret-value")
+        connector_mock.return_value.list_mailboxes.side_effect = RuntimeError("very-secret-value failed")
+
+        response = self.client.post(
+            reverse("workspace:settings_email_account_test_connection", kwargs={"account_id": account.id}),
+            follow=True,
+        )
+
+        self.assertContains(response, "Email connection test failed. Check account settings and try again.")
+        self.assertNotContains(response, "very-secret-value")
+
+    def test_list_renders_test_connection_button(self):
+        organization = create_organization()
+        create_email_account(organization)
+
+        response = self.client.get(reverse("workspace:settings_email_accounts"))
+
+        self.assertContains(response, "Test connection")
+
+    def test_detail_renders_test_connection_button(self):
+        organization = create_organization()
+        account = create_email_account(organization)
+
+        response = self.client.get(reverse("workspace:settings_email_account_detail", kwargs={"account_id": account.id}))
+
+        self.assertContains(response, "Test Connection")
+
+    @patch("apps.workspace.views.IMAPEmailConnector")
+    def test_connection_test_does_not_fetch_or_import_messages(self, connector_mock):
+        organization = create_organization()
+        account = create_email_account(organization)
+        connector_mock.return_value.list_mailboxes.return_value = ["INBOX"]
+
+        self.client.post(reverse("workspace:settings_email_account_test_connection", kwargs={"account_id": account.id}))
+
+        self.assertFalse(EmailMessage.objects.exists())
+        self.assertFalse(connector_mock.return_value.fetch_messages.called)
+
 
 class InboxMVPTests(TestCase):
     def test_inbox_returns_200_with_empty_db(self):
