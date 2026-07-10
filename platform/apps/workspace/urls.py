@@ -1,6 +1,10 @@
 from django.urls import path
 
 from .views import (
+    AccountingIntegrationCreateView,
+    AccountingIntegrationDetailView,
+    AccountingIntegrationEditView,
+    AccountingIntegrationListView,
     AssistantView,
     DashboardView,
     DesignSystemView,
@@ -62,6 +66,26 @@ urlpatterns = [
         "settings/email-accounts/<int:account_id>/test-connection/",
         EmailAccountTestConnectionView.as_view(),
         name="settings_email_account_test_connection",
+    ),
+    path(
+        "settings/accounting-integrations/",
+        AccountingIntegrationListView.as_view(),
+        name="settings_accounting_integrations",
+    ),
+    path(
+        "settings/accounting-integrations/create/",
+        AccountingIntegrationCreateView.as_view(),
+        name="settings_accounting_integration_create",
+    ),
+    path(
+        "settings/accounting-integrations/<int:integration_id>/",
+        AccountingIntegrationDetailView.as_view(),
+        name="settings_accounting_integration_detail",
+    ),
+    path(
+        "settings/accounting-integrations/<int:integration_id>/edit/",
+        AccountingIntegrationEditView.as_view(),
+        name="settings_accounting_integration_edit",
     ),
     path("settings/<slug:section_slug>/", SettingsSectionView.as_view(), name="settings_section"),
     path("design-system/", DesignSystemView.as_view(), name="design_system"),

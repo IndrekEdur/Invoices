@@ -37,8 +37,9 @@ from apps.core.models import Organization
 from apps.projects.models import Project
 from apps.projects.services import CreateProjectWithSuggestedCodeCommand, ProjectCreationService
 
-from .forms import EmailAccountForm
+from .forms import AccountingIntegrationForm, EmailAccountForm
 from .services import (
+    AccountingIntegrationSettingsContextBuilder,
     DashboardContextBuilder,
     EmailAccountSettingsContextBuilder,
     InboxContextBuilder,
@@ -688,6 +689,97 @@ class EmailAccountTestConnectionView(EmailAccountSettingsMixin, View):
 
         messages.success(request, f"Email connection successful. Mailboxes found: {len(mailboxes)}.")
         return redirect("workspace:settings_email_account_detail", account_id=email_account.id)
+
+
+class AccountingIntegrationSettingsMixin:
+    section = "settings"
+
+    def _current_organization(self):
+        if self.request.user.is_authenticated and hasattr(self.request.user, "app_profile"):
+            profile = self.request.user.app_profile
+            if profile.active_organization:
+                return profile.active_organization
+        return Organization.objects.order_by("id").first()
+
+    def _integration(self):
+        return get_object_or_404(
+            AccountingIntegration.objects.select_related("organization"),
+            id=self.kwargs["integration_id"],
+        )
+
+
+class AccountingIntegrationListView(AccountingIntegrationSettingsMixin, WorkspacePageView):
+    template_name = "workspace/settings_accounting_integrations.html"
+    page_title = "Accounting Integrations"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(AccountingIntegrationSettingsContextBuilder.build_list())
+        return context
+
+
+class AccountingIntegrationCreateView(AccountingIntegrationSettingsMixin, WorkspacePageView):
+    template_name = "workspace/settings_accounting_integration_form.html"
+    page_title = "Create Accounting Integration"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["form"] = kwargs.get("form") or AccountingIntegrationForm(
+            organization=self._current_organization()
+        )
+        context["mode"] = "create"
+        context["masked_secret"] = ""
+        return context
+
+    def post(self, request, *args, **kwargs):
+        organization = self._current_organization()
+        if not organization:
+            messages.error(request, "Create an Organization before adding accounting integrations.")
+            return redirect("workspace:settings_accounting_integrations")
+
+        form = AccountingIntegrationForm(request.POST, organization=organization)
+        if not form.is_valid():
+            return self.render_to_response(self.get_context_data(form=form))
+
+        integration = form.save()
+        messages.success(request, f"Accounting integration {integration.display_name} created.")
+        return redirect("workspace:settings_accounting_integration_detail", integration_id=integration.id)
+
+
+class AccountingIntegrationDetailView(AccountingIntegrationSettingsMixin, WorkspacePageView):
+    template_name = "workspace/settings_accounting_integration_detail.html"
+    page_title = "Accounting Integration"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(AccountingIntegrationSettingsContextBuilder.build_detail(self._integration()))
+        return context
+
+
+class AccountingIntegrationEditView(AccountingIntegrationSettingsMixin, WorkspacePageView):
+    template_name = "workspace/settings_accounting_integration_form.html"
+    page_title = "Edit Accounting Integration"
+
+    def get_context_data(self, **kwargs):
+        integration = self._integration()
+        context = super().get_context_data(**kwargs)
+        context["integration"] = integration
+        context["form"] = kwargs.get("form") or AccountingIntegrationForm(instance=integration)
+        context["mode"] = "edit"
+        context["masked_secret"] = AccountingIntegrationSettingsContextBuilder.mask_secret(
+            integration.encrypted_secret_placeholder
+        )
+        return context
+
+    def post(self, request, *args, **kwargs):
+        integration = self._integration()
+        form = AccountingIntegrationForm(request.POST, instance=integration)
+        if not form.is_valid():
+            return self.render_to_response(self.get_context_data(form=form))
+
+        integration = form.save()
+        messages.success(request, f"Accounting integration {integration.display_name} updated.")
+        return redirect("workspace:settings_accounting_integration_detail", integration_id=integration.id)
 
 
 class DesignSystemView(WorkspacePageView):

@@ -648,6 +648,184 @@ class EmailAccountManagementUITests(TestCase):
         self.assertFalse(connector_mock.return_value.fetch_messages.called)
 
 
+class AccountingIntegrationManagementUITests(TestCase):
+    def test_list_returns_200(self):
+        response = self.client.get(reverse("workspace:settings_accounting_integrations"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Accounting Integration Management")
+
+    def test_create_page_returns_200(self):
+        create_organization()
+
+        response = self.client.get(reverse("workspace:settings_accounting_integration_create"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Create Accounting Integration")
+
+    def test_create_post_creates_accounting_integration(self):
+        organization = create_organization()
+
+        response = self.client.post(
+            reverse("workspace:settings_accounting_integration_create"),
+            {
+                "provider": AccountingIntegration.Provider.MERIT,
+                "display_name": "Merit settings",
+                "api_base_url": "https://api.merit.test",
+                "api_id": "api-id-123",
+                "secret": "merit-secret-value",
+                "project_dimension_id": "dim-project",
+                "is_active": "on",
+            },
+        )
+
+        integration = AccountingIntegration.objects.get(display_name="Merit settings")
+        self.assertRedirects(
+            response,
+            reverse("workspace:settings_accounting_integration_detail", kwargs={"integration_id": integration.id}),
+        )
+        self.assertEqual(integration.organization, organization)
+        self.assertEqual(integration.encrypted_secret_placeholder, "merit-secret-value")
+        self.assertEqual(integration.metadata["project_dimension_id"], "dim-project")
+
+    def test_edit_page_returns_200(self):
+        organization = create_organization()
+        integration = create_merit_integration(organization)
+
+        response = self.client.get(
+            reverse("workspace:settings_accounting_integration_edit", kwargs={"integration_id": integration.id})
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Edit Accounting Integration")
+
+    def test_edit_post_updates_non_secret_fields(self):
+        organization = create_organization()
+        integration = create_merit_integration(organization, metadata={"project_dimension_id": "old-dim"})
+
+        response = self.client.post(
+            reverse("workspace:settings_accounting_integration_edit", kwargs={"integration_id": integration.id}),
+            {
+                "provider": AccountingIntegration.Provider.MERIT,
+                "display_name": "Updated Merit",
+                "api_base_url": "https://updated.merit.test",
+                "api_id": "updated-api-id",
+                "secret": "",
+                "project_dimension_id": "new-dim",
+                "is_active": "on",
+            },
+        )
+
+        integration.refresh_from_db()
+        self.assertRedirects(
+            response,
+            reverse("workspace:settings_accounting_integration_detail", kwargs={"integration_id": integration.id}),
+        )
+        self.assertEqual(integration.display_name, "Updated Merit")
+        self.assertEqual(integration.api_base_url, "https://updated.merit.test")
+        self.assertEqual(integration.api_id, "updated-api-id")
+        self.assertEqual(integration.encrypted_secret_placeholder, "api-secret")
+        self.assertEqual(integration.metadata["project_dimension_id"], "new-dim")
+
+    def test_edit_post_with_empty_secret_keeps_existing_secret(self):
+        organization = create_organization()
+        integration = create_merit_integration(organization)
+
+        self.client.post(
+            reverse("workspace:settings_accounting_integration_edit", kwargs={"integration_id": integration.id}),
+            {
+                "provider": AccountingIntegration.Provider.MERIT,
+                "display_name": integration.display_name,
+                "api_base_url": integration.api_base_url,
+                "api_id": integration.api_id,
+                "secret": "",
+                "project_dimension_id": "",
+                "is_active": "on",
+            },
+        )
+
+        integration.refresh_from_db()
+        self.assertEqual(integration.encrypted_secret_placeholder, "api-secret")
+
+    def test_detail_page_masks_secret(self):
+        organization = create_organization()
+        integration = create_merit_integration(
+            organization,
+            metadata={"project_dimension_id": "dim-project"},
+        )
+        integration.encrypted_secret_placeholder = "super-secret-password"
+        integration.save()
+
+        response = self.client.get(
+            reverse("workspace:settings_accounting_integration_detail", kwargs={"integration_id": integration.id})
+        )
+
+        self.assertContains(response, "su****rd")
+        self.assertContains(response, "dim-project")
+        self.assertNotContains(response, "super-secret-password")
+
+    def test_list_shows_integration(self):
+        organization = create_organization()
+        create_merit_integration(organization)
+
+        response = self.client.get(reverse("workspace:settings_accounting_integrations"))
+
+        self.assertContains(response, "Merit Aktiva")
+        self.assertContains(response, "https://merit.example.test")
+        self.assertContains(response, "api-id")
+
+    def test_no_secret_leaked_in_rendered_html(self):
+        organization = create_organization()
+        integration = create_merit_integration(organization)
+        integration.encrypted_secret_placeholder = "do-not-render-this"
+        integration.save()
+
+        list_response = self.client.get(reverse("workspace:settings_accounting_integrations"))
+        detail_response = self.client.get(
+            reverse("workspace:settings_accounting_integration_detail", kwargs={"integration_id": integration.id})
+        )
+        edit_response = self.client.get(
+            reverse("workspace:settings_accounting_integration_edit", kwargs={"integration_id": integration.id})
+        )
+
+        self.assertNotContains(list_response, "do-not-render-this")
+        self.assertNotContains(detail_response, "do-not-render-this")
+        self.assertNotContains(edit_response, "do-not-render-this")
+
+    def test_invalid_form_shows_errors(self):
+        create_organization()
+
+        response = self.client.post(
+            reverse("workspace:settings_accounting_integration_create"),
+            {
+                "provider": AccountingIntegration.Provider.MERIT,
+                "display_name": "",
+                "api_base_url": "not-a-url",
+                "api_id": "",
+                "secret": "",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "id_display_name_error")
+        self.assertContains(response, "id_api_base_url_error")
+        self.assertContains(response, "id_secret_error")
+
+    def test_sync_dimensions_button_rendered(self):
+        organization = create_organization()
+        create_merit_integration(organization)
+
+        response = self.client.get(reverse("workspace:settings_accounting_integrations"))
+
+        self.assertContains(response, "Sync Dimensions")
+        self.assertContains(response, reverse("workspace:merit_dimensions_sync"))
+
+    def test_settings_workspace_accounting_cards_link_to_management_page(self):
+        response = self.client.get(reverse("workspace:settings"))
+
+        self.assertContains(response, reverse("workspace:settings_accounting_integrations"))
+
+
 class InboxMVPTests(TestCase):
     def test_inbox_returns_200_with_empty_db(self):
         response = self.client.get(reverse("workspace:inbox"))

@@ -1,4 +1,5 @@
 from apps.accounting.models import AccountingDimension, AccountingIntegration
+from apps.accounting.secrets import SecretProvider
 from apps.accounting.services import ProjectCodeAllocationService, SuggestNextProjectCodeCommand
 from apps.communications.models import EmailAccount
 from apps.core.models import AuditEvent, Organization
@@ -181,3 +182,27 @@ class EmailAccountSettingsContextBuilder:
         if len(value) <= 4:
             return "****"
         return f"{value[:2]}****{value[-2:]}"
+
+
+class AccountingIntegrationSettingsContextBuilder:
+    """Read-only context builder for accounting integration settings pages."""
+
+    @staticmethod
+    def build_list():
+        return {
+            "integrations": AccountingIntegration.objects.select_related("organization").order_by("display_name", "id"),
+        }
+
+    @staticmethod
+    def build_detail(integration):
+        return {
+            "integration": integration,
+            "project_dimension_id": (integration.metadata or {}).get("project_dimension_id", ""),
+            "masked_secret": AccountingIntegrationSettingsContextBuilder.mask_secret(
+                integration.encrypted_secret_placeholder
+            ),
+        }
+
+    @staticmethod
+    def mask_secret(value):
+        return SecretProvider.mask_secret(value)
