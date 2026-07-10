@@ -339,3 +339,21 @@ Reason:
 - Project dimensions affect accounting and must be auditable, explainable, and conflict-aware.
 - Existing Merit dimensions must be imported before creating new project codes to prevent duplicates and preserve historical accounting context.
 - Clear integration boundaries reduce risk when future invoice export, payment sync, and project dimension workflows are added.
+
+## ADR-023: Platform Configuration Is Managed Through Settings Workspace
+
+Date: 2026-07-10
+
+Decision:
+
+- Platform configuration shall be managed through a Settings Workspace rather than shell commands, direct database edits, or Django Admin as the normal user interface.
+- Settings is the operational control center for organizations, users, roles, e-mail accounts, accounting integrations, Merit settings, project numbering, secrets, sync health, AI/knowledge configuration, audit, and system health.
+- Workspace settings views must call service-layer APIs and connector boundaries instead of embedding provider-specific logic.
+- Sensitive changes must be organization-scoped, permission-controlled, and audited.
+
+Reason:
+
+- Normal administrators should be able to configure and operate the platform without developer tools.
+- Secrets, integrations, external writes, and automation settings are high-risk and need explicit UI, safe defaults, masking, permission checks, and audit trails.
+- E-mail sync, Merit sync, project code allocation, and future AI settings must be understandable and testable before activation.
+- A Settings Workspace keeps operational configuration aligned with the platform's service-layer, audit, policy, and integration architecture.
