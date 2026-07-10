@@ -1,5 +1,8 @@
 from io import BytesIO
 from dataclasses import FrozenInstanceError
+from io import StringIO
+from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.db import IntegrityError
 from django.test import TestCase
 from unittest.mock import patch
@@ -25,6 +28,7 @@ from apps.accounting.services import (
     ProjectCodeAllocationService,
     SuggestNextProjectCodeCommand,
     SyncAccountingDimensionsCommand,
+    SyncAccountingDimensionsResult,
 )
 from apps.core.models import AuditEvent
 from apps.core.services import CreateOrganizationCommand, OrganizationService
@@ -568,6 +572,115 @@ class MeritAPIClientTests(TestCase):
                 "/api/v1/gettaxes",
                 payload={},
             )
+
+
+class VerifyMeritIntegrationCommandTests(TestCase):
+    def test_command_requires_valid_integration_id(self):
+        output = StringIO()
+
+        with self.assertRaises(CommandError) as error:
+            call_command("verify_merit_integration", 999999, stdout=output)
+
+        self.assertIn("AccountingIntegration not found", str(error.exception))
+
+    @patch("apps.accounting.management.commands.verify_merit_integration.MeritAPIClient")
+    def test_health_path_calls_merit_api_client_health(self, client_mock):
+        integration = create_merit_integration()
+        client_mock.return_value.health.return_value = {
+            "healthy": True,
+            "provider": "merit",
+            "mode": "local_check",
+            "response_time_ms": 1.5,
+        }
+        output = StringIO()
+
+        call_command("verify_merit_integration", integration.id, stdout=output)
+
+        client_mock.assert_called_once_with(integration)
+        client_mock.return_value.health.assert_called_once()
+        text = output.getvalue()
+        self.assertIn("integration_id:", text)
+        self.assertIn("provider: merit", text)
+        self.assertIn("dimension_sync: skipped", text)
+
+    @patch("apps.accounting.management.commands.verify_merit_integration.AccountingDimensionSyncService")
+    @patch("apps.accounting.management.commands.verify_merit_integration.MeritAPIClient")
+    def test_sync_dimensions_calls_accounting_dimension_sync_service(self, client_mock, sync_service_mock):
+        integration = create_merit_integration()
+        client_mock.return_value.health.return_value = {"healthy": True, "provider": "merit"}
+        sync_service_mock.sync.return_value = SyncAccountingDimensionsResult(
+            integration=integration,
+            created_count=1,
+            updated_count=2,
+            unchanged_count=3,
+            archived_count=4,
+            conflict_count=5,
+            dimensions=[],
+            conflicts=[],
+        )
+        output = StringIO()
+
+        call_command("verify_merit_integration", integration.id, "--sync-dimensions", stdout=output)
+
+        sync_service_mock.sync.assert_called_once()
+        command = sync_service_mock.sync.call_args.args[0]
+        self.assertEqual(command.integration, integration)
+        self.assertEqual(command.metadata, {"source": "verify_merit_integration_command"})
+        text = output.getvalue()
+        self.assertIn("created_count: 1", text)
+        self.assertIn("updated_count: 2", text)
+        self.assertIn("unchanged_count: 3", text)
+        self.assertIn("archived_count: 4", text)
+        self.assertIn("conflict_count: 5", text)
+
+    @patch("apps.accounting.management.commands.verify_merit_integration.MeritAPIClient")
+    def test_output_does_not_contain_secret(self, client_mock):
+        integration = create_merit_integration()
+        integration.encrypted_secret_placeholder = "do-not-print-this"
+        integration.save()
+        client_mock.return_value.health.return_value = {
+            "healthy": True,
+            "provider": "merit",
+            "mode": "local_check",
+        }
+        output = StringIO()
+
+        call_command("verify_merit_integration", integration.id, stdout=output)
+
+        self.assertNotIn("do-not-print-this", output.getvalue())
+
+    @patch("apps.accounting.management.commands.verify_merit_integration.MeritAPIClient")
+    def test_service_errors_handled_safely(self, client_mock):
+        integration = create_merit_integration()
+        integration.encrypted_secret_placeholder = "secret-value"
+        integration.save()
+        client_mock.return_value.health.side_effect = RuntimeError("secret-value failed")
+
+        with self.assertRaises(CommandError) as error:
+            call_command("verify_merit_integration", integration.id, stdout=StringIO())
+
+        self.assertIn("Merit health check failed. Check integration configuration and try again.", str(error.exception))
+        self.assertNotIn("secret-value", str(error.exception))
+
+    @patch("apps.accounting.management.commands.verify_merit_integration.MeritAPIClient")
+    def test_debug_error_still_omits_secret_when_exception_message_is_safe(self, client_mock):
+        integration = create_merit_integration()
+        client_mock.return_value.health.side_effect = RuntimeError("network unavailable")
+
+        with self.assertRaises(CommandError) as error:
+            call_command("verify_merit_integration", integration.id, "--debug", stdout=StringIO())
+
+        self.assertIn("RuntimeError: network unavailable", str(error.exception))
+        self.assertNotIn("api-secret", str(error.exception))
+
+    @patch("apps.accounting.management.commands.verify_merit_integration.MeritAPIClient")
+    def test_no_real_api_calls_in_tests(self, client_mock):
+        integration = create_merit_integration()
+        client_mock.return_value.health.return_value = {"healthy": True, "provider": "merit"}
+
+        call_command("verify_merit_integration", integration.id, stdout=StringIO())
+
+        client_mock.return_value.health.assert_called_once()
 
 
 class MeritDimensionAPITests(TestCase):

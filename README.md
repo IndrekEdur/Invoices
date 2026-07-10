@@ -22,6 +22,8 @@ This repository is evolving from a local invoice automation prototype into an Op
 
 `MERIT_INTEGRATION_ARCHITECTURE.md` describes how Workspace project codes synchronize with Merit Aktiva dimensions through explicit, auditable integration services.
 
+`MERIT_VERIFICATION_GUIDE.md` describes the safe manual workflow for verifying real Merit credentials, connection checks, dimension sync, local cache updates, and project dimension creation.
+
 `SETTINGS_ARCHITECTURE.md` describes how administrators manage organizations, users, roles, e-mail accounts, accounting integrations, Merit settings, secrets, sync health, and system configuration from the Workspace UI.
 
 The accounting app includes a project code allocation service that suggests the next available numeric project code from existing Workspace projects and cached accounting dimensions.
