@@ -6,6 +6,7 @@
         {% csrf_token %}
         <button type="submit" class="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 shadow-sm transition hover:-translate-y-0.5 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-slate-200">Sync Merit dimensions</button>
     </form>
+    <a href="{% url 'workspace:accounting_dimension_conflicts' %}" class="inline-flex items-center justify-center rounded-xl border border-orange-200 bg-orange-50 px-4 py-2.5 text-sm font-semibold text-orange-800 shadow-sm transition hover:-translate-y-0.5 hover:bg-orange-100 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-orange-100">Review Dimension Conflicts</a>
     <a href="{% url 'workspace:project_create' %}" class="inline-flex items-center justify-center rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-slate-300">Create Project</a>
 </div>
 {% endblock %}

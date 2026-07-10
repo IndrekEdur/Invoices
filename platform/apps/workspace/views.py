@@ -40,6 +40,7 @@ from apps.projects.services import CreateProjectWithSuggestedCodeCommand, Projec
 
 from .forms import AccountingIntegrationForm, EmailAccountForm
 from .services import (
+    AccountingDimensionConflictContextBuilder,
     AccountingIntegrationSettingsContextBuilder,
     DashboardContextBuilder,
     EmailAccountSettingsContextBuilder,
@@ -516,10 +517,24 @@ class MeritDimensionSyncView(View):
             f"conflicts {result.conflict_count}."
         )
         if result.conflict_count:
-            messages.warning(request, message)
+            messages.warning(
+                request,
+                message + " Review dimension conflicts before attempting manual corrections.",
+            )
         else:
             messages.success(request, message)
         return redirect("workspace:projects")
+
+
+class AccountingDimensionConflictsView(WorkspacePageView):
+    template_name = "workspace/accounting_dimension_conflicts.html"
+    page_title = "Dimension Conflicts"
+    section = "projects"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(AccountingDimensionConflictContextBuilder.build())
+        return context
 
 
 class ProjectDetailView(WorkspacePageView):

@@ -206,3 +206,111 @@ class AccountingIntegrationSettingsContextBuilder:
     @staticmethod
     def mask_secret(value):
         return SecretProvider.mask_secret(value)
+
+
+class AccountingDimensionConflictContextBuilder:
+    """Build read-only context from the latest dimension sync audit metadata."""
+
+    @staticmethod
+    def build():
+        sync_event = (
+            AuditEvent.objects.filter(event_type="accounting_dimension_sync_completed")
+            .order_by("-created_at", "-id")
+            .first()
+        )
+        conflicts = []
+        if sync_event:
+            for conflict in (sync_event.metadata or {}).get("conflicts", []):
+                conflicts.append(AccountingDimensionConflictContextBuilder._row(conflict, sync_event))
+
+        return {
+            "sync_event": sync_event,
+            "conflicts": conflicts,
+        }
+
+    @staticmethod
+    def _row(conflict, sync_event):
+        code = conflict.get("code") or conflict.get("incoming_code") or conflict.get("existing_code") or ""
+        external_id = AccountingDimensionConflictContextBuilder._external_id(conflict)
+        dimension_type = conflict.get("dimension_type", "")
+        local_dimension = AccountingDimensionConflictContextBuilder._local_dimension(
+            sync_event=sync_event,
+            code=code,
+            external_id=external_id,
+            dimension_type=dimension_type,
+        )
+
+        return {
+            "type": conflict.get("type", "unknown"),
+            "code": code,
+            "external_id": external_id,
+            "dimension_type": dimension_type,
+            "local_dimension": local_dimension,
+            "raw_summary": AccountingDimensionConflictContextBuilder._raw_summary(conflict),
+            "explanation": AccountingDimensionConflictContextBuilder._explanation(conflict),
+            "suggested_action": AccountingDimensionConflictContextBuilder._suggested_action(conflict),
+            "sync_event": sync_event,
+        }
+
+    @staticmethod
+    def _external_id(conflict):
+        if conflict.get("external_id"):
+            return conflict["external_id"]
+        if conflict.get("incoming_external_id") or conflict.get("existing_external_id"):
+            return " / ".join(
+                value
+                for value in [conflict.get("existing_external_id"), conflict.get("incoming_external_id")]
+                if value
+            )
+        external_ids = conflict.get("external_ids") or []
+        return " / ".join(str(value) for value in external_ids if value)
+
+    @staticmethod
+    def _local_dimension(*, sync_event, code, external_id, dimension_type):
+        queryset = AccountingDimension.objects.all()
+        if sync_event and sync_event.organization_id:
+            queryset = queryset.filter(organization=sync_event.organization)
+        if dimension_type:
+            queryset = queryset.filter(dimension_type=dimension_type)
+
+        if code:
+            dimension = queryset.filter(code=code).first()
+            if dimension:
+                return dimension
+
+        external_candidates = [value.strip() for value in str(external_id).split("/") if value.strip()]
+        for candidate in external_candidates:
+            dimension = queryset.filter(external_id=candidate).first()
+            if dimension:
+                return dimension
+        return None
+
+    @staticmethod
+    def _raw_summary(conflict):
+        return [
+            {"key": key, "value": value}
+            for key, value in conflict.items()
+            if key not in {"type", "code", "dimension_type"}
+        ]
+
+    @staticmethod
+    def _explanation(conflict):
+        conflict_type = conflict.get("type")
+        if conflict_type == "duplicate_incoming_code":
+            return "Merit returned more than one dimension value with the same code."
+        if conflict_type == "same_code_different_external_id":
+            return "The local cache already has this code with a different Merit external id."
+        if conflict_type == "same_external_id_different_code":
+            return "The local cache already has this Merit external id with a different code."
+        return "The sync detected a dimension conflict that needs manual review."
+
+    @staticmethod
+    def _suggested_action(conflict):
+        conflict_type = conflict.get("type")
+        if conflict_type == "duplicate_incoming_code":
+            return "Review duplicate codes in Merit, keep the intended value, then run sync again."
+        if conflict_type == "same_code_different_external_id":
+            return "Compare Merit and Workspace cache before changing either external id or code."
+        if conflict_type == "same_external_id_different_code":
+            return "Check whether the Merit dimension was renamed or re-coded before updating local cache."
+        return "Review Merit and Workspace data manually before attempting another sync."

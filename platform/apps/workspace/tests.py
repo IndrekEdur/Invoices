@@ -88,6 +88,7 @@ class WorkspaceRouteTests(TestCase):
         ("workspace:assistant", "/workspace/assistant/"),
         ("workspace:settings", "/workspace/settings/"),
         ("workspace:design_system", "/workspace/design-system/"),
+        ("workspace:accounting_dimension_conflicts", "/workspace/accounting/dimensions/conflicts/"),
     ]
 
     def test_every_workspace_route_returns_http_200(self):
@@ -1575,6 +1576,126 @@ class MeritDimensionSyncUITests(TestCase):
         messages = list(get_messages(response.wsgi_request))
         self.assertTrue(any(message.level_tag == "warning" for message in messages))
         self.assertTrue(any("conflicts 2" in str(message) for message in messages))
+        self.assertTrue(any("Review dimension conflicts" in str(message) for message in messages))
+
+
+class AccountingDimensionConflictReviewUITests(TestCase):
+    def _sync_event(self, organization, conflicts):
+        return AuditEvent.objects.create(
+            organization=organization,
+            event_type="accounting_dimension_sync_completed",
+            object_type="AccountingIntegration",
+            object_id="1",
+            message="Completed accounting dimension sync for Merit Aktiva.",
+            metadata={
+                "source": "workspace_merit_dimension_sync",
+                "conflict_count": len(conflicts),
+                "conflicts": conflicts,
+            },
+        )
+
+    def test_conflicts_page_returns_200(self):
+        response = self.client.get(reverse("workspace:accounting_dimension_conflicts"))
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_empty_state_renders(self):
+        response = self.client.get(reverse("workspace:accounting_dimension_conflicts"))
+
+        self.assertContains(response, "No dimension conflicts found.")
+
+    def test_conflict_from_latest_sync_audit_metadata_renders(self):
+        organization = create_organization()
+        self._sync_event(
+            organization,
+            [{"type": "duplicate_incoming_code", "code": "26000", "dimension_type": "project"}],
+        )
+        self._sync_event(
+            organization,
+            [
+                {
+                    "type": "same_code_different_external_id",
+                    "code": "26124",
+                    "dimension_type": "project",
+                    "existing_external_id": "m-existing",
+                    "incoming_external_id": "m-new",
+                }
+            ],
+        )
+
+        response = self.client.get(reverse("workspace:accounting_dimension_conflicts"))
+
+        self.assertContains(response, "same_code_different_external_id")
+        self.assertContains(response, "26124")
+        self.assertContains(response, "m-existing / m-new")
+        self.assertNotContains(response, "26000")
+
+    def test_local_dimension_is_shown_when_matched(self):
+        organization = create_organization()
+        create_merit_integration(organization)
+        AccountingDimension.objects.create(
+            organization=organization,
+            provider=AccountingIntegration.Provider.MERIT,
+            external_id="m-existing",
+            code="26124",
+            name="Local Kanarbiku",
+        )
+        self._sync_event(
+            organization,
+            [
+                {
+                    "type": "same_code_different_external_id",
+                    "code": "26124",
+                    "dimension_type": "project",
+                    "existing_external_id": "m-existing",
+                    "incoming_external_id": "m-new",
+                }
+            ],
+        )
+
+        response = self.client.get(reverse("workspace:accounting_dimension_conflicts"))
+
+        self.assertContains(response, "Local Kanarbiku")
+
+    def test_links_to_conflict_page_render_from_relevant_pages(self):
+        organization = create_organization()
+        integration = create_merit_integration(organization)
+        conflict_url = reverse("workspace:accounting_dimension_conflicts")
+
+        self.assertContains(self.client.get(reverse("workspace:projects")), conflict_url)
+        self.assertContains(self.client.get(reverse("workspace:settings")), conflict_url)
+        self.assertContains(
+            self.client.get(
+                reverse("workspace:settings_accounting_integration_detail", kwargs={"integration_id": integration.id})
+            ),
+            conflict_url,
+        )
+
+    def test_no_secret_leaked(self):
+        organization = create_organization()
+        create_merit_integration(organization)
+        self._sync_event(
+            organization,
+            [{"type": "duplicate_incoming_code", "code": "26124", "dimension_type": "project"}],
+        )
+
+        response = self.client.get(reverse("workspace:accounting_dimension_conflicts"))
+
+        self.assertNotContains(response, "api-secret")
+
+    def test_get_does_not_mutate_database(self):
+        organization = create_organization()
+        self._sync_event(
+            organization,
+            [{"type": "duplicate_incoming_code", "code": "26124", "dimension_type": "project"}],
+        )
+        audit_count = AuditEvent.objects.count()
+        dimension_count = AccountingDimension.objects.count()
+
+        self.client.get(reverse("workspace:accounting_dimension_conflicts"))
+
+        self.assertEqual(AuditEvent.objects.count(), audit_count)
+        self.assertEqual(AccountingDimension.objects.count(), dimension_count)
 
 
 class ProjectWorkspaceTests(TestCase):

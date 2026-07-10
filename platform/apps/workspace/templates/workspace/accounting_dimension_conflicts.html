@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Dimension Conflicts | Operations Workspace Platform{% endblock %}
+{% block actions %}
+<div class="flex flex-wrap gap-3">
+    <a href="{% url 'workspace:projects' %}" class="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 shadow-sm transition hover:bg-slate-50">Back to Projects</a>
+    <form method="post" action="{% url 'workspace:merit_dimensions_sync' %}">
+        {% csrf_token %}
+        <button type="submit" class="inline-flex items-center justify-center rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800">Sync Merit Dimensions</button>
+    </form>
+</div>
+{% endblock %}
+{% block content %}
+<div class="space-y-8">
+    {% include "workspace/partials/components/page_header.html" with eyebrow="Accounting" title="Merit Dimension Conflicts" body="Review-only view of the latest Merit dimension sync conflicts. No automatic resolution or external writes are performed here." %}
+
+    {% if sync_event %}
+        <section class="grid gap-4 md:grid-cols-3">
+            <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Latest sync run</div>
+                <div class="mt-2 text-sm font-semibold text-slate-950">{{ sync_event.created_at|date:"Y-m-d H:i" }}</div>
+                <p class="mt-2 text-sm text-slate-600">{{ sync_event.message }}</p>
+            </div>
+            <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Conflict count</div>
+                <div class="mt-2 text-3xl font-semibold text-slate-950">{{ conflicts|length }}</div>
+            </div>
+            <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Source</div>
+                <div class="mt-2 text-sm font-semibold text-slate-950">{{ sync_event.metadata.source|default:"dimension sync" }}</div>
+                <p class="mt-2 text-sm text-slate-600">Data comes from AuditEvent metadata for the latest completed sync.</p>
+            </div>
+        </section>
+    {% endif %}
+
+    <section class="space-y-4">
+        {% include "workspace/partials/components/section_header.html" with title="Conflicts" body="Inspect the conflict, local cache match and recommended manual action before changing Merit or Workspace data." %}
+        {% if conflicts %}
+            <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-slate-200 text-sm">
+                        <thead class="sticky top-0 bg-slate-50">
+                            <tr>
+                                <th class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Type</th>
+                                <th class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Code</th>
+                                <th class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">External ID</th>
+                                <th class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Dimension</th>
+                                <th class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Local Dimension</th>
+                                <th class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Explanation</th>
+                                <th class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Suggested Manual Action</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-100">
+                            {% for conflict in conflicts %}
+                                <tr class="odd:bg-white even:bg-slate-50/50">
+                                    <td class="px-5 py-4">{% include "workspace/partials/components/status_badge.html" with status="needs_review" label=conflict.type %}</td>
+                                    <td class="px-5 py-4 font-semibold text-slate-950">{{ conflict.code|default:"-" }}</td>
+                                    <td class="px-5 py-4 text-slate-700">{{ conflict.external_id|default:"-" }}</td>
+                                    <td class="px-5 py-4 text-slate-700">{{ conflict.dimension_type|default:"-" }}</td>
+                                    <td class="px-5 py-4 text-slate-700">
+                                        {% if conflict.local_dimension %}
+                                            <div class="font-medium text-slate-950">{{ conflict.local_dimension.code }} {{ conflict.local_dimension.name }}</div>
+                                            <div class="text-xs text-slate-500">{{ conflict.local_dimension.external_id|default:"no external id" }}</div>
+                                        {% else %}
+                                            <span class="text-slate-400">No local match</span>
+                                        {% endif %}
+                                    </td>
+                                    <td class="px-5 py-4 text-slate-700">{{ conflict.explanation }}</td>
+                                    <td class="px-5 py-4 text-slate-700">
+                                        <div>{{ conflict.suggested_action }}</div>
+                                        {% if conflict.raw_summary %}
+                                            <details class="mt-2 text-xs text-slate-500">
+                                                <summary class="cursor-pointer font-semibold text-slate-600">Raw sync data</summary>
+                                                <dl class="mt-2 space-y-1">
+                                                    {% for item in conflict.raw_summary %}
+                                                        <div><dt class="inline font-semibold">{{ item.key }}:</dt> <dd class="inline">{{ item.value }}</dd></div>
+                                                    {% endfor %}
+                                                </dl>
+                                            </details>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        {% else %}
+            {% include "workspace/partials/components/empty_state.html" with title="No dimension conflicts found." body="The latest completed Merit dimension sync did not record conflicts, or no sync has completed yet." %}
+        {% endif %}
+    </section>
+</div>
+{% endblock %}

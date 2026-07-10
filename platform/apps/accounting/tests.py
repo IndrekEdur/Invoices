@@ -1115,6 +1115,21 @@ class AccountingDimensionSyncServiceTests(TestCase):
         self.assertIn("accounting_dimension_sync_started", event_types)
         self.assertIn("accounting_dimension_sync_completed", event_types)
 
+    def test_completed_audit_event_stores_conflict_details(self):
+        integration = create_merit_integration()
+        dtos = [
+            MeritDimensionDTO("m-1", "26124", "Kanarbiku A", "project", True, {}),
+            MeritDimensionDTO("m-2", "26124", "Kanarbiku B", "project", True, {}),
+        ]
+
+        with patch.object(MeritAPIClient, "list_dimensions", return_value=dtos):
+            AccountingDimensionSyncService.sync(SyncAccountingDimensionsCommand(integration=integration))
+
+        event = AuditEvent.objects.filter(event_type="accounting_dimension_sync_completed").latest("created_at")
+        self.assertEqual(event.metadata["conflict_count"], 1)
+        self.assertEqual(event.metadata["conflicts"][0]["type"], "duplicate_incoming_code")
+        self.assertEqual(event.metadata["conflicts"][0]["code"], "26124")
+
     def test_metadata_is_not_mutated(self):
         integration = create_merit_integration()
         metadata = {"source": {"requested_by": "test"}}

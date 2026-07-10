@@ -3,6 +3,7 @@
 {% block actions %}
 <div class="flex flex-wrap gap-3">
     <a href="{% url 'workspace:settings_accounting_integration_edit' integration.id %}" class="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 shadow-sm transition hover:bg-slate-50">Edit</a>
+    <a href="{% url 'workspace:accounting_dimension_conflicts' %}" class="inline-flex items-center justify-center rounded-xl border border-orange-200 bg-orange-50 px-4 py-2.5 text-sm font-semibold text-orange-800 shadow-sm transition hover:bg-orange-100">Review Dimension Conflicts</a>
     <form method="post" action="{% url 'workspace:settings_accounting_integration_test_connection' integration.id %}">
         {% csrf_token %}
         <button type="submit" class="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 shadow-sm transition hover:bg-slate-50">Test Connection</button>

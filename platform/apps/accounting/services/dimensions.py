@@ -92,6 +92,7 @@ class AccountingDimensionSyncService:
                     "unchanged_count": unchanged_count,
                     "archived_count": archived_count,
                     "conflict_count": len(conflicts),
+                    "conflicts": deepcopy(conflicts),
                 },
             )
 

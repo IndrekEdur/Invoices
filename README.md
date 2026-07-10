@@ -48,6 +48,8 @@ The Workspace Projects UI at `/workspace/projects/` shows Workspace projects tog
 
 The Workspace Projects UI includes a CSRF-protected manual `Sync Merit dimensions` action that refreshes cached Merit project dimensions through the accounting sync service and reports created, updated, unchanged, archived and conflict counts.
 
+The Dimension Conflict Review UI at `/workspace/accounting/dimensions/conflicts/` shows the latest Merit dimension sync conflicts from audit metadata for safe manual review without resolving, deleting, or writing to external APIs.
+
 The Workspace Project Create UI can optionally create and cache a matching Merit project dimension value when an active Merit integration has a `project_dimension_id` configured.
 
 The Settings Workspace at `/workspace/settings/` provides a read-only operational control center for summary counts, settings areas, e-mail accounts, accounting integrations, Merit configuration, project numbering and system health.

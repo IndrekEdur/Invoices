@@ -88,12 +88,15 @@
         <section class="space-y-4">
             {% include "workspace/partials/components/section_header.html" with title="Accounting Integration Settings" body="Provider configuration, sync state and future connection checks." %}
             <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-                <div class="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+                <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
                     <div class="text-sm font-semibold text-slate-950">Active integrations</div>
-                    <form method="post" action="{% url 'workspace:merit_dimensions_sync' %}">
-                        {% csrf_token %}
-                        <button type="submit" class="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800 shadow-sm transition hover:bg-slate-50">Sync Merit Dimensions</button>
-                    </form>
+                    <div class="flex flex-wrap gap-2">
+                        <a href="{% url 'workspace:accounting_dimension_conflicts' %}" class="inline-flex items-center justify-center rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-xs font-semibold text-orange-800 shadow-sm transition hover:bg-orange-100">Review Conflicts</a>
+                        <form method="post" action="{% url 'workspace:merit_dimensions_sync' %}">
+                            {% csrf_token %}
+                            <button type="submit" class="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800 shadow-sm transition hover:bg-slate-50">Sync Merit Dimensions</button>
+                        </form>
+                    </div>
                 </div>
                 {% if accounting_integrations %}
                     <div class="overflow-x-auto">
@@ -156,6 +159,7 @@
                 <div class="flex justify-between gap-4"><dt class="text-slate-500">Last error</dt><dd class="text-slate-700">{{ merit.last_error|default:"None" }}</dd></div>
                 <div class="flex justify-between gap-4"><dt class="text-slate-500">Dimension cache count</dt><dd class="font-medium text-slate-950">{{ merit.dimension_cache_count }}</dd></div>
             </dl>
+            <a href="{% url 'workspace:accounting_dimension_conflicts' %}" class="mt-6 inline-flex w-full items-center justify-center rounded-xl border border-orange-200 bg-orange-50 px-4 py-2.5 text-sm font-semibold text-orange-800 transition hover:bg-orange-100">Review Dimension Conflicts</a>
         </section>
 
         <section class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
