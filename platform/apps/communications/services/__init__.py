@@ -8,15 +8,21 @@ from .commands import (
     ConvertEmailAttachmentToDocumentCommand,
     CorrectEmailProjectLinkCommand,
     DetectEmailQuestionsCommand,
+    GetOrCreateMailboxStateCommand,
+    MarkMailboxSyncCompletedCommand,
+    MarkMailboxSyncFailedCommand,
+    MarkMailboxSyncStartedCommand,
     MarkEmailAnswerDraftNeedsReviewCommand,
     ProcessEmailCommand,
     RejectEmailAnswerDraftCommand,
     RejectEmailProjectLinkCommand,
     SuggestEmailProjectLinksCommand,
     SyncEmailAccountCommand,
+    UpdateMailboxSyncProgressCommand,
 )
 from .context import ConversationContextBuilder
 from .imports import EmailImportService
+from .mailbox_state import EmailMailboxStateService, MailboxUIDValidityChangedError
 from .processing import EmailProcessingService
 from .question_detection import EmailQuestionDetectionService
 from .project_links import EmailProjectLinkService
@@ -35,15 +41,22 @@ __all__ = [
     "EmailAttachmentDocumentService",
     "EmailAnswerDraftService",
     "EmailImportService",
+    "EmailMailboxStateService",
     "EmailProcessingService",
     "EmailProjectLinkService",
     "EmailProjectSuggestionService",
     "EmailQuestionDetectionService",
+    "GetOrCreateMailboxStateCommand",
+    "MailboxUIDValidityChangedError",
+    "MarkMailboxSyncCompletedCommand",
+    "MarkMailboxSyncFailedCommand",
+    "MarkMailboxSyncStartedCommand",
     "MarkEmailAnswerDraftNeedsReviewCommand",
     "ProcessEmailCommand",
     "RejectEmailAnswerDraftCommand",
     "RejectEmailProjectLinkCommand",
     "SuggestEmailProjectLinksCommand",
     "SyncEmailAccountCommand",
+    "UpdateMailboxSyncProgressCommand",
     "EmailSyncService",
 ]

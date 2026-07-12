@@ -38,6 +38,59 @@ class EmailAccount(models.Model):
         return f"{self.display_name} <{self.email_address}>"
 
 
+class EmailMailboxState(models.Model):
+    class SyncStatus(models.TextChoices):
+        IDLE = "idle", "Idle"
+        RUNNING = "running", "Running"
+        PAUSED = "paused", "Paused"
+        FAILED = "failed", "Failed"
+
+    class InitialImportStatus(models.TextChoices):
+        NOT_STARTED = "not_started", "Not started"
+        RUNNING = "running", "Running"
+        PAUSED = "paused", "Paused"
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
+
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="email_mailbox_states")
+    email_account = models.ForeignKey(EmailAccount, on_delete=models.CASCADE, related_name="mailbox_states")
+    mailbox_name = models.CharField(max_length=255)
+    external_mailbox_id = models.CharField(max_length=255, blank=True, default="")
+    uid_validity = models.PositiveBigIntegerField(blank=True, null=True)
+    last_discovered_uid = models.PositiveBigIntegerField(blank=True, null=True)
+    last_processed_uid = models.PositiveBigIntegerField(blank=True, null=True)
+    highest_modseq = models.PositiveBigIntegerField(blank=True, null=True)
+    sync_status = models.CharField(max_length=32, choices=SyncStatus.choices, default=SyncStatus.IDLE)
+    initial_import_status = models.CharField(
+        max_length=32,
+        choices=InitialImportStatus.choices,
+        default=InitialImportStatus.NOT_STARTED,
+    )
+    last_sync_started_at = models.DateTimeField(blank=True, null=True)
+    last_sync_completed_at = models.DateTimeField(blank=True, null=True)
+    last_successful_sync_at = models.DateTimeField(blank=True, null=True)
+    last_progress_at = models.DateTimeField(blank=True, null=True)
+    last_error = models.TextField(blank=True, default="")
+    discovered_count = models.PositiveBigIntegerField(default=0)
+    imported_count = models.PositiveBigIntegerField(default=0)
+    processed_count = models.PositiveBigIntegerField(default=0)
+    skipped_count = models.PositiveBigIntegerField(default=0)
+    failed_count = models.PositiveBigIntegerField(default=0)
+    cursor_metadata = models.JSONField(default=dict, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["email_account__email_address", "mailbox_name", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["email_account", "mailbox_name"], name="unique_mailbox_state_per_account"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.email_account.email_address} {self.mailbox_name} ({self.sync_status})"
+
+
 class EmailThread(models.Model):
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="email_threads")
     account = models.ForeignKey(EmailAccount, on_delete=models.CASCADE, related_name="threads")

@@ -4,6 +4,7 @@ from .models import (
     EmailAccount,
     EmailAnswerDraft,
     EmailAttachment,
+    EmailMailboxState,
     EmailMessage,
     EmailProjectLink,
     EmailQuestion,
@@ -16,6 +17,22 @@ class EmailAccountAdmin(admin.ModelAdmin):
     list_display = ("display_name", "email_address", "organization", "provider", "is_active", "last_sync_at")
     list_filter = ("provider", "is_active", "use_ssl", "use_tls", "organization")
     search_fields = ("display_name", "email_address", "username", "host", "organization__name")
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(EmailMailboxState)
+class EmailMailboxStateAdmin(admin.ModelAdmin):
+    list_display = (
+        "email_account",
+        "mailbox_name",
+        "sync_status",
+        "initial_import_status",
+        "last_processed_uid",
+        "last_successful_sync_at",
+        "updated_at",
+    )
+    list_filter = ("organization", "email_account", "sync_status", "initial_import_status")
+    search_fields = ("mailbox_name", "external_mailbox_id", "email_account__email_address")
     readonly_fields = ("created_at", "updated_at")
 
 

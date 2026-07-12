@@ -18,6 +18,8 @@ This repository is evolving from a local invoice automation prototype into an Op
 
 `EMAIL_STORAGE_ARCHITECTURE.md` describes how large mailboxes are imported as searchable message and attachment indexes with lazy attachment download, resumable sync, remote deletion protection, and future external binary storage.
 
+The communications app includes persistent mailbox sync state so each EmailAccount mailbox can later track resumable cursor progress, UIDVALIDITY, import status, safe errors, and observable counters.
+
 `KNOWLEDGE_ARCHITECTURE.md` describes the Knowledge Engine as the controlled memory, evidence, timeline, and AI context layer of the platform.
 
 `UI_ARCHITECTURE.md` describes the future platform user experience as a business workspace, not a Django Admin replacement.

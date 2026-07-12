@@ -21,7 +21,16 @@ from apps.workflow.models import WorkflowDefinition, WorkflowInstance, WorkflowS
 
 from .connectors import IMAPEmailConnector
 from .dto import RawEmailMessage
-from .models import EmailAccount, EmailAnswerDraft, EmailAttachment, EmailMessage, EmailProjectLink, EmailQuestion, EmailThread
+from .models import (
+    EmailAccount,
+    EmailAnswerDraft,
+    EmailAttachment,
+    EmailMailboxState,
+    EmailMessage,
+    EmailProjectLink,
+    EmailQuestion,
+    EmailThread,
+)
 from .services import (
     ApproveEmailAnswerDraftCommand,
     BuildConversationContextCommand,
@@ -34,16 +43,23 @@ from .services import (
     EmailAnswerDraftService,
     EmailAttachmentDocumentService,
     EmailImportService,
+    EmailMailboxStateService,
     EmailProcessingService,
     EmailProjectLinkService,
     EmailProjectSuggestionService,
     EmailQuestionDetectionService,
+    GetOrCreateMailboxStateCommand,
+    MailboxUIDValidityChangedError,
+    MarkMailboxSyncCompletedCommand,
+    MarkMailboxSyncFailedCommand,
+    MarkMailboxSyncStartedCommand,
     MarkEmailAnswerDraftNeedsReviewCommand,
     ProcessEmailCommand,
     RejectEmailAnswerDraftCommand,
     RejectEmailProjectLinkCommand,
     SuggestEmailProjectLinksCommand,
     SyncEmailAccountCommand,
+    UpdateMailboxSyncProgressCommand,
     EmailSyncService,
 )
 
@@ -228,6 +244,345 @@ class EmailAccountModelTests(TestCase):
         )
 
         self.assertEqual(str(account), "Gmail account <gmail@example.com>")
+
+
+class EmailMailboxStateModelTests(TestCase):
+    def test_can_create_mailbox_state(self):
+        account = create_email_account()
+
+        state = EmailMailboxState.objects.create(
+            organization=account.organization,
+            email_account=account,
+            mailbox_name="INBOX",
+        )
+
+        self.assertIsNotNone(state.id)
+        self.assertEqual(state.organization, account.organization)
+        self.assertEqual(state.email_account, account)
+
+    def test_defaults_are_correct(self):
+        account = create_email_account()
+
+        state = EmailMailboxState.objects.create(
+            organization=account.organization,
+            email_account=account,
+            mailbox_name="INBOX",
+        )
+
+        self.assertEqual(state.external_mailbox_id, "")
+        self.assertEqual(state.sync_status, EmailMailboxState.SyncStatus.IDLE)
+        self.assertEqual(state.initial_import_status, EmailMailboxState.InitialImportStatus.NOT_STARTED)
+        self.assertEqual(state.last_error, "")
+        self.assertEqual(state.discovered_count, 0)
+        self.assertEqual(state.imported_count, 0)
+        self.assertEqual(state.processed_count, 0)
+        self.assertEqual(state.skipped_count, 0)
+        self.assertEqual(state.failed_count, 0)
+        self.assertEqual(state.cursor_metadata, {})
+        self.assertEqual(state.metadata, {})
+
+    def test_account_and_mailbox_uniqueness(self):
+        account = create_email_account()
+        EmailMailboxState.objects.create(
+            organization=account.organization,
+            email_account=account,
+            mailbox_name="INBOX",
+        )
+
+        with self.assertRaises(IntegrityError):
+            EmailMailboxState.objects.create(
+                organization=account.organization,
+                email_account=account,
+                mailbox_name="INBOX",
+            )
+
+    def test_cursor_fields_are_nullable(self):
+        account = create_email_account()
+
+        state = EmailMailboxState.objects.create(
+            organization=account.organization,
+            email_account=account,
+            mailbox_name="INBOX",
+        )
+
+        self.assertIsNone(state.uid_validity)
+        self.assertIsNone(state.last_discovered_uid)
+        self.assertIsNone(state.last_processed_uid)
+        self.assertIsNone(state.highest_modseq)
+
+    def test_str_shows_account_mailbox_and_status(self):
+        account = create_email_account(email_address="sync@example.com")
+
+        state = EmailMailboxState.objects.create(
+            organization=account.organization,
+            email_account=account,
+            mailbox_name="Archive",
+        )
+
+        self.assertEqual(str(state), "sync@example.com Archive (idle)")
+
+
+class EmailMailboxStateServiceTests(TestCase):
+    def test_get_or_create_creates_state(self):
+        account = create_email_account()
+
+        state = EmailMailboxStateService.get_or_create(
+            GetOrCreateMailboxStateCommand(
+                email_account=account,
+                mailbox_name="INBOX",
+                external_mailbox_id="inbox-id",
+                uid_validity=123,
+                metadata={"source": "test"},
+            )
+        )
+
+        self.assertEqual(state.organization, account.organization)
+        self.assertEqual(state.email_account, account)
+        self.assertEqual(state.mailbox_name, "INBOX")
+        self.assertEqual(state.external_mailbox_id, "inbox-id")
+        self.assertEqual(state.uid_validity, 123)
+        self.assertEqual(state.metadata, {"source": "test"})
+
+    def test_get_or_create_returns_existing_without_resetting_progress(self):
+        account = create_email_account()
+        state = EmailMailboxState.objects.create(
+            organization=account.organization,
+            email_account=account,
+            mailbox_name="INBOX",
+            uid_validity=123,
+            last_processed_uid=50,
+            imported_count=10,
+        )
+
+        returned = EmailMailboxStateService.get_or_create(
+            GetOrCreateMailboxStateCommand(email_account=account, mailbox_name="INBOX", uid_validity=123)
+        )
+
+        self.assertEqual(returned, state)
+        self.assertEqual(returned.last_processed_uid, 50)
+        self.assertEqual(returned.imported_count, 10)
+
+    def test_organization_copied_from_account(self):
+        account = create_email_account()
+
+        state = EmailMailboxStateService.get_or_create(GetOrCreateMailboxStateCommand(email_account=account))
+
+        self.assertEqual(state.organization, account.organization)
+
+    def test_mark_started_updates_status_and_timestamps(self):
+        state = self._state()
+
+        EmailMailboxStateService.mark_started(MarkMailboxSyncStartedCommand(mailbox_state=state))
+
+        state.refresh_from_db()
+        self.assertEqual(state.sync_status, EmailMailboxState.SyncStatus.RUNNING)
+        self.assertIsNotNone(state.last_sync_started_at)
+        self.assertIsNotNone(state.last_progress_at)
+        self.assertEqual(state.last_error, "")
+
+    def test_initial_import_start_updates_initial_import_status(self):
+        state = self._state()
+
+        EmailMailboxStateService.mark_started(
+            MarkMailboxSyncStartedCommand(mailbox_state=state, initial_import=True)
+        )
+
+        state.refresh_from_db()
+        self.assertEqual(state.initial_import_status, EmailMailboxState.InitialImportStatus.RUNNING)
+
+    def test_update_progress_updates_cursors(self):
+        state = self._state()
+
+        EmailMailboxStateService.update_progress(
+            UpdateMailboxSyncProgressCommand(
+                mailbox_state=state,
+                last_discovered_uid=100,
+                last_processed_uid=90,
+                highest_modseq=5000,
+            )
+        )
+
+        state.refresh_from_db()
+        self.assertEqual(state.last_discovered_uid, 100)
+        self.assertEqual(state.last_processed_uid, 90)
+        self.assertEqual(state.highest_modseq, 5000)
+        self.assertIsNotNone(state.last_progress_at)
+
+    def test_update_progress_increments_counts(self):
+        state = self._state()
+
+        EmailMailboxStateService.update_progress(
+            UpdateMailboxSyncProgressCommand(
+                mailbox_state=state,
+                discovered_increment=3,
+                imported_increment=2,
+                processed_increment=1,
+                skipped_increment=4,
+                failed_increment=5,
+            )
+        )
+
+        state.refresh_from_db()
+        self.assertEqual(state.discovered_count, 3)
+        self.assertEqual(state.imported_count, 2)
+        self.assertEqual(state.processed_count, 1)
+        self.assertEqual(state.skipped_count, 4)
+        self.assertEqual(state.failed_count, 5)
+
+    def test_update_progress_rejects_negative_increments(self):
+        state = self._state()
+
+        with self.assertRaisesMessage(ValueError, "cannot be negative"):
+            EmailMailboxStateService.update_progress(
+                UpdateMailboxSyncProgressCommand(mailbox_state=state, imported_increment=-1)
+            )
+
+    def test_mark_completed_updates_successful_sync_timestamps(self):
+        state = self._state()
+
+        EmailMailboxStateService.mark_completed(MarkMailboxSyncCompletedCommand(mailbox_state=state))
+
+        state.refresh_from_db()
+        self.assertEqual(state.sync_status, EmailMailboxState.SyncStatus.IDLE)
+        self.assertIsNotNone(state.last_sync_completed_at)
+        self.assertIsNotNone(state.last_successful_sync_at)
+        self.assertIsNotNone(state.last_progress_at)
+        self.assertEqual(state.last_error, "")
+
+    def test_initial_import_completion_updates_status(self):
+        state = self._state(initial_import_status=EmailMailboxState.InitialImportStatus.RUNNING)
+
+        EmailMailboxStateService.mark_completed(
+            MarkMailboxSyncCompletedCommand(mailbox_state=state, initial_import=True)
+        )
+
+        state.refresh_from_db()
+        self.assertEqual(state.initial_import_status, EmailMailboxState.InitialImportStatus.COMPLETED)
+
+    def test_mark_failed_stores_safe_error(self):
+        state = self._state()
+
+        EmailMailboxStateService.mark_failed(
+            MarkMailboxSyncFailedCommand(
+                mailbox_state=state,
+                safe_error="IMAP fetch failed safely",
+                initial_import=True,
+            )
+        )
+
+        state.refresh_from_db()
+        self.assertEqual(state.sync_status, EmailMailboxState.SyncStatus.FAILED)
+        self.assertEqual(state.initial_import_status, EmailMailboxState.InitialImportStatus.FAILED)
+        self.assertEqual(state.last_error, "IMAP fetch failed safely")
+        self.assertIsNotNone(state.last_sync_completed_at)
+        self.assertIsNotNone(state.last_progress_at)
+
+    def test_pause_changes_status(self):
+        state = self._state(
+            sync_status=EmailMailboxState.SyncStatus.RUNNING,
+            initial_import_status=EmailMailboxState.InitialImportStatus.RUNNING,
+        )
+
+        EmailMailboxStateService.pause(state)
+
+        state.refresh_from_db()
+        self.assertEqual(state.sync_status, EmailMailboxState.SyncStatus.PAUSED)
+        self.assertEqual(state.initial_import_status, EmailMailboxState.InitialImportStatus.PAUSED)
+
+    def test_metadata_not_mutated(self):
+        account = create_email_account()
+        metadata = {"source": {"name": "test"}}
+        original_metadata = {"source": {"name": "test"}}
+
+        state = EmailMailboxStateService.get_or_create(
+            GetOrCreateMailboxStateCommand(email_account=account, metadata=metadata)
+        )
+        state.metadata["source"]["name"] = "changed"
+
+        self.assertEqual(metadata, original_metadata)
+
+    def test_cursor_metadata_not_mutated(self):
+        state = self._state()
+        cursor_metadata = {"cursor": {"uid": 10}}
+        original_cursor_metadata = {"cursor": {"uid": 10}}
+
+        EmailMailboxStateService.update_progress(
+            UpdateMailboxSyncProgressCommand(mailbox_state=state, cursor_metadata=cursor_metadata)
+        )
+        state.refresh_from_db()
+        state.cursor_metadata["cursor"]["uid"] = 20
+
+        self.assertEqual(cursor_metadata, original_cursor_metadata)
+
+    def test_audit_event_created_for_start_completed_failed_and_pause(self):
+        state = self._state()
+
+        EmailMailboxStateService.mark_started(MarkMailboxSyncStartedCommand(mailbox_state=state))
+        EmailMailboxStateService.mark_completed(MarkMailboxSyncCompletedCommand(mailbox_state=state))
+        EmailMailboxStateService.mark_failed(MarkMailboxSyncFailedCommand(mailbox_state=state, safe_error="safe"))
+        EmailMailboxStateService.pause(state)
+
+        event_types = set(AuditEvent.objects.values_list("event_type", flat=True))
+        self.assertIn("email.mailbox_sync_started", event_types)
+        self.assertIn("email.mailbox_sync_completed", event_types)
+        self.assertIn("email.mailbox_sync_failed", event_types)
+        self.assertIn("email.mailbox_sync_paused", event_types)
+
+    def test_transaction_rollback(self):
+        state = self._state()
+
+        with patch("apps.communications.services.mailbox_state.AuditService.record", side_effect=RuntimeError("audit failed")):
+            with self.assertRaises(RuntimeError):
+                EmailMailboxStateService.mark_started(MarkMailboxSyncStartedCommand(mailbox_state=state))
+
+        state.refresh_from_db()
+        self.assertEqual(state.sync_status, EmailMailboxState.SyncStatus.IDLE)
+        self.assertIsNone(state.last_sync_started_at)
+
+    def test_uidvalidity_change_is_detected_and_not_silently_accepted(self):
+        account = create_email_account()
+        state = EmailMailboxState.objects.create(
+            organization=account.organization,
+            email_account=account,
+            mailbox_name="INBOX",
+            uid_validity=123,
+            last_processed_uid=50,
+        )
+
+        with self.assertRaises(MailboxUIDValidityChangedError):
+            EmailMailboxStateService.get_or_create(
+                GetOrCreateMailboxStateCommand(email_account=account, mailbox_name="INBOX", uid_validity=456)
+            )
+
+        state.refresh_from_db()
+        self.assertEqual(state.uid_validity, 123)
+        self.assertEqual(state.last_processed_uid, 50)
+        self.assertEqual(state.cursor_metadata, {})
+
+    def test_organization_isolation_works(self):
+        account = create_email_account(email_address="one@example.com")
+        other_account = create_email_account(email_address="two@example.com")
+
+        state = EmailMailboxStateService.get_or_create(
+            GetOrCreateMailboxStateCommand(email_account=account, mailbox_name="INBOX")
+        )
+        other_state = EmailMailboxStateService.get_or_create(
+            GetOrCreateMailboxStateCommand(email_account=other_account, mailbox_name="INBOX")
+        )
+
+        self.assertNotEqual(state.organization, other_state.organization)
+        self.assertEqual(state.email_account, account)
+        self.assertEqual(other_state.email_account, other_account)
+
+    def _state(self, **kwargs):
+        account = kwargs.pop("email_account", None) or create_email_account()
+        defaults = {
+            "organization": account.organization,
+            "email_account": account,
+            "mailbox_name": "INBOX",
+        }
+        defaults.update(kwargs)
+        return EmailMailboxState.objects.create(**defaults)
 
 
 class IMAPEmailConnectorTests(TestCase):
