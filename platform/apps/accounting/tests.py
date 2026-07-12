@@ -1,6 +1,9 @@
-from io import BytesIO
 from dataclasses import FrozenInstanceError
+from datetime import date, datetime
+from decimal import Decimal
+from io import BytesIO
 from io import StringIO
+from copy import deepcopy
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db import IntegrityError
@@ -18,7 +21,7 @@ from apps.accounting.connectors import (
     MeritAuthenticationService,
     MeritAPIClient,
 )
-from apps.accounting.dto import MeritDimensionDTO, MeritDimensionValueDTO
+from apps.accounting.dto import MeritDimensionDTO, MeritDimensionValueDTO, MeritGLBatchDTO, MeritGLDateType
 from apps.accounting.models import AccountingDimension, AccountingIntegration
 from apps.accounting.secrets import SecretMissingError, SecretProvider
 from apps.accounting.services import (
@@ -974,6 +977,274 @@ class MeritDimensionAPITests(TestCase):
 
         self.assertEqual(Project.objects.count(), project_count)
         self.assertEqual(AccountingDimension.objects.count(), dimension_count)
+
+
+class MeritGLFullDetailsAPITests(TestCase):
+    def _sample_batch(self):
+        return {
+            "GLBId": "glb-1",
+            "BatchCode": "GL",
+            "No": "42",
+            "DocId": "doc-1",
+            "Document": "Purchase invoice",
+            "BatchDate": "2026-07-01",
+            "CurrencyCode": "EUR",
+            "CurrencyRate": "1.000000",
+            "TotalAmount": "123.450000",
+            "PriceInclVat": True,
+            "ChangedDate": "2026-07-02T10:20:30+00:00",
+            "Entries": [
+                {
+                    "AccountCode": "4000",
+                    "AccontName": "Revenue",
+                    "Memo": "Project work",
+                    "DepartmentCode": "D1",
+                    "DebitAmount": "0",
+                    "DebitCurrency": "EUR",
+                    "CreditAmount": "123.450000",
+                    "CreditCurrency": "EUR",
+                    "TypeId": 1,
+                    "BatchId": "glb-1",
+                    "EntryId": "entry-1",
+                    "TaxId": "tax-1",
+                    "TaxPct": "22.0000",
+                    "CostAllocLines": [
+                        {
+                            "SourceType": "project",
+                            "Code": "26124",
+                            "Name": "Kanarbiku",
+                            "Mult": "1.0000",
+                            "Amount": "123.450000",
+                            "BatchId": "glb-1",
+                            "EntryId": "entry-1",
+                        }
+                    ],
+                }
+            ],
+        }
+
+    def _call_gl(self, client):
+        return client.get_gl_batches_full(date(2026, 7, 1), date(2026, 7, 31))
+
+    def test_get_gl_batches_full_builds_post_request_payload(self):
+        client = MeritAPIClient(create_merit_integration())
+
+        with patch.object(client, "request", return_value=[]) as request_mock:
+            self._call_gl(client)
+
+        request_mock.assert_called_once()
+        self.assertEqual(request_mock.call_args.args, ("POST", MeritAPIClient.GL_BATCHES_FULL_PATH))
+        self.assertEqual(
+            request_mock.call_args.kwargs["payload"],
+            {
+                "PeriodStart": "2026-07-01",
+                "PeriodEnd": "2026-07-31",
+                "WithLines": 1,
+                "WithCostAlloc": 1,
+                "DateType": 0,
+            },
+        )
+
+    def test_get_gl_batches_full_supports_flags_and_changed_date_type(self):
+        client = MeritAPIClient(create_merit_integration())
+
+        with patch.object(client, "request", return_value=[]) as request_mock:
+            client.get_gl_batches_full(
+                "2026-07-01",
+                "2026-07-31",
+                with_lines=False,
+                with_cost_allocations=False,
+                date_type=MeritGLDateType.CHANGED_DATE,
+            )
+
+        payload = request_mock.call_args.kwargs["payload"]
+        self.assertEqual(payload["WithLines"], 0)
+        self.assertEqual(payload["WithCostAlloc"], 0)
+        self.assertEqual(payload["DateType"], 1)
+
+    def test_get_gl_batches_full_rejects_period_longer_than_31_calendar_days(self):
+        client = MeritAPIClient(create_merit_integration())
+
+        with self.assertRaises(ValueError):
+            client.get_gl_batches_full(date(2026, 7, 1), date(2026, 8, 1))
+
+    def test_get_gl_batches_full_rejects_reversed_period(self):
+        client = MeritAPIClient(create_merit_integration())
+
+        with self.assertRaises(ValueError):
+            client.get_gl_batches_full(date(2026, 7, 31), date(2026, 7, 1))
+
+    def test_get_gl_batches_full_rejects_unsupported_date_type(self):
+        client = MeritAPIClient(create_merit_integration())
+
+        with self.assertRaises(ValueError):
+            client.get_gl_batches_full(date(2026, 7, 1), date(2026, 7, 31), date_type="posted_date")
+
+    def test_get_gl_batches_full_empty_response_returns_empty_list(self):
+        client = MeritAPIClient(create_merit_integration())
+
+        with patch.object(client, "request", return_value=[]):
+            batches = self._call_gl(client)
+
+        self.assertEqual(batches, [])
+
+    def test_get_gl_batches_full_maps_one_batch_without_entries(self):
+        client = MeritAPIClient(create_merit_integration())
+        raw_batch = self._sample_batch()
+        raw_batch.pop("Entries")
+
+        with patch.object(client, "request", return_value=[raw_batch]):
+            batches = self._call_gl(client)
+
+        self.assertEqual(len(batches), 1)
+        self.assertIsInstance(batches[0], MeritGLBatchDTO)
+        self.assertEqual(batches[0].external_id, "glb-1")
+        self.assertEqual(batches[0].entries, ())
+
+    def test_get_gl_batches_full_maps_entries_and_cost_allocations(self):
+        client = MeritAPIClient(create_merit_integration())
+
+        with patch.object(client, "request", return_value=[self._sample_batch()]):
+            batch = self._call_gl(client)[0]
+
+        entry = batch.entries[0]
+        allocation = entry.cost_allocations[0]
+        self.assertEqual(entry.account_code, "4000")
+        self.assertEqual(entry.account_name, "Revenue")
+        self.assertEqual(entry.credit_amount, Decimal("123.450000"))
+        self.assertEqual(entry.tax_percent, Decimal("22.0000"))
+        self.assertEqual(allocation.source_type, "project")
+        self.assertEqual(allocation.code, "26124")
+        self.assertEqual(allocation.amount, Decimal("123.450000"))
+        self.assertEqual(allocation.multiplier, Decimal("1.0000"))
+
+    def test_get_gl_batches_full_maps_multiple_batches(self):
+        client = MeritAPIClient(create_merit_integration())
+        second = self._sample_batch()
+        second["GLBId"] = "glb-2"
+        second["No"] = "43"
+
+        with patch.object(client, "request", return_value=[self._sample_batch(), second]):
+            batches = self._call_gl(client)
+
+        self.assertEqual([batch.external_id for batch in batches], ["glb-1", "glb-2"])
+
+    def test_get_gl_batches_full_maps_multiple_project_allocations(self):
+        client = MeritAPIClient(create_merit_integration())
+        raw_batch = self._sample_batch()
+        raw_batch["Entries"][0]["CostAllocLines"].append(
+            {
+                "SourceType": "project",
+                "Code": "26125",
+                "Name": "Lennujaama",
+                "Mult": "0.5000",
+                "Amount": "61.725000",
+            }
+        )
+
+        with patch.object(client, "request", return_value=[raw_batch]):
+            allocations = self._call_gl(client)[0].entries[0].cost_allocations
+
+        self.assertEqual([allocation.code for allocation in allocations], ["26124", "26125"])
+
+    def test_get_gl_batches_full_supports_account_name_spelling(self):
+        client = MeritAPIClient(create_merit_integration())
+        raw_batch = self._sample_batch()
+        raw_batch["Entries"][0].pop("AccontName")
+        raw_batch["Entries"][0]["AccountName"] = "Revenue corrected"
+
+        with patch.object(client, "request", return_value=[raw_batch]):
+            entry = self._call_gl(client)[0].entries[0]
+
+        self.assertEqual(entry.account_name, "Revenue corrected")
+
+    def test_get_gl_batches_full_keeps_decimal_precision(self):
+        client = MeritAPIClient(create_merit_integration())
+        raw_batch = self._sample_batch()
+        raw_batch["TotalAmount"] = "123.456789"
+        raw_batch["CurrencyRate"] = "1.234567"
+
+        with patch.object(client, "request", return_value=[raw_batch]):
+            batch = self._call_gl(client)[0]
+
+        self.assertEqual(batch.total_amount, Decimal("123.456789"))
+        self.assertEqual(batch.currency_rate, Decimal("1.234567"))
+
+    def test_get_gl_batches_full_tolerates_nullable_fields(self):
+        client = MeritAPIClient(create_merit_integration())
+        raw_batch = self._sample_batch()
+        raw_batch["BatchDate"] = None
+        raw_batch["ChangedDate"] = "not-a-date"
+        raw_batch["TotalAmount"] = None
+        raw_batch["PriceInclVat"] = None
+        raw_batch["Entries"][0]["CostAllocLines"] = None
+
+        with patch.object(client, "request", return_value=[raw_batch]):
+            batch = self._call_gl(client)[0]
+
+        self.assertIsNone(batch.batch_date)
+        self.assertIsNone(batch.changed_at)
+        self.assertIsNone(batch.total_amount)
+        self.assertIsNone(batch.price_includes_vat)
+        self.assertEqual(batch.entries[0].cost_allocations, ())
+
+    def test_get_gl_batches_full_preserves_raw_and_does_not_mutate_response(self):
+        client = MeritAPIClient(create_merit_integration())
+        response = [self._sample_batch()]
+        original = deepcopy(response)
+
+        with patch.object(client, "request", return_value=response):
+            batch = self._call_gl(client)[0]
+
+        self.assertEqual(response, original)
+        response[0]["Document"] = "Changed after mapping"
+        self.assertEqual(batch.raw["Document"], "Purchase invoice")
+        self.assertEqual(original[0]["Document"], "Purchase invoice")
+
+    def test_gl_batch_dto_is_immutable(self):
+        client = MeritAPIClient(create_merit_integration())
+
+        with patch.object(client, "request", return_value=[self._sample_batch()]):
+            batch = self._call_gl(client)[0]
+
+        with self.assertRaises(FrozenInstanceError):
+            batch.external_id = "changed"
+
+    def test_get_gl_batches_full_invalid_top_level_payload_raises(self):
+        client = MeritAPIClient(create_merit_integration())
+
+        with patch.object(client, "request", return_value={}):
+            with self.assertRaises(AccountingUnexpectedResponseError):
+                self._call_gl(client)
+
+    def test_get_gl_batches_full_malformed_batch_without_identity_raises(self):
+        client = MeritAPIClient(create_merit_integration())
+
+        with patch.object(client, "request", return_value=[{"BatchCode": "GL"}]):
+            with self.assertRaises(AccountingUnexpectedResponseError):
+                self._call_gl(client)
+
+    def test_get_gl_batches_full_invalid_json_propagates(self):
+        client = MeritAPIClient(create_merit_integration())
+
+        with patch.object(client, "request", side_effect=AccountingUnexpectedResponseError("invalid json")):
+            with self.assertRaises(AccountingUnexpectedResponseError):
+                self._call_gl(client)
+
+    def test_get_gl_batches_full_does_not_write_database_or_audit(self):
+        organization = create_organization()
+        integration = create_merit_integration(organization)
+        project_count = Project.objects.count()
+        dimension_count = AccountingDimension.objects.count()
+        audit_count = AuditEvent.objects.count()
+        client = MeritAPIClient(integration)
+
+        with patch.object(client, "request", return_value=[]):
+            client.get_gl_batches_full(date(2026, 7, 1), date(2026, 7, 31))
+
+        self.assertEqual(Project.objects.count(), project_count)
+        self.assertEqual(AccountingDimension.objects.count(), dimension_count)
+        self.assertEqual(AuditEvent.objects.count(), audit_count)
 
 
 class AccountingDimensionSyncServiceTests(TestCase):
