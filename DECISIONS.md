@@ -376,3 +376,22 @@ Reason:
 - Downloading and processing every attachment immediately would create performance, storage, memory, and reliability risks.
 - The Workspace is operational memory, not an IMAP mirror; business history must survive mailbox reorganization, deletion, or account disconnection.
 - Separating message index, attachment manifest, binary storage, and business documents keeps storage scalable and preserves service boundaries.
+
+## ADR-025: Project Financial Reporting Uses Synchronized Merit Read Models
+
+Date: 2026-07-12
+
+Decision:
+
+- Project financial reporting shall be built from synchronized Merit general-ledger transactions, invoices, and payments.
+- Merit remains the accounting system of record.
+- Workspace provides project allocations, reconciliation, alerts, explainable aggregation, and controlled report distribution.
+- General ledger rows, invoice records, payment records, source documents, and bank evidence remain separate but linkable identities.
+- Financial reports must be auditable, reproducible, period-aware, organization-scoped, and drillable to source records.
+
+Reason:
+
+- Project managers and management need project financial visibility inside the operational workspace without replacing Merit.
+- Final project result and margin require booked GL data, not only invoice gross totals.
+- Missing invoices, unpaid invoices, source-document gaps, and unmatched bank payments require reconciliation across accounting, documents, e-mail, and bank evidence.
+- Financial reporting is high-risk; uncertain matches, external report delivery, and accounting-impacting decisions require evidence, policy, permissions, and audit.

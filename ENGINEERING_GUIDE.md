@@ -281,6 +281,23 @@ E-mail storage and sync rules:
 - Every external or destructive action is auditable.
 - Historical import must be controllable and observable.
 
+Project financial reporting follows `FINANCIAL_REPORTING_ARCHITECTURE.md`.
+
+Financial integration rules:
+
+- Merit remains the accounting system of record.
+- General ledger transactions, invoices, payments, source documents, and bank evidence are separate identities.
+- Financial sync must be incremental, idempotent, period-aware, and auditable.
+- Project financial totals use allocation amounts, not whole invoice or transaction totals duplicated across dimensions.
+- Multi-dimensional allocations must not be double-counted.
+- Financial reports must drill down to source transactions, allocations, account mappings, sync runs, and audit events.
+- Document evidence and accounting records remain separate but linkable.
+- Uncertain invoice/payment/document matches require user confirmation.
+- External report sending is policy-controlled and audited.
+- Connectors own endpoint knowledge; services own persistence, aggregation, reconciliation, and decisions.
+- Raw financial API payloads are retained for traceability but must not become direct UI truth.
+- Reopened or changed accounting periods must be resyncable and recomputable.
+
 Allowed:
 
 - Accounting calls policy services before approving or sending an invoice.

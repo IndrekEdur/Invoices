@@ -4,7 +4,7 @@ This roadmap describes the intended direction for the invoice automation project
 
 `MASTER_ARCHITECTURE.md` is the main architecture reference for aligning roadmap tasks with the broader AI Business Operating System vision.
 
-Current architecture phase: Intelligent Email Storage Architecture.
+Current architecture phase: Project Financial Reporting Architecture.
 
 Current product phase: Operations Workspace MVP.
 

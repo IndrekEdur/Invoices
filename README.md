@@ -28,6 +28,8 @@ Normal IMAP sync now uses incremental UID-based mailbox cursors. It resumes from
 
 `MERIT_INTEGRATION_ARCHITECTURE.md` describes how Workspace project codes synchronize with Merit Aktiva dimensions through explicit, auditable integration services.
 
+`FINANCIAL_REPORTING_ARCHITECTURE.md` describes how Workspace will import Merit general-ledger transactions, invoices and payments into an auditable local cache for project financial reporting, reconciliation, alerts and controlled report distribution.
+
 `MERIT_VERIFICATION_GUIDE.md` describes the safe manual workflow for verifying real Merit credentials, connection checks, dimension sync, local cache updates, and project dimension creation.
 
 `SETTINGS_ARCHITECTURE.md` describes how administrators manage organizations, users, roles, e-mail accounts, accounting integrations, Merit settings, secrets, sync health, and system configuration from the Workspace UI.
