@@ -54,7 +54,16 @@ The accounting app includes persistent accounting sync cursor and run tracking s
 
 The accounting app includes a normalized general-ledger cache for batches, entries and allocation lines. Merit connector DTOs and local persistence are separate; GL synchronization and financial reporting are still planned.
 
-The accounting app includes a GL transaction synchronization service and `sync_general_ledger` management command for bounded 31-day Merit GL periods. Project financial aggregation is not implemented yet.
+The accounting app includes a GL transaction synchronization service and `sync_general_ledger` management command for bounded 31-day Merit GL periods.
+
+The accounting app includes exact-code account classification configuration and a read-only project financial aggregation service. Project totals are calculated from local GL allocation rows, unclassified amounts stay visible and excluded from trusted result totals, and no financial UI or alert rules exist yet.
+
+Read-only project financial summary example:
+
+```powershell
+cd platform
+python manage.py project_financial_summary <project_id> --start 2026-06-01 --end 2026-06-30 --currency EUR --show-unclassified
+```
 
 The accounting app includes a read-only `verify_general_ledger_sync` management command for operator-driven real Merit GL verification. Real API calls happen only when `--run-sync` is explicitly provided.
 

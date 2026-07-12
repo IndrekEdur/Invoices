@@ -241,3 +241,74 @@ class GeneralLedgerVerificationResult:
     warnings: list[str]
     critical_errors: list[str]
     metadata: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ProjectFinancialCategoryTotal:
+    category: str
+    amount: object
+    allocation_count: int
+    entry_count: int
+    source_account_codes: list[str]
+    metadata: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ProjectFinancialMonth:
+    year: int
+    month: int
+    period_start: object
+    period_end: object
+    revenue: object
+    material_cost: object
+    subcontractor_cost: object
+    labor_cost: object
+    equipment_cost: object
+    transport_cost: object
+    other_direct_cost: object
+    overhead: object
+    total_cost: object
+    result: object
+    margin: object
+    classified_amount: object
+    unclassified_amount: object
+    excluded_amount: object
+    allocation_count: int
+    unclassified_allocation_count: int
+    warnings: list[str]
+    category_totals: dict
+    metadata: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ProjectFinancialAggregationResult:
+    project: object
+    period_start: object
+    period_end: object
+    currency: str
+    months: list
+    revenue: object
+    total_cost: object
+    result: object
+    margin: object
+    classified_amount: object
+    unclassified_amount: object
+    excluded_amount: object
+    allocation_count: int
+    unclassified_allocation_count: int
+    source_batch_count: int
+    source_entry_count: int
+    source_sync_run_ids: list[int]
+    warnings: list[str]
+    data_quality_status: str
+    metadata: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class AggregateProjectFinancialsCommand:
+    project: object
+    period_start: object
+    period_end: object
+    currency: str | None = None
+    include_overhead: bool = True
+    metadata: dict | None = None

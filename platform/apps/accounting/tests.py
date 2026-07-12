@@ -31,6 +31,7 @@ from apps.accounting.dto import (
     MeritGLEntryDTO,
 )
 from apps.accounting.models import (
+    AccountingAccountClassification,
     AccountingDimension,
     AccountingGLAllocation,
     AccountingGLBatch,
@@ -41,6 +42,8 @@ from apps.accounting.models import (
 )
 from apps.accounting.secrets import SecretMissingError, SecretProvider
 from apps.accounting.services import (
+    AccountClassificationService,
+    AggregateProjectFinancialsCommand,
     AccountingDimensionConflictResolutionService,
     AccountingDimensionValueService,
     AccountingDimensionSyncService,
@@ -56,6 +59,7 @@ from apps.accounting.services import (
     GLCacheUpsertResult,
     IgnoreDimensionConflictCommand,
     ProjectCodeAllocationService,
+    ProjectFinancialAggregationService,
     ResolveDimensionConflictCommand,
     SuggestNextProjectCodeCommand,
     StartAccountingSyncRunCommand,
@@ -782,6 +786,415 @@ class GeneralLedgerCacheModelTests(TestCase):
             batch=batch,
             external_id="entry-1",
         )
+
+
+class AccountingAccountClassificationTests(TestCase):
+    def test_create_classification_and_unique_constraints(self):
+        integration = create_merit_integration()
+        classification = AccountingAccountClassification.objects.create(
+            organization=integration.organization,
+            integration=integration,
+            account_code="4000",
+            account_name="Revenue",
+            category=AccountingAccountClassification.Category.REVENUE,
+            reporting_sign=Decimal("-1"),
+        )
+
+        self.assertEqual(classification.category, AccountingAccountClassification.Category.REVENUE)
+        with self.assertRaises(Exception):
+            AccountingAccountClassification.objects.create(
+                organization=integration.organization,
+                integration=integration,
+                account_code="4000",
+            )
+
+    def test_reporting_sign_validation(self):
+        integration = create_merit_integration()
+
+        with self.assertRaises(Exception):
+            AccountingAccountClassification.objects.create(
+                organization=integration.organization,
+                account_code="4000",
+                reporting_sign=Decimal("2"),
+            )
+
+    def test_lookup_priority_fallback_inactive_and_isolation(self):
+        integration = create_merit_integration()
+        other_integration = create_merit_integration(create_organization("Other Class Org"))
+        AccountingAccountClassification.objects.create(
+            organization=integration.organization,
+            account_code="4000",
+            category=AccountingAccountClassification.Category.MATERIAL_COST,
+        )
+        AccountingAccountClassification.objects.create(
+            organization=integration.organization,
+            integration=integration,
+            account_code="4000",
+            category=AccountingAccountClassification.Category.REVENUE,
+            reporting_sign=Decimal("-1"),
+        )
+        AccountingAccountClassification.objects.create(
+            organization=integration.organization,
+            integration=integration,
+            account_code="5000",
+            category=AccountingAccountClassification.Category.LABOR_COST,
+            is_active=False,
+        )
+        AccountingAccountClassification.objects.create(
+            organization=other_integration.organization,
+            account_code="4000",
+            category=AccountingAccountClassification.Category.SUBCONTRACTOR_COST,
+        )
+
+        exact = AccountClassificationService.get_classification(integration.organization, integration, "4000")
+        fallback = AccountClassificationService.get_classification(integration.organization, integration, "4010")
+        inactive = AccountClassificationService.get_classification(integration.organization, integration, "5000")
+
+        self.assertEqual(exact["category"], AccountingAccountClassification.Category.REVENUE)
+        self.assertEqual(fallback["category"], AccountingAccountClassification.Category.UNCLASSIFIED)
+        self.assertEqual(inactive["category"], AccountingAccountClassification.Category.UNCLASSIFIED)
+
+    def test_lookup_performs_no_writes(self):
+        integration = create_merit_integration()
+        count = AccountingAccountClassification.objects.count()
+
+        AccountClassificationService.get_classification(integration.organization, integration, "4000")
+
+        self.assertEqual(AccountingAccountClassification.objects.count(), count)
+
+
+class ProjectFinancialAggregationServiceTests(TestCase):
+    def _integration(self):
+        return create_merit_integration()
+
+    def _project(self, integration=None, code="26124"):
+        integration = integration or self._integration()
+        return Project.objects.create(organization=integration.organization, code=code, name="Kanarbiku")
+
+    def _classify(self, organization, account_code, category, *, integration=None, sign=Decimal("1"), include=True):
+        return AccountingAccountClassification.objects.create(
+            organization=organization,
+            integration=integration,
+            account_code=account_code,
+            account_name=f"Account {account_code}",
+            category=category,
+            reporting_sign=sign,
+            include_in_project_result=include,
+        )
+
+    def _allocation(
+        self,
+        project,
+        *,
+        integration=None,
+        batch_date=date(2026, 6, 15),
+        currency="EUR",
+        account_code="4000",
+        amount=Decimal("100.000000"),
+        external_suffix="1",
+        project_fk=True,
+        raw_data=None,
+    ):
+        integration = integration or create_merit_integration(project.organization)
+        batch = AccountingGLBatch.objects.create(
+            organization=project.organization,
+            integration=integration,
+            external_id=f"glb-{external_suffix}",
+            batch_date=batch_date,
+            currency_code=currency,
+            raw_data={"GLBId": f"glb-{external_suffix}"},
+        )
+        entry = AccountingGLEntry.objects.create(
+            organization=project.organization,
+            integration=integration,
+            batch=batch,
+            external_id=f"entry-{external_suffix}",
+            account_code=account_code,
+            account_name=f"Account {account_code}",
+            raw_data={"EntryId": f"entry-{external_suffix}"},
+        )
+        return AccountingGLAllocation.objects.create(
+            organization=project.organization,
+            integration=integration,
+            entry=entry,
+            external_id=f"alloc-{external_suffix}",
+            dimension_code=project.code,
+            dimension_name=project.name,
+            amount=amount,
+            project=project if project_fk else None,
+            raw_data=raw_data or {"Code": project.code},
+        )
+
+    def _aggregate(self, project, **kwargs):
+        defaults = {
+            "project": project,
+            "period_start": date(2026, 6, 1),
+            "period_end": date(2026, 6, 30),
+        }
+        defaults.update(kwargs)
+        return ProjectFinancialAggregationService().aggregate(AggregateProjectFinancialsCommand(**defaults))
+
+    def test_empty_project_returns_no_data_and_metadata_not_mutated(self):
+        project = self._project()
+        metadata = {"source": {"view": "test"}}
+
+        result = self._aggregate(project, metadata=metadata)
+        result.metadata["input_metadata"]["source"]["view"] = "changed"
+
+        self.assertEqual(result.data_quality_status, "no_data")
+        self.assertEqual(result.revenue, Decimal("0"))
+        self.assertEqual(metadata, {"source": {"view": "test"}})
+
+    def test_revenue_cost_result_margin_and_decimal_precision(self):
+        integration = self._integration()
+        project = self._project(integration)
+        self._classify(project.organization, "3000", AccountingAccountClassification.Category.REVENUE, integration=integration, sign=Decimal("-1"))
+        self._classify(project.organization, "5000", AccountingAccountClassification.Category.MATERIAL_COST, integration=integration)
+        self._allocation(project, integration=integration, account_code="3000", amount=Decimal("-1000.123456"), external_suffix="rev")
+        self._allocation(project, integration=integration, account_code="5000", amount=Decimal("250.123456"), external_suffix="cost")
+
+        result = self._aggregate(project)
+
+        self.assertEqual(result.revenue, Decimal("1000.123456"))
+        self.assertEqual(result.total_cost, Decimal("250.123456"))
+        self.assertEqual(result.result, Decimal("750.000000"))
+        self.assertEqual(result.margin, Decimal("74.99"))
+
+    def test_zero_revenue_margin_none_and_reversal_changes_totals(self):
+        integration = self._integration()
+        project = self._project(integration)
+        self._classify(project.organization, "5000", AccountingAccountClassification.Category.MATERIAL_COST, integration=integration)
+        self._allocation(project, integration=integration, account_code="5000", amount=Decimal("100.000000"), external_suffix="1")
+        self._allocation(project, integration=integration, account_code="5000", amount=Decimal("-20.000000"), external_suffix="2")
+
+        result = self._aggregate(project)
+
+        self.assertEqual(result.total_cost, Decimal("80.000000"))
+        self.assertIsNone(result.margin)
+
+    def test_multiple_cost_categories_and_overhead_toggle(self):
+        integration = self._integration()
+        project = self._project(integration)
+        self._classify(project.organization, "5100", AccountingAccountClassification.Category.SUBCONTRACTOR_COST, integration=integration)
+        self._classify(project.organization, "5200", AccountingAccountClassification.Category.LABOR_COST, integration=integration)
+        self._classify(project.organization, "5300", AccountingAccountClassification.Category.OVERHEAD, integration=integration)
+        self._allocation(project, integration=integration, account_code="5100", amount=Decimal("100.000000"), external_suffix="sub")
+        self._allocation(project, integration=integration, account_code="5200", amount=Decimal("50.000000"), external_suffix="labor")
+        self._allocation(project, integration=integration, account_code="5300", amount=Decimal("25.000000"), external_suffix="overhead")
+
+        included = self._aggregate(project)
+        excluded = self._aggregate(project, include_overhead=False)
+
+        self.assertEqual(included.total_cost, Decimal("175.000000"))
+        self.assertEqual(excluded.total_cost, Decimal("150.000000"))
+        self.assertEqual(included.months[0].subcontractor_cost, Decimal("100.000000"))
+        self.assertEqual(included.months[0].labor_cost, Decimal("50.000000"))
+
+    def test_unclassified_and_excluded_are_visible_but_excluded_from_result(self):
+        integration = self._integration()
+        project = self._project(integration)
+        self._classify(project.organization, "9999", AccountingAccountClassification.Category.EXCLUDED, integration=integration)
+        self._classify(project.organization, "8888", AccountingAccountClassification.Category.MATERIAL_COST, integration=integration, include=False)
+        self._allocation(project, integration=integration, account_code="7777", amount=Decimal("10.000000"), external_suffix="unclassified")
+        self._allocation(project, integration=integration, account_code="9999", amount=Decimal("20.000000"), external_suffix="excluded")
+        self._allocation(project, integration=integration, account_code="8888", amount=Decimal("30.000000"), external_suffix="notincluded")
+
+        result = self._aggregate(project)
+
+        self.assertEqual(result.unclassified_amount, Decimal("10.000000"))
+        self.assertEqual(result.excluded_amount, Decimal("50.000000"))
+        self.assertEqual(result.total_cost, Decimal("0"))
+        self.assertEqual(result.data_quality_status, "unclassified")
+
+    def test_monthly_grouping_partial_year_boundary_and_leap_year(self):
+        integration = self._integration()
+        project = self._project(integration)
+        self._classify(project.organization, "5000", AccountingAccountClassification.Category.MATERIAL_COST, integration=integration)
+        self._allocation(project, integration=integration, batch_date=date(2025, 12, 31), account_code="5000", amount=Decimal("10.000000"), external_suffix="dec")
+        self._allocation(project, integration=integration, batch_date=date(2026, 1, 1), account_code="5000", amount=Decimal("20.000000"), external_suffix="jan")
+        self._allocation(project, integration=integration, batch_date=date(2024, 2, 29), account_code="5000", amount=Decimal("30.000000"), external_suffix="leap")
+
+        boundary = ProjectFinancialAggregationService().aggregate(
+            AggregateProjectFinancialsCommand(project=project, period_start=date(2025, 12, 15), period_end=date(2026, 1, 10))
+        )
+        leap_intervals = ProjectFinancialAggregationService.split_months(date(2024, 2, 10), date(2024, 3, 5))
+
+        self.assertEqual([(month.year, month.month) for month in boundary.months], [(2025, 12), (2026, 1)])
+        self.assertEqual(boundary.total_cost, Decimal("30.000000"))
+        self.assertEqual(leap_intervals, [(date(2024, 2, 10), date(2024, 2, 29)), (date(2024, 3, 1), date(2024, 3, 5))])
+
+    def test_missing_batch_date_warning(self):
+        integration = self._integration()
+        project = self._project(integration)
+        self._classify(project.organization, "5000", AccountingAccountClassification.Category.MATERIAL_COST, integration=integration)
+        self._allocation(project, integration=integration, account_code="5000", external_suffix="dated")
+        batch = AccountingGLBatch.objects.create(
+            organization=project.organization,
+            integration=integration,
+            external_id="missing-date",
+            batch_date=None,
+        )
+        entry = AccountingGLEntry.objects.create(
+            organization=project.organization,
+            integration=integration,
+            batch=batch,
+            external_id="entry-missing",
+            account_code="5000",
+        )
+        AccountingGLAllocation.objects.create(
+            organization=project.organization,
+            integration=integration,
+            entry=entry,
+            external_id="alloc-missing",
+            dimension_code=project.code,
+            amount=Decimal("5.000000"),
+            project=project,
+        )
+
+        result = self._aggregate(project)
+
+        self.assertIn("missing_batch_date:1", result.warnings)
+        self.assertEqual(result.total_cost, Decimal("100.000000"))
+
+    def test_allocation_correctness_and_project_fk_required(self):
+        integration = self._integration()
+        project = self._project(integration, "26124")
+        other_project = Project.objects.create(organization=project.organization, code="26125", name="Other")
+        self._classify(project.organization, "5000", AccountingAccountClassification.Category.MATERIAL_COST, integration=integration)
+        batch = AccountingGLBatch.objects.create(
+            organization=project.organization,
+            integration=integration,
+            external_id="shared-batch",
+            batch_date=date(2026, 6, 10),
+            currency_code="EUR",
+        )
+        entry = AccountingGLEntry.objects.create(
+            organization=project.organization,
+            integration=integration,
+            batch=batch,
+            external_id="shared-entry",
+            account_code="5000",
+        )
+        AccountingGLAllocation.objects.create(organization=project.organization, integration=integration, entry=entry, external_id="a1", dimension_code="26124", amount=Decimal("40.000000"), project=project)
+        AccountingGLAllocation.objects.create(organization=project.organization, integration=integration, entry=entry, external_id="a2", dimension_code="26125", amount=Decimal("60.000000"), project=other_project)
+        AccountingGLAllocation.objects.create(organization=project.organization, integration=integration, entry=entry, external_id="a3", dimension_code="26124", amount=Decimal("999.000000"), project=None)
+
+        result = self._aggregate(project)
+
+        self.assertEqual(result.total_cost, Decimal("40.000000"))
+        self.assertEqual(result.allocation_count, 1)
+        self.assertIn("dimension_code_matches_project_without_project_fk:1", result.warnings)
+
+    def test_currency_behavior(self):
+        integration = self._integration()
+        project = self._project(integration)
+        self._classify(project.organization, "5000", AccountingAccountClassification.Category.MATERIAL_COST, integration=integration)
+        self._allocation(project, integration=integration, currency="EUR", account_code="5000", amount=Decimal("10.000000"), external_suffix="eur")
+        self._allocation(project, integration=integration, currency="USD", account_code="5000", amount=Decimal("20.000000"), external_suffix="usd")
+
+        mixed = self._aggregate(project)
+        eur = self._aggregate(project, currency="EUR")
+
+        self.assertEqual(mixed.data_quality_status, "mixed_currency")
+        self.assertIn("mixed_currency", mixed.warnings)
+        self.assertEqual(eur.currency, "EUR")
+        self.assertEqual(eur.total_cost, Decimal("10.000000"))
+        self.assertEqual(eur.metadata["currencies_found"], ["EUR", "USD"])
+
+    def test_traceability_source_counts_account_codes_and_sync_run_ids(self):
+        integration = self._integration()
+        project = self._project(integration)
+        self._classify(project.organization, "5000", AccountingAccountClassification.Category.MATERIAL_COST, integration=integration)
+        self._allocation(project, integration=integration, account_code="5000", external_suffix="1", raw_data={"sync_run_id": 123})
+        self._allocation(project, integration=integration, account_code="5000", external_suffix="2", raw_data={"sync_run_id": 123})
+
+        result = self._aggregate(project)
+        category_total = result.metadata["category_totals"][AccountingAccountClassification.Category.MATERIAL_COST]
+
+        self.assertEqual(result.source_batch_count, 2)
+        self.assertEqual(result.source_entry_count, 2)
+        self.assertEqual(result.allocation_count, 2)
+        self.assertEqual(category_total.source_account_codes, ["5000"])
+        self.assertEqual(result.source_sync_run_ids, [123])
+
+    def test_no_database_writes_and_no_external_calls(self):
+        integration = self._integration()
+        project = self._project(integration)
+        self._classify(project.organization, "5000", AccountingAccountClassification.Category.MATERIAL_COST, integration=integration)
+        self._allocation(project, integration=integration, account_code="5000")
+        counts = (
+            AccountingGLBatch.objects.count(),
+            AccountingGLEntry.objects.count(),
+            AccountingGLAllocation.objects.count(),
+            AccountingAccountClassification.objects.count(),
+        )
+
+        with patch.object(MeritAPIClient, "request") as request_mock:
+            with patch.object(GeneralLedgerSyncService, "sync") as sync_mock:
+                self._aggregate(project)
+
+        request_mock.assert_not_called()
+        sync_mock.assert_not_called()
+        self.assertEqual(
+            counts,
+            (
+                AccountingGLBatch.objects.count(),
+                AccountingGLEntry.objects.count(),
+                AccountingGLAllocation.objects.count(),
+                AccountingAccountClassification.objects.count(),
+            ),
+        )
+
+
+class ProjectFinancialSummaryCommandTests(TestCase):
+    def test_command_outputs_empty_result_and_validates_inputs(self):
+        project = Project.objects.create(organization=create_organization(), code="26124", name="Kanarbiku")
+        output = StringIO()
+
+        call_command("project_financial_summary", project.id, "--start", "2026-06-01", "--end", "2026-06-30", stdout=output)
+
+        self.assertIn("project: 26124 Kanarbiku", output.getvalue())
+        self.assertIn("data_quality_status: no_data", output.getvalue())
+        with self.assertRaises(CommandError):
+            call_command("project_financial_summary", 999999, "--start", "2026-06-01", "--end", "2026-06-30", stdout=StringIO())
+        with self.assertRaises(CommandError):
+            call_command("project_financial_summary", project.id, "--start", "bad", "--end", "2026-06-30", stdout=StringIO())
+
+    def test_command_prints_monthly_totals_unclassified_and_passes_currency(self):
+        integration = create_merit_integration()
+        project = Project.objects.create(organization=integration.organization, code="26124", name="Kanarbiku")
+        batch = AccountingGLBatch.objects.create(organization=project.organization, integration=integration, external_id="glb", batch_date=date(2026, 6, 1), currency_code="EUR")
+        entry = AccountingGLEntry.objects.create(organization=project.organization, integration=integration, batch=batch, external_id="entry", account_code="7777")
+        AccountingGLAllocation.objects.create(organization=project.organization, integration=integration, entry=entry, external_id="alloc", dimension_code=project.code, amount=Decimal("12.000000"), project=project)
+        output = StringIO()
+
+        call_command(
+            "project_financial_summary",
+            project.id,
+            "--start",
+            "2026-06-01",
+            "--end",
+            "2026-06-30",
+            "--currency",
+            "EUR",
+            "--show-unclassified",
+            stdout=output,
+        )
+
+        text = output.getvalue()
+        self.assertIn("2026-06: revenue=0 cost=0 result=0 margin=None", text)
+        self.assertIn("unclassified_amount: 12.000000", text)
+        self.assertIn("currency: EUR", text)
+
+    def test_command_does_not_write_or_call_api(self):
+        project = Project.objects.create(organization=create_organization(), code="26124", name="Kanarbiku")
+        counts = (AccountingGLBatch.objects.count(), AccountingGLEntry.objects.count(), AccountingGLAllocation.objects.count())
+
+        with patch.object(MeritAPIClient, "request") as request_mock:
+            call_command("project_financial_summary", project.id, "--start", "2026-06-01", "--end", "2026-06-30", stdout=StringIO())
+
+        request_mock.assert_not_called()
+        self.assertEqual(counts, (AccountingGLBatch.objects.count(), AccountingGLEntry.objects.count(), AccountingGLAllocation.objects.count()))
 
 
 class GeneralLedgerCacheServiceTests(TestCase):

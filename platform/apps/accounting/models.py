@@ -1,3 +1,6 @@
+from decimal import Decimal
+
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
 from django.utils import timezone
@@ -92,6 +95,75 @@ class AccountingDimension(models.Model):
 
     def __str__(self) -> str:
         return f"{self.code} {self.name}"
+
+
+class AccountingAccountClassification(models.Model):
+    class Category(models.TextChoices):
+        REVENUE = "revenue", "Revenue"
+        MATERIAL_COST = "material_cost", "Material cost"
+        SUBCONTRACTOR_COST = "subcontractor_cost", "Subcontractor cost"
+        LABOR_COST = "labor_cost", "Labor cost"
+        EQUIPMENT_COST = "equipment_cost", "Equipment cost"
+        TRANSPORT_COST = "transport_cost", "Transport cost"
+        OTHER_DIRECT_COST = "other_direct_cost", "Other direct cost"
+        OVERHEAD = "overhead", "Overhead"
+        FINANCIAL_INCOME = "financial_income", "Financial income"
+        FINANCIAL_COST = "financial_cost", "Financial cost"
+        DEPRECIATION = "depreciation", "Depreciation"
+        TAX = "tax", "Tax"
+        EXCLUDED = "excluded", "Excluded"
+        UNCLASSIFIED = "unclassified", "Unclassified"
+
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name="accounting_account_classifications",
+    )
+    integration = models.ForeignKey(
+        AccountingIntegration,
+        on_delete=models.CASCADE,
+        related_name="account_classifications",
+        blank=True,
+        null=True,
+    )
+    account_code = models.CharField(max_length=64)
+    account_name = models.CharField(max_length=255, blank=True, default="")
+    category = models.CharField(max_length=32, choices=Category.choices, default=Category.UNCLASSIFIED)
+    reporting_sign = models.DecimalField(max_digits=2, decimal_places=0, default=1)
+    include_in_project_result = models.BooleanField(default=True)
+    is_active = models.BooleanField(default=True)
+    notes = models.TextField(blank=True, default="")
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["organization__name", "integration__display_name", "account_code", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "integration", "account_code"],
+                name="unique_account_classification_integration_code",
+            ),
+            models.UniqueConstraint(
+                fields=["organization", "account_code"],
+                condition=Q(integration__isnull=True),
+                name="unique_account_classification_org_fallback_code",
+            ),
+        ]
+
+    def clean(self):
+        super().clean()
+        if self.integration and self.integration.organization_id != self.organization_id:
+            raise ValidationError("Accounting classification integration must belong to the same organization.")
+        if self.reporting_sign not in {Decimal("1"), Decimal("-1"), 1, -1}:
+            raise ValidationError("Accounting classification reporting_sign must be 1 or -1.")
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        return f"{self.account_code} {self.category}"
 
 
 class AccountingSyncState(models.Model):

@@ -1,4 +1,5 @@
 from .commands import (
+    AggregateProjectFinancialsCommand,
     CreateAccountingDimensionValueCommand,
     CreateAccountingDimensionValueResult,
     CompleteAccountingSyncRunCommand,
@@ -9,6 +10,9 @@ from .commands import (
     GeneralLedgerVerificationResult,
     IgnoreDimensionConflictCommand,
     ProjectCodeSuggestion,
+    ProjectFinancialAggregationResult,
+    ProjectFinancialCategoryTotal,
+    ProjectFinancialMonth,
     ResolveDimensionConflictCommand,
     SuggestNextProjectCodeCommand,
     StartAccountingSyncRunCommand,
@@ -22,6 +26,7 @@ from .commands import (
     UpsertGLEntryCommand,
     VerifyGeneralLedgerCommand,
 )
+from .financial_aggregation import AccountClassificationService, ProjectFinancialAggregationService
 from .dimension_conflicts import AccountingDimensionConflictResolutionService
 from .dimension_values import AccountingDimensionValueService
 from .dimensions import AccountingDimensionSyncService
@@ -36,6 +41,8 @@ __all__ = [
     "AccountingDimensionSyncService",
     "AccountingDimensionConflictResolutionService",
     "AccountingSyncStateService",
+    "AccountClassificationService",
+    "AggregateProjectFinancialsCommand",
     "CompleteAccountingSyncRunCommand",
     "CreateAccountingDimensionValueCommand",
     "CreateAccountingDimensionValueResult",
@@ -50,6 +57,10 @@ __all__ = [
     "IgnoreDimensionConflictCommand",
     "ProjectCodeAllocationService",
     "ProjectCodeSuggestion",
+    "ProjectFinancialAggregationResult",
+    "ProjectFinancialAggregationService",
+    "ProjectFinancialCategoryTotal",
+    "ProjectFinancialMonth",
     "ResolveDimensionConflictCommand",
     "SuggestNextProjectCodeCommand",
     "StartAccountingSyncRunCommand",

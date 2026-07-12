@@ -1,6 +1,7 @@
 from django.contrib import admin
 
 from .models import (
+    AccountingAccountClassification,
     AccountingDimension,
     AccountingGLAllocation,
     AccountingGLBatch,
@@ -24,6 +25,23 @@ class AccountingDimensionAdmin(admin.ModelAdmin):
     list_display = ("code", "name", "organization", "provider", "dimension_type", "is_active", "last_synced_at")
     list_filter = ("provider", "dimension_type", "is_active")
     search_fields = ("code", "name", "external_id", "organization__name")
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(AccountingAccountClassification)
+class AccountingAccountClassificationAdmin(admin.ModelAdmin):
+    list_display = (
+        "organization",
+        "integration",
+        "account_code",
+        "account_name",
+        "category",
+        "reporting_sign",
+        "include_in_project_result",
+        "is_active",
+    )
+    list_filter = ("category", "reporting_sign", "include_in_project_result", "is_active", "integration")
+    search_fields = ("account_code", "account_name", "organization__name", "integration__display_name")
     readonly_fields = ("created_at", "updated_at")
 
 
