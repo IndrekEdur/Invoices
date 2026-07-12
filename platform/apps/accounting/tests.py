@@ -48,8 +48,10 @@ from apps.accounting.services import (
     CreateAccountingDimensionValueCommand,
     CompleteAccountingSyncRunCommand,
     FailAccountingSyncRunCommand,
+    GeneralLedgerVerificationResult,
     GeneralLedgerCacheService,
     GeneralLedgerSyncService,
+    GeneralLedgerVerificationService,
     GetOrCreateAccountingSyncStateCommand,
     GLCacheUpsertResult,
     IgnoreDimensionConflictCommand,
@@ -65,6 +67,7 @@ from apps.accounting.services import (
     UpsertGLAllocationCommand,
     UpsertGLBatchCommand,
     UpsertGLEntryCommand,
+    VerifyGeneralLedgerCommand,
 )
 from apps.core.models import AuditEvent
 from apps.core.services import CreateOrganizationCommand, OrganizationService
@@ -1374,6 +1377,413 @@ class SyncGeneralLedgerCommandTests(TestCase):
             )
         self.assertIn("RuntimeError", str(debug_error.exception))
         self.assertNotIn("top-secret", str(debug_error.exception))
+
+
+class GeneralLedgerVerificationServiceTests(TestCase):
+    def _batch(self, integration, external_id="glb-1", batch_date=date(2026, 6, 15), currency="EUR"):
+        return AccountingGLBatch.objects.create(
+            organization=integration.organization,
+            integration=integration,
+            external_id=external_id,
+            batch_code="GL",
+            number=external_id,
+            batch_date=batch_date,
+            currency_code=currency,
+            total_amount=Decimal("100.000000"),
+            raw_data={"GLBId": external_id},
+        )
+
+    def _entry(self, batch, external_id="entry-1", account_code="4000", debit=Decimal("100.000000"), credit=Decimal("0.000000"), debit_currency="EUR", credit_currency="EUR"):
+        return AccountingGLEntry.objects.create(
+            organization=batch.organization,
+            integration=batch.integration,
+            batch=batch,
+            external_id=external_id,
+            account_code=account_code,
+            account_name="Account",
+            debit_amount=debit,
+            debit_currency=debit_currency,
+            credit_amount=credit,
+            credit_currency=credit_currency,
+            raw_data={"EntryId": external_id},
+        )
+
+    def _allocation(self, entry, code="26124", amount=Decimal("100.000000"), project=None, dimension=None, external_id="alloc-1"):
+        return AccountingGLAllocation.objects.create(
+            organization=entry.organization,
+            integration=entry.integration,
+            entry=entry,
+            external_id=external_id,
+            source_type="project",
+            dimension_code=code,
+            dimension_name="Kanarbiku" if code else "",
+            dimension_type="project",
+            amount=amount,
+            project=project,
+            accounting_dimension=dimension,
+            raw_data={"Code": code},
+        )
+
+    def _verify(self, integration, metadata=None, sample_size=10):
+        return GeneralLedgerVerificationService.verify(
+            VerifyGeneralLedgerCommand(
+                integration=integration,
+                period_start=date(2026, 6, 1),
+                period_end=date(2026, 6, 30),
+                sample_size=sample_size,
+                metadata=metadata,
+            )
+        )
+
+    def test_empty_period(self):
+        integration = create_merit_integration()
+
+        result = self._verify(integration)
+
+        self.assertEqual(result.batch_count, 0)
+        self.assertEqual(result.entry_count, 0)
+        self.assertEqual(result.allocation_count, 0)
+        self.assertEqual(result.total_debit, Decimal("0"))
+
+    def test_one_complete_batch_tree_with_decimal_totals_and_balance(self):
+        integration = create_merit_integration()
+        batch = self._batch(integration)
+        self._entry(batch, "entry-debit", debit=Decimal("100.123456"), credit=Decimal("0.000000"))
+        self._entry(batch, "entry-credit", debit=Decimal("0.000000"), credit=Decimal("100.123456"))
+
+        result = self._verify(integration)
+
+        self.assertEqual(result.batch_count, 1)
+        self.assertEqual(result.entry_count, 2)
+        self.assertEqual(result.total_debit, Decimal("100.123456"))
+        self.assertEqual(result.total_credit, Decimal("100.123456"))
+        self.assertEqual(result.balance_difference, Decimal("0.000000"))
+
+    def test_multiple_batches_counted(self):
+        integration = create_merit_integration()
+        self._batch(integration, "glb-1")
+        self._batch(integration, "glb-2")
+
+        result = self._verify(integration)
+
+        self.assertEqual(result.batch_count, 2)
+
+    def test_non_zero_balance_warning(self):
+        integration = create_merit_integration()
+        batch = self._batch(integration)
+        self._entry(batch, debit=Decimal("100.000000"), credit=Decimal("0.000000"))
+
+        result = self._verify(integration)
+
+        self.assertTrue(any("Debit and credit totals differ" in warning for warning in result.warnings))
+
+    def test_mixed_currencies_warning(self):
+        integration = create_merit_integration()
+        batch = self._batch(integration, currency="USD")
+        self._entry(batch, debit_currency="EUR", credit_currency="EUR")
+
+        result = self._verify(integration)
+
+        self.assertTrue(any("Multiple currencies" in warning for warning in result.warnings))
+
+    def test_project_linked_allocation(self):
+        integration = create_merit_integration()
+        project = Project.objects.create(organization=integration.organization, code="26124", name="Kanarbiku")
+        dimension = AccountingDimension.objects.create(
+            organization=integration.organization,
+            integration=integration,
+            code="26124",
+            name="Kanarbiku",
+        )
+        entry = self._entry(self._batch(integration))
+        self._allocation(entry, project=project, dimension=dimension)
+
+        result = self._verify(integration)
+
+        self.assertEqual(result.linked_project_count, 1)
+        self.assertEqual(result.metadata["link_quality"]["linked_both_count"], 1)
+        self.assertEqual(result.metadata["samples"]["project_linked"][0]["project_code"], "26124")
+
+    def test_unlinked_and_blank_allocations(self):
+        integration = create_merit_integration()
+        entry = self._entry(self._batch(integration))
+        self._allocation(entry, code="99999", external_id="alloc-unlinked")
+        self._allocation(entry, code="", external_id="alloc-blank")
+
+        result = self._verify(integration)
+
+        self.assertEqual(result.unlinked_allocation_count, 2)
+        self.assertEqual(result.metadata["link_quality"]["blank_dimension_codes"], 1)
+        self.assertIn("99999", result.distinct_unlinked_codes)
+
+    def test_allocation_linked_to_accounting_dimension_only(self):
+        integration = create_merit_integration()
+        dimension = AccountingDimension.objects.create(
+            organization=integration.organization,
+            integration=integration,
+            code="26124",
+            name="Kanarbiku",
+        )
+        entry = self._entry(self._batch(integration))
+        self._allocation(entry, dimension=dimension)
+
+        result = self._verify(integration)
+
+        self.assertEqual(result.metadata["link_quality"]["linked_dimension_count"], 1)
+        self.assertEqual(result.linked_project_count, 0)
+
+    def test_organization_consistency_detection(self):
+        integration = create_merit_integration()
+        other_project = Project.objects.create(organization=create_organization("Other Org"), code="26124", name="Other")
+        entry = self._entry(self._batch(integration))
+        self._allocation(entry, project=other_project)
+
+        result = self._verify(integration)
+
+        self.assertTrue(result.critical_errors)
+        self.assertEqual(result.metadata["data_quality"]["project_organization_mismatches"], 1)
+
+    def test_missing_account_and_zero_value_entry_warnings_are_reported_as_data_quality(self):
+        integration = create_merit_integration()
+        batch = self._batch(integration)
+        self._entry(batch, account_code="", debit=Decimal("0.000000"), credit=Decimal("0.000000"))
+
+        result = self._verify(integration)
+
+        self.assertEqual(result.metadata["data_quality"]["entries_missing_account_code"], 1)
+        self.assertEqual(result.metadata["data_quality"]["entries_with_zero_debit_and_credit"], 1)
+
+    def test_duplicate_identity_query_behavior_zero_with_constraints(self):
+        integration = create_merit_integration()
+        batch = self._batch(integration)
+        entry = self._entry(batch)
+        self._allocation(entry)
+
+        result = self._verify(integration)
+
+        self.assertEqual(result.metadata["identity"]["batch_duplicates"], 0)
+        self.assertEqual(result.metadata["identity"]["entry_duplicates"], 0)
+        self.assertEqual(result.metadata["identity"]["allocation_duplicates"], 0)
+
+    def test_metadata_not_mutated(self):
+        integration = create_merit_integration()
+        metadata = {"source": {"operator": "test"}}
+        original = {"source": {"operator": "test"}}
+
+        result = self._verify(integration, metadata=metadata)
+        result.metadata["input_metadata"]["source"]["operator"] = "changed"
+
+        self.assertEqual(metadata, original)
+
+    def test_no_database_writes_and_no_api_calls(self):
+        integration = create_merit_integration()
+        batch = self._batch(integration)
+        self._entry(batch)
+        counts_before = (
+            AccountingGLBatch.objects.count(),
+            AccountingGLEntry.objects.count(),
+            AccountingGLAllocation.objects.count(),
+        )
+
+        with patch.object(MeritAPIClient, "get_gl_batches_full") as api_mock:
+            self._verify(integration)
+
+        api_mock.assert_not_called()
+        self.assertEqual(
+            counts_before,
+            (
+                AccountingGLBatch.objects.count(),
+                AccountingGLEntry.objects.count(),
+                AccountingGLAllocation.objects.count(),
+            ),
+        )
+
+
+class VerifyGeneralLedgerSyncCommandTests(TestCase):
+    def _sync_objects(self, integration):
+        state, _ = AccountingSyncState.objects.get_or_create(
+            integration=integration,
+            source_type=AccountingSyncState.SourceType.GL,
+            defaults={
+                "organization": integration.organization,
+            },
+        )
+        run = AccountingSyncRun.objects.create(
+            organization=integration.organization,
+            integration=integration,
+            sync_state=state,
+            source_type=AccountingSyncState.SourceType.GL,
+            requested_period_start=date(2026, 6, 1),
+            requested_period_end=date(2026, 6, 30),
+        )
+        return state, run
+
+    def _sync_result(self, integration):
+        state, run = self._sync_objects(integration)
+        return SyncGeneralLedgerResult(
+            integration=integration,
+            sync_state=state,
+            sync_run=run,
+            period_start=date(2026, 6, 1),
+            period_end=date(2026, 6, 30),
+            requested_chunk_count=1,
+            completed_chunk_count=1,
+            discovered_batch_count=0,
+            created_count=0,
+            updated_count=0,
+            unchanged_count=0,
+            failed_count=0,
+            batches=[],
+            partial=False,
+            synced=True,
+        )
+
+    def test_missing_integration_invalid_dates_and_reversed_dates(self):
+        with self.assertRaises(CommandError):
+            call_command("verify_general_ledger_sync", 999999, "--start", "2026-06-01", "--end", "2026-06-30", stdout=StringIO())
+
+        integration = create_merit_integration()
+        with self.assertRaises(CommandError):
+            call_command("verify_general_ledger_sync", integration.id, "--start", "bad", "--end", "2026-06-30", stdout=StringIO())
+        with self.assertRaises(CommandError):
+            call_command("verify_general_ledger_sync", integration.id, "--start", "2026-07-01", "--end", "2026-06-30", stdout=StringIO())
+
+    @patch("apps.accounting.management.commands.verify_general_ledger_sync.GeneralLedgerSyncService")
+    def test_default_read_only_verification_does_not_call_sync(self, service_mock):
+        integration = create_merit_integration()
+        output = StringIO()
+
+        call_command("verify_general_ledger_sync", integration.id, "--start", "2026-06-01", "--end", "2026-06-30", stdout=output)
+
+        service_mock.return_value.sync.assert_not_called()
+        self.assertIn("General ledger verification", output.getvalue())
+        self.assertIn("gl_batches: 0", output.getvalue())
+
+    @patch("apps.accounting.management.commands.verify_general_ledger_sync.GeneralLedgerSyncService")
+    def test_run_sync_calls_general_ledger_sync_service(self, service_mock):
+        integration = create_merit_integration()
+        service_mock.return_value.sync.return_value = self._sync_result(integration)
+        output = StringIO()
+
+        call_command("verify_general_ledger_sync", integration.id, "--start", "2026-06-01", "--end", "2026-06-30", "--run-sync", stdout=output)
+
+        service_mock.return_value.sync.assert_called_once()
+        self.assertIn("sync_result:", output.getvalue())
+
+    @patch("apps.accounting.management.commands.verify_general_ledger_sync.GeneralLedgerSyncService")
+    def test_repeat_sync_calls_sync_twice_and_reports_idempotency(self, service_mock):
+        integration = create_merit_integration()
+        service_mock.return_value.sync.side_effect = [self._sync_result(integration), self._sync_result(integration)]
+        output = StringIO()
+
+        call_command(
+            "verify_general_ledger_sync",
+            integration.id,
+            "--start",
+            "2026-06-01",
+            "--end",
+            "2026-06-30",
+            "--run-sync",
+            "--repeat-sync",
+            stdout=output,
+        )
+
+        self.assertEqual(service_mock.return_value.sync.call_count, 2)
+        self.assertIn("idempotency:", output.getvalue())
+
+    def test_repeat_sync_requires_run_sync(self):
+        integration = create_merit_integration()
+
+        with self.assertRaises(CommandError):
+            call_command("verify_general_ledger_sync", integration.id, "--start", "2026-06-01", "--end", "2026-06-30", "--repeat-sync", stdout=StringIO())
+
+    def test_show_unlinked_prints_sample_and_sample_size_respected(self):
+        integration = create_merit_integration()
+        batch = AccountingGLBatch.objects.create(
+            organization=integration.organization,
+            integration=integration,
+            external_id="glb-1",
+            batch_date=date(2026, 6, 1),
+            raw_data={"GLBId": "glb-1"},
+        )
+        entry = AccountingGLEntry.objects.create(
+            organization=integration.organization,
+            integration=integration,
+            batch=batch,
+            external_id="entry-1",
+            account_code="4000",
+            raw_data={"EntryId": "entry-1"},
+        )
+        AccountingGLAllocation.objects.create(
+            organization=integration.organization,
+            integration=integration,
+            entry=entry,
+            external_id="alloc-1",
+            dimension_code="99999",
+            amount=Decimal("12.000000"),
+            raw_data={"Code": "99999"},
+        )
+        AccountingGLAllocation.objects.create(
+            organization=integration.organization,
+            integration=integration,
+            entry=entry,
+            external_id="alloc-2",
+            dimension_code="88888",
+            amount=Decimal("12.000000"),
+            raw_data={"Code": "88888"},
+        )
+        output = StringIO()
+
+        call_command(
+            "verify_general_ledger_sync",
+            integration.id,
+            "--start",
+            "2026-06-01",
+            "--end",
+            "2026-06-30",
+            "--show-unlinked",
+            "--sample-size",
+            "1",
+            stdout=output,
+        )
+
+        text = output.getvalue()
+        self.assertIn("unlinked_allocations:", text)
+        self.assertIn("dimension_code=99999", text)
+        self.assertNotIn("dimension_code=88888", text)
+
+    def test_safe_summary_printed_and_secret_never_appears(self):
+        integration = create_merit_integration()
+        integration.encrypted_secret_placeholder = "secret-value"
+        integration.save()
+        output = StringIO()
+
+        call_command("verify_general_ledger_sync", integration.id, "--start", "2026-06-01", "--end", "2026-06-30", stdout=output)
+
+        text = output.getvalue()
+        self.assertIn("diagnostic_source_totals:", text)
+        self.assertNotIn("secret-value", text)
+
+    @patch("apps.accounting.management.commands.verify_general_ledger_sync.GeneralLedgerSyncService")
+    def test_sync_error_handled_safely(self, service_mock):
+        integration = create_merit_integration()
+        integration.encrypted_secret_placeholder = "top-secret"
+        integration.save()
+        service_mock.return_value.sync.side_effect = RuntimeError("failed top-secret")
+
+        with self.assertRaises(CommandError) as error:
+            call_command("verify_general_ledger_sync", integration.id, "--start", "2026-06-01", "--end", "2026-06-30", "--run-sync", stdout=StringIO())
+
+        self.assertNotIn("top-secret", str(error.exception))
+
+    @patch("apps.accounting.management.commands.verify_general_ledger_sync.GeneralLedgerSyncService")
+    def test_no_real_merit_api_calls_in_command_tests(self, service_mock):
+        integration = create_merit_integration()
+        output = StringIO()
+
+        call_command("verify_general_ledger_sync", integration.id, "--start", "2026-06-01", "--end", "2026-06-30", stdout=output)
+
+        service_mock.return_value.sync.assert_not_called()
 
 
 class SecretProviderTests(TestCase):

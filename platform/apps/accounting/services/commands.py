@@ -211,3 +211,33 @@ class SyncGeneralLedgerResult:
     partial: bool
     synced: bool
     metadata: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class VerifyGeneralLedgerCommand:
+    integration: object
+    period_start: object
+    period_end: object
+    sample_size: int = 10
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class GeneralLedgerVerificationResult:
+    integration: object
+    period_start: object
+    period_end: object
+    sync_state: object
+    sync_run: object
+    batch_count: int
+    entry_count: int
+    allocation_count: int
+    linked_project_count: int
+    unlinked_allocation_count: int
+    distinct_unlinked_codes: list[str]
+    total_debit: object
+    total_credit: object
+    balance_difference: object
+    warnings: list[str]
+    critical_errors: list[str]
+    metadata: dict = field(default_factory=dict)

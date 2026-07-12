@@ -12,7 +12,7 @@ Current engineering phase: Engineering Standards.
 
 Current implementation phase: Platform Core.
 
-Current implementation: GL Transaction Sync Service.
+Current implementation: Real Merit GL Sync Verification.
 
 Current implementation focus: End-to-End Email Processing.
 

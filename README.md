@@ -30,6 +30,8 @@ Normal IMAP sync now uses incremental UID-based mailbox cursors. It resumes from
 
 `FINANCIAL_REPORTING_ARCHITECTURE.md` describes how Workspace will import Merit general-ledger transactions, invoices and payments into an auditable local cache for project financial reporting, reconciliation, alerts and controlled report distribution.
 
+`FINANCIAL_GL_VERIFICATION_GUIDE.md` describes the safe manual workflow for verifying real Merit GL synchronization, idempotency, local cache quality, diagnostic totals, and project allocation links.
+
 `MERIT_VERIFICATION_GUIDE.md` describes the safe manual workflow for verifying real Merit credentials, connection checks, dimension sync, local cache updates, and project dimension creation.
 
 `SETTINGS_ARCHITECTURE.md` describes how administrators manage organizations, users, roles, e-mail accounts, accounting integrations, Merit settings, secrets, sync health, and system configuration from the Workspace UI.
@@ -53,6 +55,8 @@ The accounting app includes persistent accounting sync cursor and run tracking s
 The accounting app includes a normalized general-ledger cache for batches, entries and allocation lines. Merit connector DTOs and local persistence are separate; GL synchronization and financial reporting are still planned.
 
 The accounting app includes a GL transaction synchronization service and `sync_general_ledger` management command for bounded 31-day Merit GL periods. Project financial aggregation is not implemented yet.
+
+The accounting app includes a read-only `verify_general_ledger_sync` management command for operator-driven real Merit GL verification. Real API calls happen only when `--run-sync` is explicitly provided.
 
 The accounting app includes an AccountingDimensionValueService that creates or updates Merit dimension values through the connector and updates the local AccountingDimension cache only after the API call succeeds.
 
