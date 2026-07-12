@@ -8,6 +8,7 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db import IntegrityError
 from django.test import TestCase
+from django.utils import timezone
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 
@@ -22,19 +23,25 @@ from apps.accounting.connectors import (
     MeritAPIClient,
 )
 from apps.accounting.dto import MeritDimensionDTO, MeritDimensionValueDTO, MeritGLBatchDTO, MeritGLDateType
-from apps.accounting.models import AccountingDimension, AccountingIntegration
+from apps.accounting.models import AccountingDimension, AccountingIntegration, AccountingSyncRun, AccountingSyncState
 from apps.accounting.secrets import SecretMissingError, SecretProvider
 from apps.accounting.services import (
     AccountingDimensionConflictResolutionService,
     AccountingDimensionValueService,
     AccountingDimensionSyncService,
     CreateAccountingDimensionValueCommand,
+    CompleteAccountingSyncRunCommand,
+    FailAccountingSyncRunCommand,
+    GetOrCreateAccountingSyncStateCommand,
     IgnoreDimensionConflictCommand,
     ProjectCodeAllocationService,
     ResolveDimensionConflictCommand,
     SuggestNextProjectCodeCommand,
+    StartAccountingSyncRunCommand,
     SyncAccountingDimensionsCommand,
     SyncAccountingDimensionsResult,
+    UpdateAccountingSyncProgressCommand,
+    AccountingSyncStateService,
 )
 from apps.core.models import AuditEvent
 from apps.core.services import CreateOrganizationCommand, OrganizationService
@@ -261,6 +268,377 @@ class AccountingDimensionTests(TestCase):
         )
 
         self.assertEqual(str(dimension), "26131 Display name")
+
+
+class AccountingSyncStateModelTests(TestCase):
+    def test_can_create_accounting_sync_state(self):
+        integration = create_merit_integration()
+
+        state = AccountingSyncState.objects.create(
+            organization=integration.organization,
+            integration=integration,
+            source_type=AccountingSyncState.SourceType.GL,
+        )
+
+        self.assertEqual(state.source_type, AccountingSyncState.SourceType.GL)
+        self.assertEqual(state.organization, integration.organization)
+
+    def test_state_defaults(self):
+        integration = create_merit_integration()
+
+        state = AccountingSyncState.objects.create(
+            organization=integration.organization,
+            integration=integration,
+            source_type=AccountingSyncState.SourceType.SALES_INVOICES,
+        )
+
+        self.assertEqual(state.cursor_type, AccountingSyncState.CursorType.NONE)
+        self.assertEqual(state.cursor_value, "")
+        self.assertEqual(state.sync_status, AccountingSyncState.SyncStatus.IDLE)
+        self.assertEqual(state.initial_import_status, AccountingSyncState.InitialImportStatus.NOT_STARTED)
+        self.assertEqual(state.discovered_count, 0)
+        self.assertEqual(state.metadata, {})
+
+    def test_integration_source_uniqueness(self):
+        integration = create_merit_integration()
+        AccountingSyncState.objects.create(
+            organization=integration.organization,
+            integration=integration,
+            source_type=AccountingSyncState.SourceType.GL,
+        )
+
+        with self.assertRaises(IntegrityError):
+            AccountingSyncState.objects.create(
+                organization=integration.organization,
+                integration=integration,
+                source_type=AccountingSyncState.SourceType.GL,
+            )
+
+    def test_nullable_cursor_and_period_fields(self):
+        integration = create_merit_integration()
+
+        state = AccountingSyncState.objects.create(
+            organization=integration.organization,
+            integration=integration,
+            source_type=AccountingSyncState.SourceType.PAYMENTS,
+        )
+
+        self.assertIsNone(state.cursor_datetime)
+        self.assertIsNone(state.last_completed_period_start)
+        self.assertIsNone(state.last_completed_period_end)
+
+    def test_state_str_includes_integration_source_and_status(self):
+        integration = create_merit_integration()
+        state = AccountingSyncState.objects.create(
+            organization=integration.organization,
+            integration=integration,
+            source_type=AccountingSyncState.SourceType.GL,
+        )
+
+        self.assertIn("Merit API", str(state))
+        self.assertIn("gl", str(state))
+        self.assertIn("idle", str(state))
+
+    def test_can_create_accounting_sync_run(self):
+        state = self._state()
+
+        run = AccountingSyncRun.objects.create(
+            organization=state.organization,
+            integration=state.integration,
+            sync_state=state,
+            source_type=state.source_type,
+        )
+
+        self.assertEqual(run.status, AccountingSyncRun.Status.RUNNING)
+        self.assertEqual(run.mode, AccountingSyncRun.Mode.INCREMENTAL)
+        self.assertIsNone(run.completed_at)
+
+    def test_run_defaults_and_str(self):
+        state = self._state()
+
+        run = AccountingSyncRun.objects.create(
+            organization=state.organization,
+            integration=state.integration,
+            sync_state=state,
+            source_type=state.source_type,
+        )
+
+        self.assertEqual(run.cursor_before, "")
+        self.assertEqual(run.cursor_after, "")
+        self.assertEqual(run.discovered_count, 0)
+        self.assertIn("Merit API", str(run))
+        self.assertIn("gl", str(run))
+        self.assertIn("running", str(run))
+
+    def _state(self):
+        integration = create_merit_integration()
+        return AccountingSyncState.objects.create(
+            organization=integration.organization,
+            integration=integration,
+            source_type=AccountingSyncState.SourceType.GL,
+        )
+
+
+class AccountingSyncStateServiceTests(TestCase):
+    def test_get_or_create_creates_state(self):
+        integration = create_merit_integration()
+
+        state = AccountingSyncStateService.get_or_create(
+            GetOrCreateAccountingSyncStateCommand(
+                integration=integration,
+                source_type=AccountingSyncState.SourceType.GL,
+                cursor_type=AccountingSyncState.CursorType.CHANGED_DATETIME,
+            )
+        )
+
+        self.assertEqual(state.organization, integration.organization)
+        self.assertEqual(state.cursor_type, AccountingSyncState.CursorType.CHANGED_DATETIME)
+
+    def test_get_or_create_returns_existing_without_cursor_reset(self):
+        integration = create_merit_integration()
+        state = AccountingSyncStateService.get_or_create(
+            GetOrCreateAccountingSyncStateCommand(integration=integration, source_type=AccountingSyncState.SourceType.GL)
+        )
+        state.cursor_value = "existing-cursor"
+        state.discovered_count = 7
+        state.save()
+
+        returned = AccountingSyncStateService.get_or_create(
+            GetOrCreateAccountingSyncStateCommand(
+                integration=integration,
+                source_type=AccountingSyncState.SourceType.GL,
+                cursor_type=AccountingSyncState.CursorType.PERIOD,
+            )
+        )
+
+        self.assertEqual(returned.id, state.id)
+        self.assertEqual(returned.cursor_value, "existing-cursor")
+        self.assertEqual(returned.discovered_count, 7)
+
+    def test_gl_and_invoice_states_are_independent(self):
+        integration = create_merit_integration()
+
+        gl_state = AccountingSyncStateService.get_or_create(
+            GetOrCreateAccountingSyncStateCommand(integration=integration, source_type=AccountingSyncState.SourceType.GL)
+        )
+        invoice_state = AccountingSyncStateService.get_or_create(
+            GetOrCreateAccountingSyncStateCommand(
+                integration=integration,
+                source_type=AccountingSyncState.SourceType.PURCHASE_INVOICES,
+            )
+        )
+
+        self.assertNotEqual(gl_state.id, invoice_state.id)
+        self.assertEqual(AccountingSyncState.objects.count(), 2)
+
+    def test_start_run_creates_running_run_and_records_cursor_before(self):
+        state = self._state(cursor_value="before")
+
+        run = AccountingSyncStateService.start_run(
+            StartAccountingSyncRunCommand(
+                sync_state=state,
+                mode=AccountingSyncRun.Mode.INITIAL_BACKFILL,
+                requested_period_start=date(2026, 7, 1),
+                requested_period_end=date(2026, 7, 31),
+                initial_import=True,
+            )
+        )
+        state.refresh_from_db()
+
+        self.assertEqual(state.sync_status, AccountingSyncState.SyncStatus.RUNNING)
+        self.assertEqual(state.initial_import_status, AccountingSyncState.InitialImportStatus.RUNNING)
+        self.assertEqual(run.status, AccountingSyncRun.Status.RUNNING)
+        self.assertEqual(run.cursor_before, "before")
+        self.assertEqual(run.requested_period_start, date(2026, 7, 1))
+
+    def test_update_progress_updates_cursor_period_and_counters(self):
+        state = self._state()
+        run = AccountingSyncStateService.start_run(StartAccountingSyncRunCommand(sync_state=state))
+        metadata = {"note": "progress"}
+        cursor_metadata = {"high_watermark": "2026-07-12"}
+
+        updated_state, updated_run = AccountingSyncStateService.update_progress(
+            UpdateAccountingSyncProgressCommand(
+                sync_state=state,
+                sync_run=run,
+                cursor_value="cursor-1",
+                cursor_datetime=timezone.now(),
+                completed_period_start=date(2026, 7, 1),
+                completed_period_end=date(2026, 7, 31),
+                discovered_increment=5,
+                created_increment=2,
+                updated_increment=1,
+                unchanged_increment=1,
+                skipped_increment=1,
+                failed_increment=0,
+                cursor_metadata=cursor_metadata,
+                metadata=metadata,
+            )
+        )
+
+        self.assertEqual(updated_state.cursor_value, "cursor-1")
+        self.assertEqual(updated_state.last_completed_period_start, date(2026, 7, 1))
+        self.assertEqual(updated_state.discovered_count, 5)
+        self.assertEqual(updated_run.created_count, 2)
+        self.assertEqual(updated_run.updated_count, 1)
+        self.assertEqual(updated_state.cursor_metadata["high_watermark"], "2026-07-12")
+        self.assertEqual(metadata, {"note": "progress"})
+        self.assertEqual(cursor_metadata, {"high_watermark": "2026-07-12"})
+
+    def test_update_progress_rejects_negative_increments(self):
+        state = self._state()
+        run = AccountingSyncStateService.start_run(StartAccountingSyncRunCommand(sync_state=state))
+
+        with self.assertRaises(ValueError):
+            AccountingSyncStateService.update_progress(
+                UpdateAccountingSyncProgressCommand(sync_state=state, sync_run=run, discovered_increment=-1)
+            )
+
+    def test_complete_run_updates_successful_timestamps_and_cursor_after(self):
+        state = self._state(cursor_value="before")
+        run = AccountingSyncStateService.start_run(StartAccountingSyncRunCommand(sync_state=state))
+
+        completed = AccountingSyncStateService.complete_run(
+            CompleteAccountingSyncRunCommand(
+                sync_state=state,
+                sync_run=run,
+                cursor_value="after",
+                completed_period_start=date(2026, 7, 1),
+                completed_period_end=date(2026, 7, 31),
+                initial_import=True,
+            )
+        )
+        state.refresh_from_db()
+
+        self.assertEqual(state.sync_status, AccountingSyncState.SyncStatus.IDLE)
+        self.assertEqual(state.initial_import_status, AccountingSyncState.InitialImportStatus.COMPLETED)
+        self.assertEqual(state.cursor_value, "after")
+        self.assertIsNotNone(state.last_successful_sync_at)
+        self.assertEqual(completed.status, AccountingSyncRun.Status.COMPLETED)
+        self.assertEqual(completed.cursor_after, "after")
+
+    def test_fail_run_stores_safe_error_and_partial_status(self):
+        integration = create_merit_integration()
+        state = self._state(integration=integration)
+        run = AccountingSyncStateService.start_run(StartAccountingSyncRunCommand(sync_state=state, initial_import=True))
+
+        failed = AccountingSyncStateService.fail_run(
+            FailAccountingSyncRunCommand(
+                sync_state=state,
+                sync_run=run,
+                safe_error=f"Failure for {integration.api_id} with {integration.encrypted_secret_placeholder}",
+                partial=True,
+                initial_import=True,
+            )
+        )
+        state.refresh_from_db()
+
+        self.assertEqual(state.sync_status, AccountingSyncState.SyncStatus.FAILED)
+        self.assertEqual(state.initial_import_status, AccountingSyncState.InitialImportStatus.FAILED)
+        self.assertEqual(failed.status, AccountingSyncRun.Status.PARTIAL)
+        self.assertNotIn(integration.api_id, state.last_error)
+        self.assertNotIn(integration.encrypted_secret_placeholder, state.last_error)
+
+    def test_pause_changes_state(self):
+        state = self._state(
+            sync_status=AccountingSyncState.SyncStatus.RUNNING,
+            initial_import_status=AccountingSyncState.InitialImportStatus.RUNNING,
+        )
+
+        paused = AccountingSyncStateService.pause(state)
+
+        self.assertEqual(paused.sync_status, AccountingSyncState.SyncStatus.PAUSED)
+        self.assertEqual(paused.initial_import_status, AccountingSyncState.InitialImportStatus.PAUSED)
+
+    def test_audit_events_created_for_start_complete_fail_pause(self):
+        state = self._state()
+        run = AccountingSyncStateService.start_run(StartAccountingSyncRunCommand(sync_state=state))
+        AccountingSyncStateService.complete_run(CompleteAccountingSyncRunCommand(sync_state=state, sync_run=run))
+        run = AccountingSyncStateService.start_run(StartAccountingSyncRunCommand(sync_state=state))
+        AccountingSyncStateService.fail_run(FailAccountingSyncRunCommand(sync_state=state, sync_run=run, safe_error="safe"))
+        AccountingSyncStateService.pause(state)
+
+        self.assertEqual(
+            AuditEvent.objects.filter(object_type="AccountingSyncState", object_id=str(state.id)).count(),
+            5,
+        )
+
+    def test_invalid_source_type_handled(self):
+        integration = create_merit_integration()
+
+        with self.assertRaises(ValueError):
+            AccountingSyncStateService.get_or_create(
+                GetOrCreateAccountingSyncStateCommand(integration=integration, source_type="bank_payments")
+            )
+
+    def test_reversed_period_rejected(self):
+        state = self._state()
+
+        with self.assertRaises(ValueError):
+            AccountingSyncStateService.start_run(
+                StartAccountingSyncRunCommand(
+                    sync_state=state,
+                    requested_period_start=date(2026, 7, 31),
+                    requested_period_end=date(2026, 7, 1),
+                )
+            )
+
+    def test_completed_period_cannot_move_backwards_without_resync_mode(self):
+        state = self._state()
+        state.last_completed_period_start = date(2026, 7, 1)
+        state.last_completed_period_end = date(2026, 7, 31)
+        state.save()
+        run = AccountingSyncStateService.start_run(StartAccountingSyncRunCommand(sync_state=state))
+
+        with self.assertRaises(ValueError):
+            AccountingSyncStateService.update_progress(
+                UpdateAccountingSyncProgressCommand(
+                    sync_state=state,
+                    sync_run=run,
+                    completed_period_start=date(2026, 6, 1),
+                    completed_period_end=date(2026, 6, 30),
+                )
+            )
+
+    def test_organization_isolation(self):
+        first = self._state()
+        second = self._state(integration=create_merit_integration(create_organization("Other Org")))
+
+        self.assertNotEqual(first.organization_id, second.organization_id)
+        self.assertEqual(AccountingSyncState.objects.filter(organization=first.organization).count(), 1)
+        self.assertEqual(AccountingSyncState.objects.filter(organization=second.organization).count(), 1)
+
+    def test_rollback_if_audit_fails(self):
+        state = self._state()
+
+        with patch("apps.accounting.services.sync_state.AuditService.record", side_effect=RuntimeError("audit failed")):
+            with self.assertRaises(RuntimeError):
+                AccountingSyncStateService.start_run(StartAccountingSyncRunCommand(sync_state=state))
+
+        state.refresh_from_db()
+        self.assertEqual(state.sync_status, AccountingSyncState.SyncStatus.IDLE)
+        self.assertFalse(AccountingSyncRun.objects.exists())
+
+    def test_no_merit_api_calls_and_no_financial_cache_created(self):
+        state = self._state()
+
+        with patch.object(MeritAPIClient, "request") as request_mock:
+            AccountingSyncStateService.start_run(StartAccountingSyncRunCommand(sync_state=state))
+
+        request_mock.assert_not_called()
+        self.assertFalse(hasattr(AccountingSyncRun, "transaction"))
+        self.assertFalse(hasattr(AccountingSyncState, "transaction"))
+
+    def _state(self, integration=None, cursor_value="", **overrides):
+        integration = integration or create_merit_integration()
+        defaults = {
+            "organization": integration.organization,
+            "integration": integration,
+            "source_type": AccountingSyncState.SourceType.GL,
+            "cursor_value": cursor_value,
+        }
+        defaults.update(overrides)
+        return AccountingSyncState.objects.create(**defaults)
 
 
 class SecretProviderTests(TestCase):

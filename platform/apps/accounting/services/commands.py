@@ -84,3 +84,61 @@ class DimensionConflictResolutionResult:
     resolved: bool
     message: str
     metadata: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class GetOrCreateAccountingSyncStateCommand:
+    integration: object
+    source_type: str
+    cursor_type: str = "none"
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class StartAccountingSyncRunCommand:
+    sync_state: object
+    mode: str = "incremental"
+    requested_period_start: object = None
+    requested_period_end: object = None
+    initial_import: bool = False
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class UpdateAccountingSyncProgressCommand:
+    sync_state: object
+    sync_run: object
+    cursor_value: object = None
+    cursor_datetime: object = None
+    completed_period_start: object = None
+    completed_period_end: object = None
+    discovered_increment: int = 0
+    created_increment: int = 0
+    updated_increment: int = 0
+    unchanged_increment: int = 0
+    skipped_increment: int = 0
+    failed_increment: int = 0
+    cursor_metadata: dict | None = None
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class CompleteAccountingSyncRunCommand:
+    sync_state: object
+    sync_run: object
+    cursor_value: object = None
+    cursor_datetime: object = None
+    completed_period_start: object = None
+    completed_period_end: object = None
+    initial_import: bool = False
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class FailAccountingSyncRunCommand:
+    sync_state: object
+    sync_run: object
+    safe_error: str
+    partial: bool = False
+    initial_import: bool = False
+    metadata: dict | None = None
