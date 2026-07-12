@@ -2560,15 +2560,15 @@ class MeritGLFullDetailsAPITests(TestCase):
         self.assertEqual(
             request_mock.call_args.kwargs["payload"],
             {
-                "PeriodStart": "2026-07-01T00:00:00",
-                "PeriodEnd": "2026-07-31T23:59:59",
+                "PeriodStart": "20260701",
+                "PeriodEnd": "20260731",
                 "WithLines": 1,
                 "WithCostAlloc": 1,
                 "DateType": 0,
             },
         )
 
-    def test_get_gl_batches_full_uses_merit_datetime_period_for_june_regression(self):
+    def test_get_gl_batches_full_uses_merit_compact_period_for_june_regression(self):
         client = MeritAPIClient(create_merit_integration())
 
         with patch.object(client, "request", return_value=[]) as request_mock:
@@ -2577,8 +2577,8 @@ class MeritGLFullDetailsAPITests(TestCase):
         self.assertEqual(
             request_mock.call_args.kwargs["payload"],
             {
-                "PeriodStart": "2026-06-01T00:00:00",
-                "PeriodEnd": "2026-06-30T23:59:59",
+                "PeriodStart": "20260601",
+                "PeriodEnd": "20260630",
                 "WithLines": 1,
                 "WithCostAlloc": 1,
                 "DateType": 0,
