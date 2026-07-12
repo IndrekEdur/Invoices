@@ -177,3 +177,37 @@ class GLCacheUpsertResult:
     updated: bool
     unchanged: bool
     metadata: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class SyncGeneralLedgerCommand:
+    integration: object
+    period_start: object
+    period_end: object
+    mode: str = "manual"
+    date_type: str = "document_date"
+    with_lines: bool = True
+    with_cost_allocations: bool = True
+    initial_import: bool = False
+    actor: object = None
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class SyncGeneralLedgerResult:
+    integration: object
+    sync_state: object
+    sync_run: object
+    period_start: object
+    period_end: object
+    requested_chunk_count: int
+    completed_chunk_count: int
+    discovered_batch_count: int
+    created_count: int
+    updated_count: int
+    unchanged_count: int
+    failed_count: int
+    batches: list
+    partial: bool
+    synced: bool
+    metadata: dict = field(default_factory=dict)

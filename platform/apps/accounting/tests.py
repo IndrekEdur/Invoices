@@ -1,5 +1,5 @@
 from dataclasses import FrozenInstanceError
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from io import BytesIO
 from io import StringIO
@@ -49,6 +49,7 @@ from apps.accounting.services import (
     CompleteAccountingSyncRunCommand,
     FailAccountingSyncRunCommand,
     GeneralLedgerCacheService,
+    GeneralLedgerSyncService,
     GetOrCreateAccountingSyncStateCommand,
     GLCacheUpsertResult,
     IgnoreDimensionConflictCommand,
@@ -58,6 +59,8 @@ from apps.accounting.services import (
     StartAccountingSyncRunCommand,
     SyncAccountingDimensionsCommand,
     SyncAccountingDimensionsResult,
+    SyncGeneralLedgerCommand,
+    SyncGeneralLedgerResult,
     UpdateAccountingSyncProgressCommand,
     UpsertGLAllocationCommand,
     UpsertGLBatchCommand,
@@ -1031,6 +1034,346 @@ class GeneralLedgerCacheServiceTests(TestCase):
         return GeneralLedgerCacheService.upsert_entry(
             UpsertGLEntryCommand(batch=batch, dto=self._entry_dto(), sequence=1)
         ).object
+
+
+class FakeGLAPIClient:
+    def __init__(self, integration, responses=None, side_effects=None):
+        self.integration = integration
+        self.responses = list(responses or [])
+        self.side_effects = list(side_effects or [])
+        self.calls = []
+
+    def get_gl_batches_full(self, period_start, period_end, **kwargs):
+        self.calls.append((period_start, period_end, kwargs))
+        if self.side_effects:
+            effect = self.side_effects.pop(0)
+            if isinstance(effect, Exception):
+                raise effect
+            return effect
+        if self.responses:
+            return self.responses.pop(0)
+        return []
+
+
+class GeneralLedgerSyncServiceTests(TestCase):
+    def _allocation_dto(self, code="26124", amount=Decimal("100.000000")):
+        return MeritGLCostAllocationDTO(
+            source_type="project",
+            code=code,
+            name="Kanarbiku",
+            multiplier=Decimal("1.00000000"),
+            amount=amount,
+            batch_id="glb-1",
+            entry_id="entry-1",
+            raw={"Code": code},
+        )
+
+    def _entry_dto(self, entry_id="entry-1", allocations=()):
+        return MeritGLEntryDTO(
+            account_code="4000",
+            account_name="Revenue",
+            memo="Memo",
+            department_code="",
+            debit_amount=Decimal("0.000000"),
+            debit_currency="EUR",
+            credit_amount=Decimal("100.000000"),
+            credit_currency="EUR",
+            type_id="1",
+            batch_id="glb-1",
+            entry_id=entry_id,
+            tax_id="",
+            tax_percent=None,
+            cost_allocations=tuple(allocations),
+            raw={"EntryId": entry_id},
+        )
+
+    def _batch_dto(self, external_id="glb-1", batch_date=date(2026, 1, 1), entries=()):
+        return MeritGLBatchDTO(
+            external_id=external_id,
+            batch_code="GL",
+            number=external_id,
+            source_document_id="",
+            document="",
+            batch_date=batch_date,
+            currency_code="EUR",
+            currency_rate=Decimal("1.00000000"),
+            total_amount=Decimal("100.000000"),
+            price_includes_vat=False,
+            changed_at=datetime(2026, 1, 2, 10, 0, tzinfo=timezone.get_current_timezone()),
+            entries=tuple(entries),
+            raw={"GLBId": external_id},
+        )
+
+    def _service(self, client):
+        return GeneralLedgerSyncService(api_client_factory=lambda integration: client)
+
+    def _command(self, integration, start=date(2026, 1, 1), end=date(2026, 1, 31), **kwargs):
+        defaults = {"integration": integration, "period_start": start, "period_end": end}
+        defaults.update(kwargs)
+        return SyncGeneralLedgerCommand(**defaults)
+
+    def test_split_period_single_day_exact_31_days_and_32_days(self):
+        self.assertEqual(GeneralLedgerSyncService.split_period(date(2026, 1, 1), date(2026, 1, 1)), [(date(2026, 1, 1), date(2026, 1, 1))])
+        self.assertEqual(GeneralLedgerSyncService.split_period(date(2026, 1, 1), date(2026, 1, 31)), [(date(2026, 1, 1), date(2026, 1, 31))])
+        self.assertEqual(
+            GeneralLedgerSyncService.split_period(date(2026, 1, 1), date(2026, 2, 1)),
+            [(date(2026, 1, 1), date(2026, 1, 31)), (date(2026, 2, 1), date(2026, 2, 1))],
+        )
+
+    def test_split_period_multi_month_leap_year_no_gaps_or_overlaps(self):
+        chunks = GeneralLedgerSyncService.split_period(date(2024, 2, 1), date(2024, 3, 5))
+
+        self.assertEqual(chunks, [(date(2024, 2, 1), date(2024, 3, 2)), (date(2024, 3, 3), date(2024, 3, 5))])
+        self.assertEqual(chunks[0][1] + timedelta(days=1), chunks[1][0])
+
+    def test_split_period_reversed_range_rejected(self):
+        with self.assertRaises(ValueError):
+            GeneralLedgerSyncService.split_period(date(2026, 2, 1), date(2026, 1, 1))
+
+    def test_successful_sync_creates_state_run_calls_api_and_persists(self):
+        integration = create_merit_integration()
+        allocation = self._allocation_dto()
+        entry = self._entry_dto(allocations=(allocation,))
+        batch = self._batch_dto(entries=(entry,))
+        client = FakeGLAPIClient(integration, responses=[[batch]])
+        metadata = {"run": "manual"}
+
+        result = self._service(client).sync(self._command(integration, metadata=metadata))
+
+        self.assertTrue(result.synced)
+        self.assertFalse(result.partial)
+        self.assertEqual(result.requested_chunk_count, 1)
+        self.assertEqual(result.completed_chunk_count, 1)
+        self.assertEqual(result.discovered_batch_count, 1)
+        self.assertEqual(result.created_count, 3)
+        self.assertEqual(AccountingGLBatch.objects.count(), 1)
+        self.assertEqual(AccountingGLEntry.objects.count(), 1)
+        self.assertEqual(AccountingGLAllocation.objects.count(), 1)
+        self.assertEqual(client.calls[0][2]["with_lines"], True)
+        self.assertEqual(client.calls[0][2]["with_cost_allocations"], True)
+        self.assertEqual(client.calls[0][2]["date_type"], MeritGLDateType.DOCUMENT_DATE)
+        self.assertEqual(metadata, {"run": "manual"})
+        state = AccountingSyncState.objects.get(integration=integration, source_type=AccountingSyncState.SourceType.GL)
+        self.assertEqual(state.sync_status, AccountingSyncState.SyncStatus.IDLE)
+        self.assertEqual(state.last_completed_period_end, date(2026, 1, 31))
+        self.assertEqual(result.sync_run.status, AccountingSyncRun.Status.COMPLETED)
+
+    def test_multiple_chunks_called_in_order_and_batches_sorted(self):
+        integration = create_merit_integration()
+        first = self._batch_dto("glb-b", date(2026, 1, 2))
+        second = self._batch_dto("glb-a", date(2026, 1, 1))
+        third = self._batch_dto("glb-c", date(2026, 2, 1))
+        client = FakeGLAPIClient(integration, responses=[[first, second], [third]])
+
+        result = self._service(client).sync(self._command(integration, end=date(2026, 2, 1)))
+
+        self.assertEqual([call[0:2] for call in client.calls], [(date(2026, 1, 1), date(2026, 1, 31)), (date(2026, 2, 1), date(2026, 2, 1))])
+        self.assertEqual([batch.external_id for batch in result.batches], ["glb-a", "glb-b", "glb-c"])
+        self.assertEqual(result.completed_chunk_count, 2)
+
+    def test_initial_import_completes_initial_import_status(self):
+        integration = create_merit_integration()
+        client = FakeGLAPIClient(integration, responses=[[]])
+
+        result = self._service(client).sync(
+            self._command(integration, mode=AccountingSyncRun.Mode.INITIAL_BACKFILL, initial_import=True)
+        )
+        result.sync_state.refresh_from_db()
+
+        self.assertEqual(result.sync_state.initial_import_status, AccountingSyncState.InitialImportStatus.COMPLETED)
+
+    def test_idempotent_second_run_reports_unchanged(self):
+        integration = create_merit_integration()
+        batch = self._batch_dto(entries=(self._entry_dto(allocations=(self._allocation_dto(),)),))
+
+        first = self._service(FakeGLAPIClient(integration, responses=[[batch]])).sync(self._command(integration))
+        second = self._service(FakeGLAPIClient(integration, responses=[[batch]])).sync(self._command(integration))
+
+        self.assertEqual(first.created_count, 3)
+        self.assertEqual(second.unchanged_count, 3)
+        self.assertEqual(AccountingGLBatch.objects.count(), 1)
+
+    def test_period_resync_does_not_move_forward_cursor_backwards(self):
+        integration = create_merit_integration()
+        state = AccountingSyncStateService.get_or_create(
+            GetOrCreateAccountingSyncStateCommand(integration=integration, source_type=AccountingSyncState.SourceType.GL)
+        )
+        state.cursor_value = "2026-12-31"
+        state.last_completed_period_start = date(2026, 12, 1)
+        state.last_completed_period_end = date(2026, 12, 31)
+        state.save()
+
+        self._service(FakeGLAPIClient(integration, responses=[[]])).sync(
+            self._command(integration, mode=AccountingSyncRun.Mode.PERIOD_RESYNC)
+        )
+        state.refresh_from_db()
+
+        self.assertEqual(state.cursor_value, "2026-12-31")
+        self.assertEqual(state.last_completed_period_end, date(2026, 12, 31))
+
+    def test_second_chunk_api_failure_preserves_first_chunk_and_marks_partial(self):
+        integration = create_merit_integration()
+        first_batch = self._batch_dto("glb-1")
+        secret = integration.encrypted_secret_placeholder
+        client = FakeGLAPIClient(integration, side_effects=[[first_batch], AccountingConnectionError(f"failed {secret}")])
+
+        with self.assertRaises(AccountingConnectionError):
+            self._service(client).sync(self._command(integration, end=date(2026, 2, 1)))
+
+        self.assertTrue(AccountingGLBatch.objects.filter(external_id="glb-1").exists())
+        state = AccountingSyncState.objects.get(integration=integration, source_type=AccountingSyncState.SourceType.GL)
+        run = state.runs.latest("id")
+        self.assertEqual(run.status, AccountingSyncRun.Status.PARTIAL)
+        self.assertNotIn(secret, run.safe_error)
+        self.assertEqual(state.last_completed_period_end, date(2026, 1, 31))
+
+    def test_batch_failure_preserves_earlier_batches_and_does_not_complete_chunk(self):
+        integration = create_merit_integration()
+        batches = [self._batch_dto("glb-1"), self._batch_dto("glb-2")]
+        cache_mock = type("CacheMock", (), {})()
+        cache_mock.calls = []
+
+        def persist_batch_tree(integration_arg, batch_dto, sync_run=None, metadata=None):
+            cache_mock.calls.append(batch_dto.external_id)
+            if batch_dto.external_id == "glb-2":
+                raise RuntimeError("batch failed")
+            return GeneralLedgerCacheService.persist_batch_tree(integration_arg, batch_dto, sync_run=sync_run, metadata=metadata)
+
+        cache_mock.persist_batch_tree = persist_batch_tree
+
+        with self.assertRaises(RuntimeError):
+            GeneralLedgerSyncService(
+                api_client_factory=lambda integration_arg: FakeGLAPIClient(integration_arg, responses=[batches]),
+                cache_service=cache_mock,
+            ).sync(self._command(integration))
+
+        self.assertEqual(cache_mock.calls, ["glb-1", "glb-2"])
+        self.assertTrue(AccountingGLBatch.objects.filter(external_id="glb-1").exists())
+        state = AccountingSyncState.objects.get(integration=integration, source_type=AccountingSyncState.SourceType.GL)
+        self.assertIsNone(state.last_completed_period_end)
+
+    def test_first_api_failure_creates_no_gl_records_and_marks_failed(self):
+        integration = create_merit_integration()
+        client = FakeGLAPIClient(integration, side_effects=[AccountingAuthenticationError("auth failed")])
+
+        with self.assertRaises(AccountingAuthenticationError):
+            self._service(client).sync(self._command(integration))
+
+        self.assertFalse(AccountingGLBatch.objects.exists())
+        state = AccountingSyncState.objects.get(integration=integration, source_type=AccountingSyncState.SourceType.GL)
+        run = state.runs.latest("id")
+        self.assertEqual(run.status, AccountingSyncRun.Status.FAILED)
+        self.assertEqual(state.sync_status, AccountingSyncState.SyncStatus.FAILED)
+        self.assertIsNone(state.last_completed_period_end)
+
+    def test_connection_and_rate_limit_errors_propagate(self):
+        integration = create_merit_integration()
+        for error in [AccountingConnectionError("connection"), AccountingRateLimitError("rate limit")]:
+            with self.assertRaises(error.__class__):
+                self._service(FakeGLAPIClient(integration, side_effects=[error])).sync(self._command(integration))
+
+    def test_mode_date_validation_and_forwarding(self):
+        integration = create_merit_integration()
+        client = FakeGLAPIClient(integration, responses=[[]])
+
+        self._service(client).sync(self._command(integration, mode=AccountingSyncRun.Mode.INCREMENTAL, date_type=MeritGLDateType.CHANGED_DATE))
+
+        self.assertEqual(client.calls[0][2]["date_type"], MeritGLDateType.CHANGED_DATE)
+        with self.assertRaises(ValueError):
+            self._service(FakeGLAPIClient(integration, responses=[[]])).sync(self._command(integration, mode="bad_mode"))
+        with self.assertRaises(ValueError):
+            self._service(FakeGLAPIClient(integration, responses=[[]])).sync(self._command(integration, date_type="posting_date"))
+
+    def test_inactive_and_non_merit_integrations_rejected(self):
+        inactive = create_merit_integration()
+        inactive.is_active = False
+        inactive.save()
+        other = AccountingIntegration.objects.create(
+            organization=create_organization("Other Provider Org"),
+            provider=AccountingIntegration.Provider.XERO,
+            display_name="Xero",
+            is_active=True,
+        )
+
+        with self.assertRaises(ValueError):
+            self._service(FakeGLAPIClient(inactive, responses=[[]])).sync(self._command(inactive))
+        with self.assertRaises(ValueError):
+            self._service(FakeGLAPIClient(other, responses=[[]])).sync(self._command(other))
+
+
+class SyncGeneralLedgerCommandTests(TestCase):
+    @patch("apps.accounting.management.commands.sync_general_ledger.GeneralLedgerSyncService")
+    def test_management_command_valid_args_call_service_and_print_summary(self, service_mock):
+        integration = create_merit_integration()
+        state = AccountingSyncState.objects.create(
+            organization=integration.organization,
+            integration=integration,
+            source_type=AccountingSyncState.SourceType.GL,
+        )
+        run = AccountingSyncRun.objects.create(
+            organization=integration.organization,
+            integration=integration,
+            sync_state=state,
+            source_type=AccountingSyncState.SourceType.GL,
+        )
+        service_mock.return_value.sync.return_value = SyncGeneralLedgerResult(
+            integration=integration,
+            sync_state=state,
+            sync_run=run,
+            period_start=date(2026, 1, 1),
+            period_end=date(2026, 1, 31),
+            requested_chunk_count=1,
+            completed_chunk_count=1,
+            discovered_batch_count=2,
+            created_count=3,
+            updated_count=4,
+            unchanged_count=5,
+            failed_count=0,
+            batches=[],
+            partial=False,
+            synced=True,
+            metadata={},
+        )
+        output = StringIO()
+
+        call_command("sync_general_ledger", integration.id, "--start", "2026-01-01", "--end", "2026-01-31", stdout=output)
+
+        service_mock.return_value.sync.assert_called_once()
+        self.assertIn("discovered_batch_count: 2", output.getvalue())
+        self.assertIn("synced: True", output.getvalue())
+
+    def test_management_command_invalid_integration_and_dates(self):
+        with self.assertRaises(CommandError):
+            call_command("sync_general_ledger", 999999, "--start", "2026-01-01", "--end", "2026-01-31", stdout=StringIO())
+
+        integration = create_merit_integration()
+        with self.assertRaises(CommandError):
+            call_command("sync_general_ledger", integration.id, "--start", "bad-date", "--end", "2026-01-31", stdout=StringIO())
+
+    @patch("apps.accounting.management.commands.sync_general_ledger.GeneralLedgerSyncService")
+    def test_management_command_service_error_safe_and_debug_omits_secret(self, service_mock):
+        integration = create_merit_integration()
+        integration.encrypted_secret_placeholder = "top-secret"
+        integration.save()
+        service_mock.return_value.sync.side_effect = RuntimeError("failed top-secret")
+
+        with self.assertRaises(CommandError) as safe_error:
+            call_command("sync_general_ledger", integration.id, "--start", "2026-01-01", "--end", "2026-01-31", stdout=StringIO())
+        self.assertNotIn("top-secret", str(safe_error.exception))
+
+        with self.assertRaises(CommandError) as debug_error:
+            call_command(
+                "sync_general_ledger",
+                integration.id,
+                "--start",
+                "2026-01-01",
+                "--end",
+                "2026-01-31",
+                "--debug",
+                stdout=StringIO(),
+            )
+        self.assertIn("RuntimeError", str(debug_error.exception))
+        self.assertNotIn("top-secret", str(debug_error.exception))
 
 
 class SecretProviderTests(TestCase):
