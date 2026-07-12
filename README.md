@@ -20,6 +20,8 @@ This repository is evolving from a local invoice automation prototype into an Op
 
 The communications app includes persistent mailbox sync state so each EmailAccount mailbox can later track resumable cursor progress, UIDVALIDITY, import status, safe errors, and observable counters.
 
+Normal IMAP sync now uses incremental UID-based mailbox cursors. It resumes from the last successfully processed UID, preserves bounded latest-message behavior for first/no-cursor syncs, and still leaves historical full-mailbox backfill for a later implementation.
+
 `KNOWLEDGE_ARCHITECTURE.md` describes the Knowledge Engine as the controlled memory, evidence, timeline, and AI context layer of the platform.
 
 `UI_ARCHITECTURE.md` describes the future platform user experience as a business workspace, not a Django Admin replacement.

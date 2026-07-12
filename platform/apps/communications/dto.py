@@ -23,6 +23,17 @@ class RawEmailMessage:
 
 
 @dataclass(frozen=True)
+class IMAPMailboxSnapshot:
+    """Current provider-side mailbox cursor facts returned by an IMAP connector."""
+
+    mailbox_name: str
+    uid_validity: object = None
+    highest_uid: object = None
+    message_count: int = 0
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
 class ConversationContext:
     """Structured context for future project reasoning and reply drafting."""
 

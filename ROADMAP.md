@@ -12,7 +12,7 @@ Current engineering phase: Engineering Standards.
 
 Current implementation phase: Platform Core.
 
-Current implementation: Sync Cursor and Mailbox State.
+Current implementation: Incremental IMAP UID Sync.
 
 Current implementation focus: End-to-End Email Processing.
 

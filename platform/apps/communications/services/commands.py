@@ -62,6 +62,8 @@ class SyncEmailAccountCommand:
     actor: object = None
     metadata: dict | None = None
     process_imported: bool = False
+    mailbox_name: str = "INBOX"
+    incremental: bool = True
 
 
 @dataclass(frozen=True)

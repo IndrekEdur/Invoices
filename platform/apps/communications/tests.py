@@ -20,7 +20,7 @@ from apps.projects.models import Project
 from apps.workflow.models import WorkflowDefinition, WorkflowInstance, WorkflowState
 
 from .connectors import IMAPEmailConnector
-from .dto import RawEmailMessage
+from .dto import IMAPMailboxSnapshot, RawEmailMessage
 from .models import (
     EmailAccount,
     EmailAnswerDraft,
@@ -700,7 +700,7 @@ Attachment body should be ignored
         self.addCleanup(patch.stopall)
         client.login.return_value = ("OK", [])
         client.select.return_value = ("OK", [])
-        client.search.return_value = ("OK", [b""])
+        client.uid.return_value = ("OK", [b""])
 
         connector = IMAPEmailConnector(create_imap_email_account()).connect()
         messages = connector.fetch_messages()
@@ -807,39 +807,102 @@ Attachment body should be ignored
         self.addCleanup(patch.stopall)
         client.login.return_value = ("OK", [])
         client.select.return_value = ("OK", [])
-        client.search.return_value = ("OK", [b"1"])
-        client.fetch.return_value = ("OK", [(b"1 (RFC822)", self.make_plain_email())])
+        client.uid.side_effect = [
+            ("OK", [b"1"]),
+            ("OK", [(b"1 (RFC822)", self.make_plain_email())]),
+        ]
 
         messages = IMAPEmailConnector(create_imap_email_account()).connect().fetch_messages()
 
         self.assertEqual(len(messages), 1)
         self.assertIsInstance(messages[0], RawEmailMessage)
+        self.assertEqual(messages[0].metadata["imap_uid"], 1)
+        self.assertEqual(messages[0].external_message_id, "imap:INBOX:1")
 
     def test_fetch_messages_respects_limit(self):
         client = patch("apps.communications.connectors.imap.imaplib.IMAP4_SSL").start().return_value
         self.addCleanup(patch.stopall)
         client.login.return_value = ("OK", [])
         client.select.return_value = ("OK", [])
-        client.search.return_value = ("OK", [b"1 2 3"])
-        client.fetch.side_effect = [
+        client.uid.side_effect = [
+            ("OK", [b"1 2 3"]),
             ("OK", [(b"2 (RFC822)", self.make_plain_email(message_id="<message-2@example.com>"))]),
             ("OK", [(b"3 (RFC822)", self.make_plain_email(message_id="<message-3@example.com>"))]),
         ]
 
         messages = IMAPEmailConnector(create_imap_email_account()).connect().fetch_messages(limit=2)
 
-        self.assertEqual([message.external_message_id for message in messages], ["2", "3"])
+        self.assertEqual([message.external_message_id for message in messages], ["imap:INBOX:2", "imap:INBOX:3"])
 
     def test_fetch_messages_selects_inbox_by_default(self):
         client = patch("apps.communications.connectors.imap.imaplib.IMAP4_SSL").start().return_value
         self.addCleanup(patch.stopall)
         client.login.return_value = ("OK", [])
         client.select.return_value = ("OK", [])
-        client.search.return_value = ("OK", [b""])
+        client.uid.return_value = ("OK", [b""])
 
         IMAPEmailConnector(create_imap_email_account()).connect().fetch_messages()
 
         client.select.assert_called_once_with("INBOX")
+
+    def test_mailbox_snapshot_parses_uidvalidity_and_message_count(self):
+        client = patch("apps.communications.connectors.imap.imaplib.IMAP4_SSL").start().return_value
+        self.addCleanup(patch.stopall)
+        client.login.return_value = ("OK", [])
+        client.select.return_value = ("OK", [b"3"])
+        client.response.return_value = ("OK", [b"777"])
+        client.uid.return_value = ("OK", [b"9 10 11"])
+
+        snapshot = IMAPEmailConnector(create_imap_email_account()).connect().get_mailbox_snapshot()
+
+        self.assertEqual(snapshot.uid_validity, 777)
+        self.assertEqual(snapshot.message_count, 3)
+        self.assertEqual(snapshot.highest_uid, 11)
+
+    def test_fetch_messages_uses_uid_search_and_uid_fetch(self):
+        client = patch("apps.communications.connectors.imap.imaplib.IMAP4_SSL").start().return_value
+        self.addCleanup(patch.stopall)
+        client.login.return_value = ("OK", [])
+        client.select.return_value = ("OK", [])
+        client.uid.side_effect = [
+            ("OK", [b"1"]),
+            ("OK", [(b"1 (RFC822)", self.make_plain_email())]),
+        ]
+
+        IMAPEmailConnector(create_imap_email_account()).connect().fetch_messages()
+
+        self.assertEqual(client.uid.call_args_list[0].args, ("search", None, "ALL"))
+        self.assertEqual(client.uid.call_args_list[1].args, ("fetch", "1", "(RFC822)"))
+
+    def test_after_uid_filters_sorts_and_limits_oldest_next_batch(self):
+        client = patch("apps.communications.connectors.imap.imaplib.IMAP4_SSL").start().return_value
+        self.addCleanup(patch.stopall)
+        client.login.return_value = ("OK", [])
+        client.select.return_value = ("OK", [])
+        client.uid.side_effect = [
+            ("OK", [b"12 10 11 9 8"]),
+            ("OK", [(b"10 (RFC822)", self.make_plain_email(message_id="<10@example.com>"))]),
+            ("OK", [(b"11 (RFC822)", self.make_plain_email(message_id="<11@example.com>"))]),
+        ]
+
+        messages = IMAPEmailConnector(create_imap_email_account()).connect().fetch_messages(limit=2, after_uid=9)
+
+        self.assertEqual([message.metadata["imap_uid"] for message in messages], [10, 11])
+
+    def test_initial_no_cursor_selects_latest_limited_uids_in_ascending_order(self):
+        client = patch("apps.communications.connectors.imap.imaplib.IMAP4_SSL").start().return_value
+        self.addCleanup(patch.stopall)
+        client.login.return_value = ("OK", [])
+        client.select.return_value = ("OK", [])
+        client.uid.side_effect = [
+            ("OK", [b"1 2 3 4 5"]),
+            ("OK", [(b"4 (RFC822)", self.make_plain_email(message_id="<4@example.com>"))]),
+            ("OK", [(b"5 (RFC822)", self.make_plain_email(message_id="<5@example.com>"))]),
+        ]
+
+        messages = IMAPEmailConnector(create_imap_email_account()).connect().fetch_messages(limit=2)
+
+        self.assertEqual([message.metadata["imap_uid"] for message in messages], [4, 5])
 
     def test_parse_email_message_parses_subject(self):
         connector = IMAPEmailConnector(create_imap_email_account())
@@ -1220,7 +1283,8 @@ class EmailSyncServiceTests(TestCase):
 
         connector_class.assert_called_once_with(account)
         connector.connect.assert_called_once_with()
-        connector.fetch_messages.assert_called_once_with(limit=25)
+        connector.get_mailbox_snapshot.assert_called_once_with("INBOX")
+        connector.fetch_messages.assert_called_once_with(limit=25, mailbox="INBOX", after_uid=None)
         connector.disconnect.assert_called_once_with()
 
     def test_disconnect_called_if_fetch_fails(self):
@@ -1304,7 +1368,222 @@ class EmailSyncServiceTests(TestCase):
 
             EmailSyncService.sync(SyncEmailAccountCommand(email_account=account, limit=7))
 
-        connector.fetch_messages.assert_called_once_with(limit=7)
+        connector.fetch_messages.assert_called_once_with(limit=7, mailbox="INBOX", after_uid=None)
+
+    def test_incremental_sync_creates_mailbox_state_and_records_uidvalidity(self):
+        account = create_imap_email_account()
+        raw_message = create_raw_email(
+            external_message_id="imap:INBOX:10",
+            metadata={"imap_uid": 10, "mailbox_name": "INBOX", "uid_validity": 123},
+        )
+
+        with patch("apps.communications.services.sync.IMAPEmailConnector") as connector_class:
+            connector = connector_class.return_value
+            connector.get_mailbox_snapshot.return_value = IMAPMailboxSnapshot(
+                mailbox_name="INBOX",
+                uid_validity=123,
+                highest_uid=10,
+                message_count=1,
+            )
+            connector.fetch_messages.return_value = [raw_message]
+
+            result = EmailSyncService.sync(SyncEmailAccountCommand(email_account=account))
+
+        state = EmailMailboxState.objects.get(email_account=account, mailbox_name="INBOX")
+        self.assertEqual(state.uid_validity, 123)
+        self.assertEqual(state.last_discovered_uid, 10)
+        self.assertEqual(state.last_processed_uid, 10)
+        self.assertEqual(state.discovered_count, 1)
+        self.assertEqual(state.imported_count, 1)
+        self.assertEqual(result["mailbox_state"], state)
+        self.assertEqual(result["cursor_before"], None)
+        self.assertEqual(result["cursor_after"], 10)
+        self.assertTrue(result["incremental"])
+
+    def test_incremental_sync_uses_stored_last_processed_uid_as_after_uid(self):
+        account = create_imap_email_account()
+        EmailMailboxState.objects.create(
+            organization=account.organization,
+            email_account=account,
+            mailbox_name="INBOX",
+            uid_validity=123,
+            last_processed_uid=20,
+        )
+
+        with patch("apps.communications.services.sync.IMAPEmailConnector") as connector_class:
+            connector = connector_class.return_value
+            connector.get_mailbox_snapshot.return_value = IMAPMailboxSnapshot("INBOX", uid_validity=123)
+            connector.fetch_messages.return_value = []
+
+            result = EmailSyncService.sync(SyncEmailAccountCommand(email_account=account, limit=5))
+
+        connector.fetch_messages.assert_called_once_with(limit=5, mailbox="INBOX", after_uid=20)
+        self.assertEqual(result["cursor_before"], 20)
+        self.assertEqual(result["cursor_after"], 20)
+
+    def test_incremental_sync_with_no_new_messages_leaves_cursor_unchanged(self):
+        account = create_imap_email_account()
+        state = EmailMailboxState.objects.create(
+            organization=account.organization,
+            email_account=account,
+            mailbox_name="INBOX",
+            uid_validity=123,
+            last_processed_uid=20,
+            imported_count=4,
+        )
+
+        with patch("apps.communications.services.sync.IMAPEmailConnector") as connector_class:
+            connector = connector_class.return_value
+            connector.get_mailbox_snapshot.return_value = IMAPMailboxSnapshot("INBOX", uid_validity=123)
+            connector.fetch_messages.return_value = []
+
+            result = EmailSyncService.sync(SyncEmailAccountCommand(email_account=account))
+
+        state.refresh_from_db()
+        self.assertEqual(state.last_processed_uid, 20)
+        self.assertEqual(state.imported_count, 4)
+        self.assertEqual(result["imported_count"], 0)
+
+    def test_repeated_same_uid_does_not_create_duplicate_message(self):
+        account = create_imap_email_account()
+        raw_message = create_raw_email(
+            external_message_id="imap:INBOX:10",
+            metadata={"imap_uid": 10, "mailbox_name": "INBOX"},
+        )
+
+        with patch("apps.communications.services.sync.IMAPEmailConnector") as connector_class:
+            connector = connector_class.return_value
+            connector.get_mailbox_snapshot.return_value = IMAPMailboxSnapshot("INBOX", uid_validity=123)
+            connector.fetch_messages.return_value = [raw_message]
+
+            EmailSyncService.sync(SyncEmailAccountCommand(email_account=account))
+            EmailSyncService.sync(SyncEmailAccountCommand(email_account=account))
+
+        self.assertEqual(EmailMessage.objects.filter(account=account, external_message_id="imap:INBOX:10").count(), 1)
+
+    def test_partial_processing_failure_preserves_earlier_cursor_and_stops_batch(self):
+        account = create_imap_email_account()
+        raw_messages = [
+            create_raw_email(external_message_id="imap:INBOX:10", metadata={"imap_uid": 10}),
+            create_raw_email(external_message_id="imap:INBOX:11", metadata={"imap_uid": 11}),
+            create_raw_email(external_message_id="imap:INBOX:12", metadata={"imap_uid": 12}),
+        ]
+
+        with patch("apps.communications.services.sync.IMAPEmailConnector") as connector_class:
+            connector = connector_class.return_value
+            connector.get_mailbox_snapshot.return_value = IMAPMailboxSnapshot("INBOX", uid_validity=123)
+            connector.fetch_messages.return_value = raw_messages
+
+            with patch("apps.communications.services.sync.EmailProcessingService") as processing_service:
+                processing_service.process.side_effect = [{"processed": True}, RuntimeError("processing failed")]
+
+                with self.assertRaises(RuntimeError):
+                    EmailSyncService.sync(
+                        SyncEmailAccountCommand(
+                            email_account=account,
+                            process_imported=True,
+                        )
+                    )
+
+        state = EmailMailboxState.objects.get(email_account=account, mailbox_name="INBOX")
+        self.assertEqual(state.last_processed_uid, 10)
+        self.assertEqual(state.imported_count, 1)
+        self.assertEqual(state.processed_count, 1)
+        self.assertEqual(state.sync_status, EmailMailboxState.SyncStatus.FAILED)
+        self.assertIn("RuntimeError", state.last_error)
+        self.assertEqual(processing_service.process.call_count, 2)
+        self.assertFalse(EmailMessage.objects.filter(account=account, external_message_id="imap:INBOX:12").exists())
+        connector.disconnect.assert_called_once_with()
+
+    def test_next_sync_resumes_after_preserved_cursor(self):
+        account = create_imap_email_account()
+        EmailMailboxState.objects.create(
+            organization=account.organization,
+            email_account=account,
+            mailbox_name="INBOX",
+            uid_validity=123,
+            last_processed_uid=10,
+        )
+
+        with patch("apps.communications.services.sync.IMAPEmailConnector") as connector_class:
+            connector = connector_class.return_value
+            connector.get_mailbox_snapshot.return_value = IMAPMailboxSnapshot("INBOX", uid_validity=123)
+            connector.fetch_messages.return_value = [
+                create_raw_email(external_message_id="imap:INBOX:11", metadata={"imap_uid": 11})
+            ]
+
+            EmailSyncService.sync(SyncEmailAccountCommand(email_account=account))
+
+        connector.fetch_messages.assert_called_once_with(limit=50, mailbox="INBOX", after_uid=10)
+        state = EmailMailboxState.objects.get(email_account=account, mailbox_name="INBOX")
+        self.assertEqual(state.last_processed_uid, 11)
+
+    def test_uidvalidity_conflict_prevents_fetch_and_import(self):
+        account = create_imap_email_account()
+        EmailMailboxState.objects.create(
+            organization=account.organization,
+            email_account=account,
+            mailbox_name="INBOX",
+            uid_validity=123,
+            last_processed_uid=10,
+        )
+
+        with patch("apps.communications.services.sync.IMAPEmailConnector") as connector_class:
+            connector = connector_class.return_value
+            connector.get_mailbox_snapshot.return_value = IMAPMailboxSnapshot("INBOX", uid_validity=456)
+
+            with self.assertRaises(MailboxUIDValidityChangedError):
+                EmailSyncService.sync(SyncEmailAccountCommand(email_account=account))
+
+        connector.fetch_messages.assert_not_called()
+        connector.disconnect.assert_called_once_with()
+        self.assertEqual(EmailMessage.objects.count(), 0)
+        state = EmailMailboxState.objects.get(email_account=account, mailbox_name="INBOX")
+        self.assertEqual(state.last_processed_uid, 10)
+        self.assertEqual(state.sync_status, EmailMailboxState.SyncStatus.FAILED)
+
+    def test_process_imported_true_increments_processed_count(self):
+        account = create_imap_email_account()
+        raw_message = create_raw_email(
+            external_message_id="imap:INBOX:10",
+            metadata={"imap_uid": 10},
+        )
+
+        with patch("apps.communications.services.sync.IMAPEmailConnector") as connector_class:
+            connector = connector_class.return_value
+            connector.get_mailbox_snapshot.return_value = IMAPMailboxSnapshot("INBOX", uid_validity=123)
+            connector.fetch_messages.return_value = [raw_message]
+
+            result = EmailSyncService.sync(
+                SyncEmailAccountCommand(
+                    email_account=account,
+                    process_imported=True,
+                )
+            )
+
+        state = EmailMailboxState.objects.get(email_account=account, mailbox_name="INBOX")
+        self.assertEqual(state.processed_count, 1)
+        self.assertEqual(result["processed_count"], 1)
+
+    def test_incremental_false_preserves_bounded_latest_without_cursor(self):
+        account = create_imap_email_account()
+
+        with patch("apps.communications.services.sync.IMAPEmailConnector") as connector_class:
+            connector = connector_class.return_value
+            connector.fetch_messages.return_value = []
+
+            result = EmailSyncService.sync(
+                SyncEmailAccountCommand(
+                    email_account=account,
+                    limit=3,
+                    incremental=False,
+                )
+            )
+
+        connector.get_mailbox_snapshot.assert_not_called()
+        connector.fetch_messages.assert_called_once_with(limit=3, mailbox="INBOX", after_uid=None)
+        self.assertFalse(EmailMailboxState.objects.filter(email_account=account).exists())
+        self.assertFalse(result["incremental"])
 
 
 class SyncEmailAccountCommandTests(TestCase):

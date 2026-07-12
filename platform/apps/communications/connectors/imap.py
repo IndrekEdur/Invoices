@@ -1,4 +1,5 @@
 import imaplib
+import re
 from email import policy
 from email.parser import BytesParser
 from email.utils import getaddresses, parsedate_to_datetime
@@ -6,7 +7,7 @@ from email.utils import getaddresses, parsedate_to_datetime
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 
-from apps.communications.dto import RawEmailMessage
+from apps.communications.dto import IMAPMailboxSnapshot, RawEmailMessage
 from apps.communications.models import EmailAccount
 
 from .base import BaseEmailConnector
@@ -49,30 +50,64 @@ class IMAPEmailConnector(BaseEmailConnector):
         self.connected = True
         return self
 
-    def fetch_messages(self, limit=50, mailbox="INBOX"):
+    def get_mailbox_snapshot(self, mailbox="INBOX"):
         if self.client is None:
             raise RuntimeError("IMAP connection is not open.")
 
-        status, _response = self.client.select(mailbox)
-        if status != "OK":
-            raise RuntimeError(f"IMAP SELECT failed with status: {status}")
+        message_count = self._select_mailbox(mailbox)
+        uid_validity = self._get_response_number("UIDVALIDITY")
 
-        status, response = self.client.search(None, "ALL")
+        status, response = self.client.uid("search", None, "ALL")
         if status != "OK":
-            raise RuntimeError(f"IMAP SEARCH failed with status: {status}")
+            raise RuntimeError(f"IMAP UID SEARCH failed with status: {status}")
 
-        message_ids = (response[0] or b"").split()
-        latest_message_ids = message_ids[-limit:] if limit else []
+        uids = self._parse_uid_response(response)
+        return IMAPMailboxSnapshot(
+            mailbox_name=mailbox,
+            uid_validity=uid_validity,
+            highest_uid=max(uids) if uids else None,
+            message_count=message_count,
+            metadata={"uid_count": len(uids)},
+        )
+
+    def fetch_messages(self, limit=50, mailbox="INBOX", after_uid=None):
+        if self.client is None:
+            raise RuntimeError("IMAP connection is not open.")
+
+        self._select_mailbox(mailbox)
+        uid_validity = self._get_response_number("UIDVALIDITY")
+
+        status, response = self.client.uid("search", None, "ALL")
+        if status != "OK":
+            raise RuntimeError(f"IMAP UID SEARCH failed with status: {status}")
+
+        uids = sorted(self._parse_uid_response(response))
+        if after_uid is not None:
+            after_uid = int(after_uid)
+            selected_uids = [uid for uid in uids if uid > after_uid]
+            selected_uids = selected_uids[:limit] if limit else []
+        else:
+            selected_uids = uids[-limit:] if limit else []
+
+        selected_uids = sorted(selected_uids)
         messages = []
 
-        for message_id in latest_message_ids:
-            status, fetch_response = self.client.fetch(message_id, "(RFC822)")
+        for uid in selected_uids:
+            status, fetch_response = self.client.uid("fetch", str(uid), "(RFC822)")
             if status != "OK":
-                raise RuntimeError(f"IMAP FETCH failed with status: {status}")
+                raise RuntimeError(f"IMAP UID FETCH failed with status: {status}")
 
             raw_bytes = self._extract_rfc822_payload(fetch_response)
             if raw_bytes:
-                messages.append(self.parse_email_message(raw_bytes, external_message_id=message_id.decode()))
+                messages.append(
+                    self.parse_email_message(
+                        raw_bytes,
+                        external_message_id=self._stable_external_message_id(mailbox, uid),
+                        imap_uid=uid,
+                        mailbox_name=mailbox,
+                        uid_validity=uid_validity,
+                    )
+                )
 
         return messages
 
@@ -107,7 +142,14 @@ class IMAPEmailConnector(BaseEmailConnector):
             metadata=metadata,
         )
 
-    def parse_email_message(self, raw_bytes, external_message_id=""):
+    def parse_email_message(
+        self,
+        raw_bytes,
+        external_message_id="",
+        imap_uid=None,
+        mailbox_name="",
+        uid_validity=None,
+    ):
         parsed_message = BytesParser(policy=policy.default).parsebytes(raw_bytes)
         subject = str(parsed_message.get("Subject", ""))
         sent_at = self._parse_date(parsed_message.get("Date"))
@@ -115,6 +157,25 @@ class IMAPEmailConnector(BaseEmailConnector):
         sender = self.extract_addresses(parsed_message.get("From", ""))
         references = str(parsed_message.get("References", "") or "")
         in_reply_to = str(parsed_message.get("In-Reply-To", "") or "")
+
+        metadata = {
+            "headers": {
+                "Message-ID": str(parsed_message.get("Message-ID", "")),
+                "References": references,
+                "In-Reply-To": in_reply_to,
+                "Date": str(parsed_message.get("Date", "")),
+                "From": str(parsed_message.get("From", "")),
+                "To": str(parsed_message.get("To", "")),
+                "Cc": str(parsed_message.get("Cc", "")),
+                "Bcc": str(parsed_message.get("Bcc", "")),
+            }
+        }
+        if imap_uid is not None:
+            metadata["imap_uid"] = int(imap_uid)
+        if mailbox_name:
+            metadata["mailbox_name"] = mailbox_name
+        if uid_validity is not None:
+            metadata["uid_validity"] = uid_validity
 
         raw_data = {
             "external_message_id": external_message_id or str(parsed_message.get("Message-ID", "")),
@@ -131,18 +192,7 @@ class IMAPEmailConnector(BaseEmailConnector):
             "direction": "inbound",
             "sent_at": sent_at,
             "received_at": sent_at or timezone.now(),
-            "metadata": {
-                "headers": {
-                    "Message-ID": str(parsed_message.get("Message-ID", "")),
-                    "References": references,
-                    "In-Reply-To": in_reply_to,
-                    "Date": str(parsed_message.get("Date", "")),
-                    "From": str(parsed_message.get("From", "")),
-                    "To": str(parsed_message.get("To", "")),
-                    "Cc": str(parsed_message.get("Cc", "")),
-                    "Bcc": str(parsed_message.get("Bcc", "")),
-                }
-            },
+            "metadata": metadata,
         }
 
         return self.map_imap_message(raw_data)
@@ -225,6 +275,61 @@ class IMAPEmailConnector(BaseEmailConnector):
                 return parts[-2]
 
         return item.split()[-1]
+
+    def _select_mailbox(self, mailbox):
+        status, response = self.client.select(mailbox)
+        if status != "OK":
+            raise RuntimeError(f"IMAP SELECT failed with status: {status}")
+
+        try:
+            return int((response or [b"0"])[0] or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _get_response_number(self, response_name):
+        if not hasattr(self.client, "response"):
+            return None
+
+        try:
+            result = self.client.response(response_name)
+        except (imaplib.IMAP4.error, TypeError):
+            return None
+        try:
+            status, response = result
+        except (TypeError, ValueError):
+            return None
+
+        if status != "OK" or not response:
+            return None
+
+        for item in response:
+            if item is None:
+                continue
+            if isinstance(item, bytes):
+                item = item.decode("utf-8", errors="replace")
+            match = re.search(r"\d+", str(item))
+            if match:
+                return int(match.group(0))
+        return None
+
+    @staticmethod
+    def _parse_uid_response(response):
+        uids = []
+        for item in response or []:
+            if not item:
+                continue
+            if isinstance(item, bytes):
+                item = item.decode("ascii", errors="ignore")
+            for value in str(item).split():
+                try:
+                    uids.append(int(value))
+                except ValueError:
+                    continue
+        return uids
+
+    @staticmethod
+    def _stable_external_message_id(mailbox, uid):
+        return f"imap:{mailbox}:{uid}"
 
     @staticmethod
     def _extract_rfc822_payload(fetch_response):
