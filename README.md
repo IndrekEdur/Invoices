@@ -50,6 +50,8 @@ The Merit API client exposes a bounded GL full-details read method for 31-day ge
 
 The accounting app includes persistent accounting sync cursor and run tracking so GL, sales invoices, purchase invoices, payments and other accounting sources can later be synced incrementally and observed independently.
 
+The accounting app includes a normalized general-ledger cache for batches, entries and allocation lines. Merit connector DTOs and local persistence are separate; GL synchronization and financial reporting are still planned.
+
 The accounting app includes an AccountingDimensionValueService that creates or updates Merit dimension values through the connector and updates the local AccountingDimension cache only after the API call succeeds.
 
 The accounting app includes a Merit dimension sync engine that copies Merit dimension DTOs into the local AccountingDimension cache, records audit events, and reports conflicts without creating projects or resolving conflicts silently.

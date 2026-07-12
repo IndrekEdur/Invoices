@@ -12,7 +12,7 @@ Current engineering phase: Engineering Standards.
 
 Current implementation phase: Platform Core.
 
-Current implementation: Accounting Sync Cursor and Run Model.
+Current implementation: General Ledger Transaction Cache.
 
 Current implementation focus: End-to-End Email Processing.
 

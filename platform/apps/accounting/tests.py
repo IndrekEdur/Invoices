@@ -22,17 +22,35 @@ from apps.accounting.connectors import (
     MeritAuthenticationService,
     MeritAPIClient,
 )
-from apps.accounting.dto import MeritDimensionDTO, MeritDimensionValueDTO, MeritGLBatchDTO, MeritGLDateType
-from apps.accounting.models import AccountingDimension, AccountingIntegration, AccountingSyncRun, AccountingSyncState
+from apps.accounting.dto import (
+    MeritDimensionDTO,
+    MeritDimensionValueDTO,
+    MeritGLBatchDTO,
+    MeritGLCostAllocationDTO,
+    MeritGLDateType,
+    MeritGLEntryDTO,
+)
+from apps.accounting.models import (
+    AccountingDimension,
+    AccountingGLAllocation,
+    AccountingGLBatch,
+    AccountingGLEntry,
+    AccountingIntegration,
+    AccountingSyncRun,
+    AccountingSyncState,
+)
 from apps.accounting.secrets import SecretMissingError, SecretProvider
 from apps.accounting.services import (
     AccountingDimensionConflictResolutionService,
     AccountingDimensionValueService,
     AccountingDimensionSyncService,
+    AccountingSyncStateService,
     CreateAccountingDimensionValueCommand,
     CompleteAccountingSyncRunCommand,
     FailAccountingSyncRunCommand,
+    GeneralLedgerCacheService,
     GetOrCreateAccountingSyncStateCommand,
+    GLCacheUpsertResult,
     IgnoreDimensionConflictCommand,
     ProjectCodeAllocationService,
     ResolveDimensionConflictCommand,
@@ -41,7 +59,9 @@ from apps.accounting.services import (
     SyncAccountingDimensionsCommand,
     SyncAccountingDimensionsResult,
     UpdateAccountingSyncProgressCommand,
-    AccountingSyncStateService,
+    UpsertGLAllocationCommand,
+    UpsertGLBatchCommand,
+    UpsertGLEntryCommand,
 )
 from apps.core.models import AuditEvent
 from apps.core.services import CreateOrganizationCommand, OrganizationService
@@ -639,6 +659,378 @@ class AccountingSyncStateServiceTests(TestCase):
         }
         defaults.update(overrides)
         return AccountingSyncState.objects.create(**defaults)
+
+
+class GeneralLedgerCacheModelTests(TestCase):
+    def test_create_gl_batch_and_decimal_precision(self):
+        integration = create_merit_integration()
+
+        batch = AccountingGLBatch.objects.create(
+            organization=integration.organization,
+            integration=integration,
+            external_id="glb-1",
+            batch_date=date(2026, 7, 1),
+            currency_rate=Decimal("1.23456789"),
+            total_amount=Decimal("123.456789"),
+        )
+
+        self.assertEqual(batch.external_id, "glb-1")
+        self.assertEqual(batch.currency_rate, Decimal("1.23456789"))
+        self.assertEqual(batch.total_amount, Decimal("123.456789"))
+
+    def test_gl_batch_unique_integration_external_id(self):
+        integration = create_merit_integration()
+        AccountingGLBatch.objects.create(
+            organization=integration.organization,
+            integration=integration,
+            external_id="glb-1",
+        )
+
+        with self.assertRaises(IntegrityError):
+            AccountingGLBatch.objects.create(
+                organization=integration.organization,
+                integration=integration,
+                external_id="glb-1",
+            )
+
+    def test_gl_batch_nullable_source_fields_and_str(self):
+        integration = create_merit_integration()
+
+        batch = AccountingGLBatch.objects.create(
+            organization=integration.organization,
+            integration=integration,
+            external_id="glb-2",
+        )
+
+        self.assertIsNone(batch.batch_date)
+        self.assertIsNone(batch.source_changed_at)
+        self.assertIn("glb-2", str(batch))
+
+    def test_create_gl_entry_uniqueness_net_amount_and_str(self):
+        batch = self._batch()
+
+        entry = AccountingGLEntry.objects.create(
+            organization=batch.organization,
+            integration=batch.integration,
+            batch=batch,
+            external_id="entry-1",
+            account_code="4000",
+            memo="Revenue",
+            debit_amount=Decimal("10.000000"),
+            credit_amount=Decimal("3.250000"),
+        )
+
+        self.assertEqual(entry.net_amount, Decimal("6.750000"))
+        self.assertIn("4000", str(entry))
+        with self.assertRaises(IntegrityError):
+            AccountingGLEntry.objects.create(
+                organization=batch.organization,
+                integration=batch.integration,
+                batch=batch,
+                external_id="entry-1",
+            )
+
+    def test_create_allocation_uniqueness_nullable_links_and_str(self):
+        entry = self._entry()
+
+        allocation = AccountingGLAllocation.objects.create(
+            organization=entry.organization,
+            integration=entry.integration,
+            entry=entry,
+            external_id="alloc-1",
+            dimension_code="26124",
+            dimension_name="Kanarbiku",
+            amount=Decimal("50.000000"),
+        )
+
+        self.assertIsNone(allocation.project)
+        self.assertIsNone(allocation.accounting_dimension)
+        self.assertIn("26124", str(allocation))
+        with self.assertRaises(IntegrityError):
+            AccountingGLAllocation.objects.create(
+                organization=entry.organization,
+                integration=entry.integration,
+                entry=entry,
+                external_id="alloc-1",
+            )
+
+    def test_organization_scoping(self):
+        first = self._batch()
+        second = self._batch(integration=create_merit_integration(create_organization("Other GL Org")), external_id="glb-2")
+
+        self.assertNotEqual(first.organization_id, second.organization_id)
+
+    def _batch(self, integration=None, external_id="glb-1"):
+        integration = integration or create_merit_integration()
+        return AccountingGLBatch.objects.create(
+            organization=integration.organization,
+            integration=integration,
+            external_id=external_id,
+        )
+
+    def _entry(self):
+        batch = self._batch()
+        return AccountingGLEntry.objects.create(
+            organization=batch.organization,
+            integration=batch.integration,
+            batch=batch,
+            external_id="entry-1",
+        )
+
+
+class GeneralLedgerCacheServiceTests(TestCase):
+    def _batch_dto(self, external_id="glb-1", total_amount=Decimal("123.456789"), entries=()):
+        return MeritGLBatchDTO(
+            external_id=external_id,
+            batch_code="GL",
+            number="42",
+            source_document_id="doc-1",
+            document="Purchase invoice",
+            batch_date=date(2026, 7, 1),
+            currency_code="EUR",
+            currency_rate=Decimal("1.00000000"),
+            total_amount=total_amount,
+            price_includes_vat=True,
+            changed_at=datetime(2026, 7, 2, 10, 20, tzinfo=timezone.get_current_timezone()),
+            entries=tuple(entries),
+            raw={"GLBId": external_id, "TotalAmount": str(total_amount)},
+        )
+
+    def _entry_dto(self, entry_id="entry-1", memo="Project work", allocations=()):
+        return MeritGLEntryDTO(
+            account_code="4000",
+            account_name="Revenue",
+            memo=memo,
+            department_code="D1",
+            debit_amount=Decimal("0.000000"),
+            debit_currency="EUR",
+            credit_amount=Decimal("123.456789"),
+            credit_currency="EUR",
+            type_id="1",
+            batch_id="glb-1",
+            entry_id=entry_id,
+            tax_id="tax-1",
+            tax_percent=Decimal("22.0000"),
+            cost_allocations=tuple(allocations),
+            raw={"EntryId": entry_id, "Memo": memo},
+        )
+
+    def _allocation_dto(self, code="26124", amount=Decimal("123.456789"), multiplier=Decimal("1.00000000")):
+        return MeritGLCostAllocationDTO(
+            source_type="project",
+            code=code,
+            name="Kanarbiku",
+            multiplier=multiplier,
+            amount=amount,
+            batch_id="glb-1",
+            entry_id="entry-1",
+            raw={"Code": code, "Amount": str(amount)},
+        )
+
+    def test_upsert_batch_creates_updates_and_detects_unchanged(self):
+        integration = create_merit_integration()
+        metadata = {"source": "test"}
+        dto = self._batch_dto()
+
+        created = GeneralLedgerCacheService.upsert_batch(
+            UpsertGLBatchCommand(integration=integration, dto=dto, metadata=metadata)
+        )
+        unchanged = GeneralLedgerCacheService.upsert_batch(UpsertGLBatchCommand(integration=integration, dto=dto))
+        updated = GeneralLedgerCacheService.upsert_batch(
+            UpsertGLBatchCommand(integration=integration, dto=self._batch_dto(total_amount=Decimal("200.000000")))
+        )
+
+        self.assertTrue(created.created)
+        self.assertTrue(unchanged.unchanged)
+        self.assertTrue(updated.updated)
+        self.assertEqual(AccountingGLBatch.objects.count(), 1)
+        self.assertEqual(metadata, {"source": "test"})
+
+    def test_upsert_batch_preserves_raw_input_and_synced_timestamps(self):
+        integration = create_merit_integration()
+        dto = self._batch_dto()
+        original_raw = deepcopy(dto.raw)
+
+        created = GeneralLedgerCacheService.upsert_batch(UpsertGLBatchCommand(integration=integration, dto=dto))
+        first_synced_at = created.object.first_synced_at
+        updated = GeneralLedgerCacheService.upsert_batch(
+            UpsertGLBatchCommand(integration=integration, dto=self._batch_dto(total_amount=Decimal("200.000000")))
+        )
+
+        self.assertEqual(dto.raw, original_raw)
+        self.assertEqual(updated.object.first_synced_at, first_synced_at)
+        self.assertGreaterEqual(updated.object.last_synced_at, first_synced_at)
+        self.assertEqual(updated.object.source_changed_at, self._batch_dto().changed_at)
+        self.assertEqual(updated.object.total_amount, Decimal("200.000000"))
+
+    def test_upsert_batch_does_not_call_api(self):
+        integration = create_merit_integration()
+
+        with patch.object(MeritAPIClient, "request") as request_mock:
+            GeneralLedgerCacheService.upsert_batch(UpsertGLBatchCommand(integration=integration, dto=self._batch_dto()))
+
+        request_mock.assert_not_called()
+
+    def test_upsert_entry_provider_id_and_fallback_are_idempotent(self):
+        batch = self._persisted_batch()
+
+        provider_result = GeneralLedgerCacheService.upsert_entry(
+            UpsertGLEntryCommand(batch=batch, dto=self._entry_dto(entry_id="entry-1"), sequence=1)
+        )
+        fallback_dto = self._entry_dto(entry_id="")
+        fallback_first = GeneralLedgerCacheService.upsert_entry(
+            UpsertGLEntryCommand(batch=batch, dto=fallback_dto, sequence=2)
+        )
+        fallback_second = GeneralLedgerCacheService.upsert_entry(
+            UpsertGLEntryCommand(batch=batch, dto=fallback_dto, sequence=2)
+        )
+
+        self.assertEqual(provider_result.object.external_id, "entry-1")
+        self.assertTrue(fallback_first.created)
+        self.assertTrue(fallback_second.unchanged)
+        self.assertEqual(AccountingGLEntry.objects.count(), 2)
+
+    def test_upsert_entry_updates_changed_fields_and_preserves_precision(self):
+        batch = self._persisted_batch()
+        created = GeneralLedgerCacheService.upsert_entry(
+            UpsertGLEntryCommand(batch=batch, dto=self._entry_dto(memo="Old"), sequence=1)
+        )
+
+        updated = GeneralLedgerCacheService.upsert_entry(
+            UpsertGLEntryCommand(batch=batch, dto=self._entry_dto(memo="New"), sequence=1)
+        )
+
+        self.assertTrue(created.created)
+        self.assertTrue(updated.updated)
+        self.assertEqual(updated.object.memo, "New")
+        self.assertEqual(updated.object.credit_amount, Decimal("123.456789"))
+
+    def test_upsert_entry_invalid_organization_relationship_rejected(self):
+        batch = self._persisted_batch()
+        batch.organization = create_organization("Wrong Org")
+
+        with self.assertRaises(ValueError):
+            GeneralLedgerCacheService.upsert_entry(UpsertGLEntryCommand(batch=batch, dto=self._entry_dto()))
+
+    def test_upsert_allocation_links_exact_dimension_and_project(self):
+        entry = self._persisted_entry()
+        AccountingDimension.objects.create(
+            organization=entry.organization,
+            integration=entry.integration,
+            provider=entry.integration.provider,
+            code="26124",
+            name="Kanarbiku",
+            dimension_type=AccountingDimension.DimensionType.PROJECT,
+        )
+        Project.objects.create(organization=entry.organization, code="26124", name="Kanarbiku")
+
+        result = GeneralLedgerCacheService.upsert_allocation(
+            UpsertGLAllocationCommand(entry=entry, dto=self._allocation_dto(), sequence=1)
+        )
+
+        self.assertIsNotNone(result.object.accounting_dimension)
+        self.assertIsNotNone(result.object.project)
+        self.assertEqual(result.object.project.code, "26124")
+
+    def test_upsert_allocation_no_fuzzy_match_and_missing_project_remains_null(self):
+        entry = self._persisted_entry()
+        Project.objects.create(organization=entry.organization, code="26124X", name="Almost")
+
+        result = GeneralLedgerCacheService.upsert_allocation(
+            UpsertGLAllocationCommand(entry=entry, dto=self._allocation_dto(code="26124"), sequence=1)
+        )
+
+        self.assertIsNone(result.object.project)
+        self.assertIsNone(result.object.accounting_dimension)
+
+    def test_upsert_allocation_changed_amount_and_multiple_same_code_not_collapsed(self):
+        entry = self._persisted_entry()
+        first = GeneralLedgerCacheService.upsert_allocation(
+            UpsertGLAllocationCommand(entry=entry, dto=self._allocation_dto(amount=Decimal("50.000000")), sequence=1)
+        )
+        second = GeneralLedgerCacheService.upsert_allocation(
+            UpsertGLAllocationCommand(entry=entry, dto=self._allocation_dto(amount=Decimal("50.000000")), sequence=2)
+        )
+        updated = GeneralLedgerCacheService.upsert_allocation(
+            UpsertGLAllocationCommand(entry=entry, dto=self._allocation_dto(amount=Decimal("60.000000")), sequence=1)
+        )
+
+        self.assertTrue(first.created)
+        self.assertTrue(second.created)
+        self.assertTrue(updated.updated)
+        self.assertEqual(AccountingGLAllocation.objects.count(), 2)
+
+    def test_upsert_allocation_metadata_and_raw_not_mutated(self):
+        entry = self._persisted_entry()
+        dto = self._allocation_dto()
+        raw = deepcopy(dto.raw)
+        metadata = {"sync": "manual"}
+
+        GeneralLedgerCacheService.upsert_allocation(
+            UpsertGLAllocationCommand(entry=entry, dto=dto, sequence=1, metadata=metadata)
+        )
+
+        self.assertEqual(dto.raw, raw)
+        self.assertEqual(metadata, {"sync": "manual"})
+
+    def test_persist_batch_tree_creates_and_then_returns_unchanged(self):
+        integration = create_merit_integration()
+        allocation = self._allocation_dto()
+        entry = self._entry_dto(allocations=(allocation,))
+        batch = self._batch_dto(entries=(entry,))
+
+        first = GeneralLedgerCacheService.persist_batch_tree(integration, batch)
+        second = GeneralLedgerCacheService.persist_batch_tree(integration, batch)
+
+        self.assertEqual(first["created_count"], 3)
+        self.assertEqual(second["unchanged_count"], 3)
+        self.assertEqual(AccountingGLBatch.objects.count(), 1)
+        self.assertEqual(AccountingGLEntry.objects.count(), 1)
+        self.assertEqual(AccountingGLAllocation.objects.count(), 1)
+
+    def test_persist_batch_tree_updates_only_changed_objects(self):
+        integration = create_merit_integration()
+        initial = self._batch_dto(entries=(self._entry_dto(memo="Old", allocations=(self._allocation_dto(),)),))
+        changed = self._batch_dto(entries=(self._entry_dto(memo="New", allocations=(self._allocation_dto(),)),))
+
+        GeneralLedgerCacheService.persist_batch_tree(integration, initial)
+        result = GeneralLedgerCacheService.persist_batch_tree(integration, changed)
+
+        self.assertEqual(result["updated_count"], 1)
+        self.assertEqual(result["unchanged_count"], 2)
+
+    def test_persist_batch_tree_rolls_back_on_allocation_failure(self):
+        integration = create_merit_integration()
+        batch = self._batch_dto(entries=(self._entry_dto(allocations=(self._allocation_dto(),)),))
+
+        with patch.object(GeneralLedgerCacheService, "upsert_allocation", side_effect=RuntimeError("allocation failed")):
+            with self.assertRaises(RuntimeError):
+                GeneralLedgerCacheService.persist_batch_tree(integration, batch)
+
+        self.assertFalse(AccountingGLBatch.objects.exists())
+        self.assertFalse(AccountingGLEntry.objects.exists())
+
+    def test_persist_batch_tree_does_not_create_project_dimension_or_audit(self):
+        integration = create_merit_integration()
+        batch = self._batch_dto(entries=(self._entry_dto(allocations=(self._allocation_dto(),)),))
+
+        GeneralLedgerCacheService.persist_batch_tree(integration, batch)
+
+        self.assertFalse(Project.objects.exists())
+        self.assertFalse(AccountingDimension.objects.exists())
+        self.assertFalse(AuditEvent.objects.filter(object_type__contains="GL").exists())
+
+    def _persisted_batch(self):
+        integration = create_merit_integration()
+        return GeneralLedgerCacheService.upsert_batch(
+            UpsertGLBatchCommand(integration=integration, dto=self._batch_dto())
+        ).object
+
+    def _persisted_entry(self):
+        batch = self._persisted_batch()
+        return GeneralLedgerCacheService.upsert_entry(
+            UpsertGLEntryCommand(batch=batch, dto=self._entry_dto(), sequence=1)
+        ).object
 
 
 class SecretProviderTests(TestCase):

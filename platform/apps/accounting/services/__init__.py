@@ -5,6 +5,7 @@ from .commands import (
     DimensionConflictResolutionResult,
     FailAccountingSyncRunCommand,
     GetOrCreateAccountingSyncStateCommand,
+    GLCacheUpsertResult,
     IgnoreDimensionConflictCommand,
     ProjectCodeSuggestion,
     ResolveDimensionConflictCommand,
@@ -13,10 +14,14 @@ from .commands import (
     SyncAccountingDimensionsCommand,
     SyncAccountingDimensionsResult,
     UpdateAccountingSyncProgressCommand,
+    UpsertGLAllocationCommand,
+    UpsertGLBatchCommand,
+    UpsertGLEntryCommand,
 )
 from .dimension_conflicts import AccountingDimensionConflictResolutionService
 from .dimension_values import AccountingDimensionValueService
 from .dimensions import AccountingDimensionSyncService
+from .general_ledger import GeneralLedgerCacheService
 from .project_codes import ProjectCodeAllocationService
 from .sync_state import AccountingSyncStateService
 
@@ -30,7 +35,9 @@ __all__ = [
     "CreateAccountingDimensionValueResult",
     "DimensionConflictResolutionResult",
     "FailAccountingSyncRunCommand",
+    "GeneralLedgerCacheService",
     "GetOrCreateAccountingSyncStateCommand",
+    "GLCacheUpsertResult",
     "IgnoreDimensionConflictCommand",
     "ProjectCodeAllocationService",
     "ProjectCodeSuggestion",
@@ -40,4 +47,7 @@ __all__ = [
     "SyncAccountingDimensionsCommand",
     "SyncAccountingDimensionsResult",
     "UpdateAccountingSyncProgressCommand",
+    "UpsertGLAllocationCommand",
+    "UpsertGLBatchCommand",
+    "UpsertGLEntryCommand",
 ]

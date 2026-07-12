@@ -3,6 +3,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from apps.core.models import Organization
+from apps.projects.models import Project
 
 
 class AccountingIntegration(models.Model):
@@ -230,3 +231,154 @@ class AccountingSyncRun(models.Model):
 
     def __str__(self) -> str:
         return f"{self.integration} {self.source_type} {self.status} {self.started_at}"
+
+
+class AccountingGLBatch(models.Model):
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name="accounting_gl_batches",
+    )
+    integration = models.ForeignKey(
+        AccountingIntegration,
+        on_delete=models.CASCADE,
+        related_name="gl_batches",
+    )
+    external_id = models.CharField(max_length=255)
+    batch_code = models.CharField(max_length=64, blank=True, default="")
+    number = models.CharField(max_length=64, blank=True, default="")
+    source_document_id = models.CharField(max_length=255, blank=True, default="")
+    document = models.CharField(max_length=255, blank=True, default="")
+    batch_date = models.DateField(blank=True, null=True)
+    currency_code = models.CharField(max_length=8, blank=True, default="")
+    currency_rate = models.DecimalField(max_digits=20, decimal_places=8, blank=True, null=True)
+    total_amount = models.DecimalField(max_digits=20, decimal_places=6, blank=True, null=True)
+    price_includes_vat = models.BooleanField(blank=True, null=True)
+    source_changed_at = models.DateTimeField(blank=True, null=True)
+    raw_data = models.JSONField(default=dict, blank=True)
+    source_created_at = models.DateTimeField(blank=True, null=True)
+    first_synced_at = models.DateTimeField(default=timezone.now)
+    last_synced_at = models.DateTimeField(default=timezone.now)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-batch_date", "batch_code", "number", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["integration", "external_id"], name="unique_gl_batch_external_id"),
+        ]
+        indexes = [
+            models.Index(fields=["organization", "batch_date"], name="idx_gl_batch_org_date"),
+            models.Index(fields=["integration", "source_changed_at"], name="idx_gl_batch_changed"),
+            models.Index(fields=["integration", "source_document_id"], name="idx_gl_batch_doc"),
+        ]
+
+    def __str__(self) -> str:
+        label = self.batch_code or self.number or "GL batch"
+        return f"{self.batch_date} {label} ({self.external_id})"
+
+
+class AccountingGLEntry(models.Model):
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name="accounting_gl_entries",
+    )
+    integration = models.ForeignKey(
+        AccountingIntegration,
+        on_delete=models.CASCADE,
+        related_name="gl_entries",
+    )
+    batch = models.ForeignKey(AccountingGLBatch, on_delete=models.CASCADE, related_name="entries")
+    external_id = models.CharField(max_length=255)
+    source_entry_id = models.CharField(max_length=255, blank=True, default="")
+    sequence = models.IntegerField(blank=True, null=True)
+    account_code = models.CharField(max_length=64, blank=True, default="")
+    account_name = models.CharField(max_length=255, blank=True, default="")
+    memo = models.TextField(blank=True, default="")
+    department_code = models.CharField(max_length=64, blank=True, default="")
+    debit_amount = models.DecimalField(max_digits=20, decimal_places=6, default=0)
+    debit_currency = models.CharField(max_length=8, blank=True, default="")
+    credit_amount = models.DecimalField(max_digits=20, decimal_places=6, default=0)
+    credit_currency = models.CharField(max_length=8, blank=True, default="")
+    type_id = models.CharField(max_length=64, blank=True, default="")
+    tax_id = models.CharField(max_length=64, blank=True, default="")
+    tax_percent = models.DecimalField(max_digits=10, decimal_places=4, blank=True, null=True)
+    raw_data = models.JSONField(default=dict, blank=True)
+    first_synced_at = models.DateTimeField(default=timezone.now)
+    last_synced_at = models.DateTimeField(default=timezone.now)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["batch_id", "sequence", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["integration", "batch", "external_id"], name="unique_gl_entry_external_id"),
+        ]
+        indexes = [
+            models.Index(fields=["organization", "account_code"], name="idx_gl_entry_org_account"),
+            models.Index(fields=["integration", "external_id"], name="idx_gl_entry_external"),
+        ]
+
+    @property
+    def net_amount(self):
+        return self.debit_amount - self.credit_amount
+
+    def __str__(self) -> str:
+        label = self.memo or f"debit {self.debit_amount} credit {self.credit_amount}"
+        return f"{self.account_code} {label} ({self.batch.external_id})"
+
+
+class AccountingGLAllocation(models.Model):
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name="accounting_gl_allocations",
+    )
+    integration = models.ForeignKey(
+        AccountingIntegration,
+        on_delete=models.CASCADE,
+        related_name="gl_allocations",
+    )
+    entry = models.ForeignKey(AccountingGLEntry, on_delete=models.CASCADE, related_name="allocations")
+    external_id = models.CharField(max_length=255)
+    source_type = models.CharField(max_length=64, blank=True, default="")
+    dimension_code = models.CharField(max_length=64, blank=True, default="")
+    dimension_name = models.CharField(max_length=255, blank=True, default="")
+    dimension_type = models.CharField(max_length=64, blank=True, default="")
+    multiplier = models.DecimalField(max_digits=20, decimal_places=8, blank=True, null=True)
+    amount = models.DecimalField(max_digits=20, decimal_places=6, default=0)
+    accounting_dimension = models.ForeignKey(
+        AccountingDimension,
+        on_delete=models.SET_NULL,
+        related_name="gl_allocations",
+        blank=True,
+        null=True,
+    )
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.SET_NULL,
+        related_name="gl_allocations",
+        blank=True,
+        null=True,
+    )
+    raw_data = models.JSONField(default=dict, blank=True)
+    first_synced_at = models.DateTimeField(default=timezone.now)
+    last_synced_at = models.DateTimeField(default=timezone.now)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["entry_id", "dimension_code", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["entry", "external_id"], name="unique_gl_allocation_external_id"),
+        ]
+        indexes = [
+            models.Index(fields=["organization", "dimension_code"], name="idx_gl_alloc_org_dim"),
+            models.Index(fields=["project"], name="idx_gl_alloc_project"),
+            models.Index(fields=["integration", "external_id"], name="idx_gl_alloc_external"),
+        ]
+
+    def __str__(self) -> str:
+        label = self.dimension_name or self.dimension_code or self.source_type
+        return f"{self.dimension_code} {label} {self.amount}"

@@ -142,3 +142,38 @@ class FailAccountingSyncRunCommand:
     partial: bool = False
     initial_import: bool = False
     metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class UpsertGLBatchCommand:
+    integration: object
+    dto: object
+    sync_run: object = None
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class UpsertGLEntryCommand:
+    batch: object
+    dto: object
+    sequence: int | None = None
+    sync_run: object = None
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class UpsertGLAllocationCommand:
+    entry: object
+    dto: object
+    sequence: int | None = None
+    sync_run: object = None
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class GLCacheUpsertResult:
+    object: object
+    created: bool
+    updated: bool
+    unchanged: bool
+    metadata: dict = field(default_factory=dict)
