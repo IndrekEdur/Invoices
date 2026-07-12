@@ -266,6 +266,21 @@ Business Module
 
 Storage is used through models and repositories/selectors. External systems are accessed through integration services, not directly from business logic.
 
+Large mailbox and attachment storage follows `EMAIL_STORAGE_ARCHITECTURE.md`.
+
+E-mail storage and sync rules:
+
+- Never load the whole mailbox into memory.
+- Never import the whole mailbox in one transaction.
+- Sync must be idempotent and resumable.
+- Remote deletion must not delete Workspace business history.
+- Attachment occurrence, binary object, and `Document` are separate identities.
+- Large binaries do not belong in relational database fields.
+- Connectors discover/fetch; services persist and decide.
+- Document conversion uses `DocumentStorageService`.
+- Every external or destructive action is auditable.
+- Historical import must be controllable and observable.
+
 Allowed:
 
 - Accounting calls policy services before approving or sending an invoice.

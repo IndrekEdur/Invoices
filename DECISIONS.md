@@ -357,3 +357,22 @@ Reason:
 - Secrets, integrations, external writes, and automation settings are high-risk and need explicit UI, safe defaults, masking, permission checks, and audit trails.
 - E-mail sync, Merit sync, project code allocation, and future AI settings must be understandable and testable before activation.
 - A Settings Workspace keeps operational configuration aligned with the platform's service-layer, audit, policy, and integration architecture.
+
+## ADR-024: Large Mailboxes Are Indexed Incrementally With Lazy Attachment Storage
+
+Date: 2026-07-12
+
+Decision:
+
+- Large mailboxes shall be imported incrementally as searchable message and attachment indexes.
+- Attachment binaries shall use lazy download and external storage instead of immediate full-mailbox binary import.
+- Remote deletion shall not automatically remove Workspace business history.
+- Attachment occurrence, stored binary object, and business `Document` are separate identities.
+- Historical imports must be resumable, observable, idempotent, and safe to retry.
+
+Reason:
+
+- A production mailbox may contain 50 GB or more of data, mostly attachments.
+- Downloading and processing every attachment immediately would create performance, storage, memory, and reliability risks.
+- The Workspace is operational memory, not an IMAP mirror; business history must survive mailbox reorganization, deletion, or account disconnection.
+- Separating message index, attachment manifest, binary storage, and business documents keeps storage scalable and preserves service boundaries.
