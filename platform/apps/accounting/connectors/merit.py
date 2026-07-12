@@ -231,8 +231,8 @@ class MeritAPIClient(AccountingConnector):
             "POST",
             self.GL_BATCHES_FULL_PATH,
             payload={
-                "PeriodStart": self._format_merit_date(start_date),
-                "PeriodEnd": self._format_merit_date(end_date),
+                "PeriodStart": self._format_merit_period_start(start_date),
+                "PeriodEnd": self._format_merit_period_end(end_date),
                 "WithLines": 1 if with_lines else 0,
                 "WithCostAlloc": 1 if with_cost_allocations else 0,
                 "DateType": MeritGLDateType.MERIT_VALUES[date_type],
@@ -514,6 +514,12 @@ class MeritAPIClient(AccountingConnector):
 
     def _format_merit_date(self, value):
         return value.isoformat()
+
+    def _format_merit_period_start(self, value):
+        return f"{self._format_merit_date(value)}T00:00:00"
+
+    def _format_merit_period_end(self, value):
+        return f"{self._format_merit_date(value)}T23:59:59"
 
     def _decimal_or_none(self, value):
         if value is None or value == "":
