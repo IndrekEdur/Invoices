@@ -30,6 +30,8 @@ Normal IMAP sync now uses incremental UID-based mailbox cursors. It resumes from
 
 `FINANCIAL_REPORTING_ARCHITECTURE.md` describes how Workspace will import Merit general-ledger transactions, invoices and payments into an auditable local cache for project financial reporting, reconciliation, alerts and controlled report distribution.
 
+`MANAGEMENT_COST_ALLOCATION_ARCHITECTURE.md` describes the internal management accounting layer for allocating indirect costs to projects without modifying Merit or synchronized GL cache data.
+
 `FINANCIAL_GL_VERIFICATION_GUIDE.md` describes the safe manual workflow for verifying real Merit GL synchronization, idempotency, local cache quality, diagnostic totals, and project allocation links.
 
 `MERIT_VERIFICATION_GUIDE.md` describes the safe manual workflow for verifying real Merit credentials, connection checks, dimension sync, local cache updates, and project dimension creation.

@@ -395,3 +395,22 @@ Reason:
 - Final project result and margin require booked GL data, not only invoice gross totals.
 - Missing invoices, unpaid invoices, source-document gaps, and unmatched bank payments require reconciliation across accounting, documents, e-mail, and bank evidence.
 - Financial reporting is high-risk; uncertain matches, external report delivery, and accounting-impacting decisions require evidence, policy, permissions, and audit.
+
+## ADR-026: Management Cost Allocation Is Separate From Merit GL Cache
+
+Date: 2026-07-13
+
+Decision:
+
+- Management cost allocation shall be a separate internal reporting layer on top of synchronized Merit GL cache and project financial aggregation.
+- Merit remains the accounting source of truth.
+- Synchronized GL batches, entries, and allocations must not be modified by management allocation workflows.
+- Approved management allocations are versioned, immutable, reversible through superseding versions, and auditable.
+- Project reports must distinguish direct accounting cost from allocated management cost.
+
+Reason:
+
+- Indirect costs such as office, administration, management, vehicles, IT, warehouse, insurance, and project manager time are needed for internal profitability reporting.
+- These allocations are management accounting decisions, not source accounting entries.
+- Keeping them separate preserves trust in Merit-sourced data while allowing Workspace to support internal project profitability, department profitability, future alerts, and management reports.
+- Versioning and audit make later corrections explainable without rewriting historical source data.
