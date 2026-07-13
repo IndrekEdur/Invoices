@@ -1,7 +1,11 @@
 from .commands import (
     AggregateProjectFinancialsCommand,
+    ApproveManagementAllocationVersionCommand,
     CreateAccountingDimensionValueCommand,
     CreateAccountingDimensionValueResult,
+    CreateManagementAllocationRuleCommand,
+    CreateManagementAllocationVersionCommand,
+    CreateManagementCostPoolCommand,
     CompleteAccountingSyncRunCommand,
     DimensionConflictResolutionResult,
     FailAccountingSyncRunCommand,
@@ -35,6 +39,7 @@ from .dimensions import AccountingDimensionSyncService
 from .gl_sync import GeneralLedgerSyncService
 from .gl_verification import GeneralLedgerVerificationService
 from .general_ledger import GeneralLedgerCacheService
+from .management_allocations import ManagementAllocationVersionService, ManagementCostPoolService
 from .project_codes import ProjectCodeAllocationService
 from .sync_state import AccountingSyncStateService
 
@@ -46,9 +51,13 @@ __all__ = [
     "AccountingSyncStateService",
     "AccountClassificationService",
     "AggregateProjectFinancialsCommand",
+    "ApproveManagementAllocationVersionCommand",
     "CompleteAccountingSyncRunCommand",
     "CreateAccountingDimensionValueCommand",
     "CreateAccountingDimensionValueResult",
+    "CreateManagementAllocationRuleCommand",
+    "CreateManagementAllocationVersionCommand",
+    "CreateManagementCostPoolCommand",
     "DimensionConflictResolutionResult",
     "FailAccountingSyncRunCommand",
     "GeneralLedgerCacheService",
@@ -58,6 +67,8 @@ __all__ = [
     "GetOrCreateAccountingSyncStateCommand",
     "GLCacheUpsertResult",
     "IgnoreDimensionConflictCommand",
+    "ManagementAllocationVersionService",
+    "ManagementCostPoolService",
     "ProjectCodeAllocationService",
     "ProjectCodeSuggestion",
     "ProjectFinancialAggregationResult",

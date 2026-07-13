@@ -9,6 +9,12 @@ from .models import (
     AccountingIntegration,
     AccountingSyncRun,
     AccountingSyncState,
+    ManagementAllocationEntry,
+    ManagementAllocationPeriod,
+    ManagementAllocationRule,
+    ManagementAllocationVersion,
+    ManagementCostPool,
+    ManagementCostPoolAccount,
 )
 
 
@@ -134,3 +140,49 @@ class AccountingGLAllocationAdmin(admin.ModelAdmin):
     list_filter = ("integration", "source_type", "dimension_type")
     search_fields = ("external_id", "dimension_code", "dimension_name", "entry__external_id", "project__code")
     readonly_fields = ("first_synced_at", "last_synced_at", "created_at", "updated_at")
+
+
+@admin.register(ManagementCostPool)
+class ManagementCostPoolAdmin(admin.ModelAdmin):
+    list_display = ("name", "organization", "default_strategy", "is_active", "display_order", "updated_at")
+    list_filter = ("default_strategy", "is_active")
+    search_fields = ("name", "description", "organization__name")
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(ManagementCostPoolAccount)
+class ManagementCostPoolAccountAdmin(admin.ModelAdmin):
+    list_display = ("account_code", "pool", "is_active", "created_at")
+    list_filter = ("is_active", "pool__organization")
+    search_fields = ("account_code", "pool__name", "pool__organization__name")
+    readonly_fields = ("created_at",)
+
+
+@admin.register(ManagementAllocationPeriod)
+class ManagementAllocationPeriodAdmin(admin.ModelAdmin):
+    list_display = ("period_label", "organization", "status")
+    list_filter = ("status", "year", "month")
+    search_fields = ("organization__name",)
+
+
+@admin.register(ManagementAllocationVersion)
+class ManagementAllocationVersionAdmin(admin.ModelAdmin):
+    list_display = ("period", "pool", "version_number", "status", "created_by", "approved_by", "approved_at")
+    list_filter = ("status", "pool", "period__year", "period__month")
+    search_fields = ("pool__name", "period__organization__name", "reason")
+    readonly_fields = ("created_at",)
+
+
+@admin.register(ManagementAllocationRule)
+class ManagementAllocationRuleAdmin(admin.ModelAdmin):
+    list_display = ("pool", "strategy", "is_active", "updated_at")
+    list_filter = ("strategy", "is_active")
+    search_fields = ("pool__name", "pool__organization__name")
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(ManagementAllocationEntry)
+class ManagementAllocationEntryAdmin(admin.ModelAdmin):
+    list_display = ("version", "project", "percentage", "amount", "manual_override")
+    list_filter = ("manual_override", "version__status", "version__pool")
+    search_fields = ("project__code", "project__name", "version__pool__name", "notes")

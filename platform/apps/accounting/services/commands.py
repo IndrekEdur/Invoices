@@ -327,3 +327,43 @@ class AggregateProjectFinancialsCommand:
     currency: str | None = None
     include_overhead: bool = True
     metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class CreateManagementCostPoolCommand:
+    organization: object
+    name: str
+    description: str = ""
+    default_strategy: str = "revenue"
+    display_order: int = 0
+    is_active: bool = True
+    actor: object = None
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class CreateManagementAllocationRuleCommand:
+    pool: object
+    strategy: str
+    is_active: bool = True
+    configuration: dict | None = None
+    actor: object = None
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class CreateManagementAllocationVersionCommand:
+    period: object
+    pool: object
+    version_number: int | None = None
+    created_by: object = None
+    reason: str = ""
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class ApproveManagementAllocationVersionCommand:
+    version: object
+    actor: object = None
+    reason: str = ""
+    metadata: dict | None = None

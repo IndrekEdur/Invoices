@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
@@ -454,3 +455,242 @@ class AccountingGLAllocation(models.Model):
     def __str__(self) -> str:
         label = self.dimension_name or self.dimension_code or self.source_type
         return f"{self.dimension_code} {label} {self.amount}"
+
+
+class AllocationStrategy(models.TextChoices):
+    REVENUE = "revenue", "Revenue"
+    EQUAL = "equal", "Equal"
+    MANUAL_PERCENT = "manual_percent", "Manual percent"
+    MANUAL_AMOUNT = "manual_amount", "Manual amount"
+    PROJECT_MANAGER = "project_manager", "Project manager"
+
+
+class PeriodStatus(models.TextChoices):
+    DRAFT = "draft", "Draft"
+    APPROVED = "approved", "Approved"
+    ARCHIVED = "archived", "Archived"
+
+
+class VersionStatus(models.TextChoices):
+    DRAFT = "draft", "Draft"
+    APPROVED = "approved", "Approved"
+    SUPERSEDED = "superseded", "Superseded"
+
+
+class ManagementCostPool(models.Model):
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name="management_cost_pools",
+    )
+    name = models.CharField(max_length=255)
+    description = models.TextField(blank=True, default="")
+    is_active = models.BooleanField(default=True)
+    default_strategy = models.CharField(
+        max_length=32,
+        choices=AllocationStrategy.choices,
+        default=AllocationStrategy.REVENUE,
+    )
+    display_order = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["organization__name", "display_order", "name", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["organization", "name"], name="unique_management_cost_pool_name"),
+        ]
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class ManagementCostPoolAccount(models.Model):
+    pool = models.ForeignKey(
+        ManagementCostPool,
+        on_delete=models.CASCADE,
+        related_name="accounts",
+    )
+    account_code = models.CharField(max_length=64)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["pool__organization__name", "pool__name", "account_code", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["pool", "account_code"], name="unique_management_pool_account_code"),
+        ]
+
+    def clean(self):
+        super().clean()
+        if self.is_active and self.pool_id:
+            conflict = ManagementCostPoolAccount.objects.filter(
+                is_active=True,
+                account_code=self.account_code,
+                pool__organization=self.pool.organization,
+            ).exclude(pk=self.pk)
+            if conflict.exists():
+                raise ValidationError("One GL account may belong to only one active management cost pool.")
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        return f"{self.pool}: {self.account_code}"
+
+
+class ManagementAllocationPeriod(models.Model):
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name="management_allocation_periods",
+    )
+    year = models.PositiveSmallIntegerField()
+    month = models.PositiveSmallIntegerField()
+    status = models.CharField(max_length=32, choices=PeriodStatus.choices, default=PeriodStatus.DRAFT)
+
+    class Meta:
+        ordering = ["organization__name", "-year", "-month", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["organization", "year", "month"], name="unique_management_period"),
+        ]
+
+    @property
+    def period_label(self) -> str:
+        return f"{self.year:04d}-{self.month:02d}"
+
+    def clean(self):
+        super().clean()
+        if not 1 <= self.month <= 12:
+            raise ValidationError("Management allocation month must be between 1 and 12.")
+        if self.year < 2000:
+            raise ValidationError("Management allocation year must be 2000 or later.")
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        return self.period_label
+
+
+class ManagementAllocationVersion(models.Model):
+    period = models.ForeignKey(
+        ManagementAllocationPeriod,
+        on_delete=models.CASCADE,
+        related_name="versions",
+    )
+    pool = models.ForeignKey(
+        ManagementCostPool,
+        on_delete=models.CASCADE,
+        related_name="allocation_versions",
+    )
+    version_number = models.PositiveIntegerField()
+    status = models.CharField(max_length=32, choices=VersionStatus.choices, default=VersionStatus.DRAFT)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="created_management_allocation_versions",
+        blank=True,
+        null=True,
+    )
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="approved_management_allocation_versions",
+        blank=True,
+        null=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    approved_at = models.DateTimeField(blank=True, null=True)
+    reason = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ["period", "pool__display_order", "pool__name", "-version_number", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["period", "pool", "version_number"],
+                name="unique_management_version_number",
+            ),
+            models.UniqueConstraint(
+                fields=["period", "pool"],
+                condition=Q(status=VersionStatus.APPROVED),
+                name="unique_approved_management_version",
+            ),
+        ]
+
+    def clean(self):
+        super().clean()
+        if self.version_number < 1:
+            raise ValidationError("Management allocation version number must be positive.")
+        if self.pool_id and self.period_id and self.pool.organization_id != self.period.organization_id:
+            raise ValidationError("Management allocation pool and period must belong to the same organization.")
+        if self.status == VersionStatus.APPROVED and self.pool_id and not self.pool.is_active:
+            raise ValidationError("Inactive management cost pools cannot be approved.")
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        return f"{self.period.period_label} {self.pool.name} v{self.version_number} ({self.status})"
+
+
+class ManagementAllocationRule(models.Model):
+    pool = models.ForeignKey(
+        ManagementCostPool,
+        on_delete=models.CASCADE,
+        related_name="allocation_rules",
+    )
+    strategy = models.CharField(max_length=32, choices=AllocationStrategy.choices)
+    is_active = models.BooleanField(default=True)
+    configuration = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["pool__organization__name", "pool__display_order", "pool__name", "strategy", "id"]
+
+    def __str__(self) -> str:
+        return f"{self.pool.name} {self.strategy}"
+
+
+class ManagementAllocationEntry(models.Model):
+    version = models.ForeignKey(
+        ManagementAllocationVersion,
+        on_delete=models.CASCADE,
+        related_name="entries",
+    )
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="management_allocation_entries",
+    )
+    percentage = models.DecimalField(max_digits=7, decimal_places=4, default=0)
+    amount = models.DecimalField(max_digits=20, decimal_places=6, default=0)
+    manual_override = models.BooleanField(default=False)
+    notes = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ["version", "project__code", "id"]
+
+    def clean(self):
+        super().clean()
+        if self.percentage < Decimal("0") or self.percentage > Decimal("100"):
+            raise ValidationError("Management allocation percentage must be between 0 and 100.")
+        if self.version_id and self.project_id:
+            version_org_id = self.version.period.organization_id
+            if self.project.organization_id != version_org_id:
+                raise ValidationError("Management allocation entry project must belong to the same organization.")
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        return f"{self.version} -> {self.project.code}: {self.amount}"

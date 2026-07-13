@@ -4,8 +4,10 @@ from decimal import Decimal
 from io import BytesIO
 from io import StringIO
 from copy import deepcopy
+from django.contrib import admin
 from django.core.management import call_command
 from django.core.management.base import CommandError
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 from django.test import TestCase
 from django.utils import timezone
@@ -39,6 +41,15 @@ from apps.accounting.models import (
     AccountingIntegration,
     AccountingSyncRun,
     AccountingSyncState,
+    AllocationStrategy,
+    ManagementAllocationEntry,
+    ManagementAllocationPeriod,
+    ManagementAllocationRule,
+    ManagementAllocationVersion,
+    ManagementCostPool,
+    ManagementCostPoolAccount,
+    PeriodStatus,
+    VersionStatus,
 )
 from apps.accounting.secrets import SecretMissingError, SecretProvider
 from apps.accounting.services import (
@@ -49,7 +60,11 @@ from apps.accounting.services import (
     AccountingDimensionValueService,
     AccountingDimensionSyncService,
     AccountingSyncStateService,
+    ApproveManagementAllocationVersionCommand,
     CreateAccountingDimensionValueCommand,
+    CreateManagementAllocationRuleCommand,
+    CreateManagementAllocationVersionCommand,
+    CreateManagementCostPoolCommand,
     CompleteAccountingSyncRunCommand,
     FailAccountingSyncRunCommand,
     GeneralLedgerVerificationResult,
@@ -63,6 +78,8 @@ from apps.accounting.services import (
     ProjectFinancialAggregationService,
     ResolveDimensionConflictCommand,
     SaveAccountingAccountClassificationCommand,
+    ManagementAllocationVersionService,
+    ManagementCostPoolService,
     SuggestNextProjectCodeCommand,
     StartAccountingSyncRunCommand,
     SyncAccountingDimensionsCommand,
@@ -4122,3 +4139,318 @@ class ProjectCodeAllocationServiceTests(TestCase):
 
         self.assertEqual(Project.objects.count(), project_count)
         self.assertEqual(AccountingDimension.objects.count(), dimension_count)
+
+
+class ManagementCostAllocationModelTests(TestCase):
+    def _pool(self, organization=None, name="Office"):
+        organization = organization or create_organization()
+        return ManagementCostPool.objects.create(
+            organization=organization,
+            name=name,
+            default_strategy=AllocationStrategy.REVENUE,
+        )
+
+    def _period(self, organization=None, year=2026, month=6):
+        organization = organization or create_organization()
+        return ManagementAllocationPeriod.objects.create(organization=organization, year=year, month=month)
+
+    def _project(self, organization=None, code="26124"):
+        organization = organization or create_organization()
+        return Project.objects.create(organization=organization, code=code, name=f"Project {code}")
+
+    def test_cost_pool_defaults_and_str(self):
+        organization = create_organization()
+
+        pool = ManagementCostPool.objects.create(organization=organization, name="Accounting")
+
+        self.assertTrue(pool.is_active)
+        self.assertEqual(pool.default_strategy, AllocationStrategy.REVENUE)
+        self.assertEqual(str(pool), "Accounting")
+
+    def test_pool_name_unique_per_organization(self):
+        organization = create_organization()
+        self._pool(organization, "Management")
+
+        with self.assertRaises(ValidationError):
+            self._pool(organization, "Management")
+
+    def test_same_pool_name_allowed_for_different_organizations(self):
+        self._pool(create_organization("Org 1"), "Office")
+        self._pool(create_organization("Org 2"), "Office")
+
+        self.assertEqual(ManagementCostPool.objects.filter(name="Office").count(), 2)
+
+    def test_pool_account_persistence_and_unique_inside_pool(self):
+        pool = self._pool()
+
+        account = ManagementCostPoolAccount.objects.create(pool=pool, account_code="5000")
+
+        self.assertTrue(account.is_active)
+        self.assertIn("5000", str(account))
+        with self.assertRaises(ValidationError):
+            ManagementCostPoolAccount.objects.create(pool=pool, account_code="5000")
+
+    def test_one_active_account_code_per_organization(self):
+        organization = create_organization()
+        office = self._pool(organization, "Office")
+        vehicles = self._pool(organization, "Vehicles")
+        ManagementCostPoolAccount.objects.create(pool=office, account_code="5000")
+
+        with self.assertRaises(ValidationError):
+            ManagementCostPoolAccount.objects.create(pool=vehicles, account_code="5000")
+
+    def test_inactive_duplicate_account_code_allowed(self):
+        organization = create_organization()
+        office = self._pool(organization, "Office")
+        vehicles = self._pool(organization, "Vehicles")
+        ManagementCostPoolAccount.objects.create(pool=office, account_code="5000")
+
+        duplicate = ManagementCostPoolAccount.objects.create(pool=vehicles, account_code="5000", is_active=False)
+
+        self.assertFalse(duplicate.is_active)
+
+    def test_period_defaults_label_and_uniqueness(self):
+        organization = create_organization()
+        period = self._period(organization, year=2026, month=6)
+
+        self.assertEqual(period.status, PeriodStatus.DRAFT)
+        self.assertEqual(period.period_label, "2026-06")
+        self.assertEqual(str(period), "2026-06")
+        with self.assertRaises(ValidationError):
+            self._period(organization, year=2026, month=6)
+
+    def test_invalid_month_and_year_rejected(self):
+        organization = create_organization()
+
+        with self.assertRaises(ValidationError):
+            self._period(organization, year=2026, month=13)
+        with self.assertRaises(ValidationError):
+            self._period(organization, year=1999, month=6)
+
+    def test_rule_persistence_and_configuration(self):
+        pool = self._pool()
+
+        rule = ManagementAllocationRule.objects.create(
+            pool=pool,
+            strategy=AllocationStrategy.PROJECT_MANAGER,
+            configuration={"project_manager_role": "project_manager"},
+        )
+
+        self.assertTrue(rule.is_active)
+        self.assertEqual(rule.configuration["project_manager_role"], "project_manager")
+        self.assertIn(AllocationStrategy.PROJECT_MANAGER, str(rule))
+
+    def test_version_defaults_and_str(self):
+        organization = create_organization()
+        pool = self._pool(organization)
+        period = self._period(organization)
+
+        version = ManagementAllocationVersion.objects.create(period=period, pool=pool, version_number=1)
+
+        self.assertEqual(version.status, VersionStatus.DRAFT)
+        self.assertIn("v1", str(version))
+
+    def test_negative_version_number_rejected(self):
+        organization = create_organization()
+        pool = self._pool(organization)
+        period = self._period(organization)
+
+        with self.assertRaises(ValidationError):
+            ManagementAllocationVersion.objects.create(period=period, pool=pool, version_number=-1)
+
+    def test_pool_and_period_must_share_organization(self):
+        pool = self._pool(create_organization("Pool Org"))
+        period = self._period(create_organization("Period Org"))
+
+        with self.assertRaises(ValidationError):
+            ManagementAllocationVersion.objects.create(period=period, pool=pool, version_number=1)
+
+    def test_entry_persistence(self):
+        organization = create_organization()
+        pool = self._pool(organization)
+        period = self._period(organization)
+        project = self._project(organization)
+        version = ManagementAllocationVersion.objects.create(period=period, pool=pool, version_number=1)
+
+        entry = ManagementAllocationEntry.objects.create(
+            version=version,
+            project=project,
+            percentage=Decimal("25.0000"),
+            amount=Decimal("123.450000"),
+            manual_override=True,
+            notes="Reviewed",
+        )
+
+        self.assertEqual(entry.percentage, Decimal("25.0000"))
+        self.assertEqual(entry.amount, Decimal("123.450000"))
+        self.assertTrue(entry.manual_override)
+        self.assertIn(project.code, str(entry))
+
+    def test_invalid_percentage_rejected(self):
+        organization = create_organization()
+        pool = self._pool(organization)
+        period = self._period(organization)
+        project = self._project(organization)
+        version = ManagementAllocationVersion.objects.create(period=period, pool=pool, version_number=1)
+
+        with self.assertRaises(ValidationError):
+            ManagementAllocationEntry.objects.create(version=version, project=project, percentage=Decimal("-1"))
+        with self.assertRaises(ValidationError):
+            ManagementAllocationEntry.objects.create(version=version, project=project, percentage=Decimal("101"))
+
+    def test_entry_project_must_share_organization(self):
+        organization = create_organization()
+        pool = self._pool(organization)
+        period = self._period(organization)
+        version = ManagementAllocationVersion.objects.create(period=period, pool=pool, version_number=1)
+        project = self._project(create_organization("Other Org"), code="99999")
+
+        with self.assertRaises(ValidationError):
+            ManagementAllocationEntry.objects.create(version=version, project=project)
+
+    def test_admin_registration(self):
+        for model in (
+            ManagementCostPool,
+            ManagementCostPoolAccount,
+            ManagementAllocationPeriod,
+            ManagementAllocationVersion,
+            ManagementAllocationRule,
+            ManagementAllocationEntry,
+        ):
+            self.assertIn(model, admin.site._registry)
+
+    def test_enums_expose_expected_values(self):
+        self.assertEqual(AllocationStrategy.REVENUE, "revenue")
+        self.assertEqual(AllocationStrategy.EQUAL, "equal")
+        self.assertEqual(AllocationStrategy.MANUAL_PERCENT, "manual_percent")
+        self.assertEqual(AllocationStrategy.MANUAL_AMOUNT, "manual_amount")
+        self.assertEqual(AllocationStrategy.PROJECT_MANAGER, "project_manager")
+        self.assertEqual(PeriodStatus.APPROVED, "approved")
+        self.assertEqual(VersionStatus.SUPERSEDED, "superseded")
+
+
+class ManagementCostAllocationServiceTests(TestCase):
+    def _setup_version(self):
+        organization = create_organization()
+        pool = ManagementCostPool.objects.create(organization=organization, name="Office")
+        period = ManagementAllocationPeriod.objects.create(organization=organization, year=2026, month=6)
+        version = ManagementAllocationVersion.objects.create(period=period, pool=pool, version_number=1)
+        return organization, pool, period, version
+
+    def test_create_pool_creates_audit_event(self):
+        organization = create_organization()
+
+        pool = ManagementCostPoolService.create_pool(
+            CreateManagementCostPoolCommand(
+                organization=organization,
+                name="Administration",
+                description="Back office",
+                display_order=10,
+            )
+        )
+
+        self.assertEqual(pool.name, "Administration")
+        self.assertEqual(
+            AuditEvent.objects.filter(event_type="management_cost_pool_created", object_id=str(pool.id)).count(),
+            1,
+        )
+
+    def test_create_rule_creates_audit_and_does_not_mutate_configuration(self):
+        pool = ManagementCostPool.objects.create(organization=create_organization(), name="Management")
+        configuration = {"basis": {"type": "revenue"}}
+        original_configuration = {"basis": {"type": "revenue"}}
+
+        rule = ManagementCostPoolService.create_rule(
+            CreateManagementAllocationRuleCommand(
+                pool=pool,
+                strategy=AllocationStrategy.REVENUE,
+                configuration=configuration,
+                metadata={"source": "test"},
+            )
+        )
+
+        self.assertEqual(rule.configuration, original_configuration)
+        self.assertEqual(configuration, original_configuration)
+        self.assertEqual(AuditEvent.objects.filter(event_type="management_allocation_rule_created").count(), 1)
+
+    def test_create_version_auto_increments_version_number(self):
+        organization, pool, period, first = self._setup_version()
+
+        second = ManagementAllocationVersionService.create_version(
+            CreateManagementAllocationVersionCommand(period=period, pool=pool)
+        )
+
+        self.assertEqual(first.version_number, 1)
+        self.assertEqual(second.version_number, 2)
+        self.assertEqual(second.status, VersionStatus.DRAFT)
+        self.assertEqual(AuditEvent.objects.filter(event_type="management_allocation_version_created").count(), 1)
+
+    def test_approve_version_sets_status_and_audit(self):
+        organization, pool, period, version = self._setup_version()
+
+        approved = ManagementAllocationVersionService.approve(
+            ApproveManagementAllocationVersionCommand(version=version, reason="Monthly review")
+        )
+
+        self.assertEqual(approved.status, VersionStatus.APPROVED)
+        self.assertIsNotNone(approved.approved_at)
+        self.assertEqual(approved.reason, "Monthly review")
+        self.assertEqual(AuditEvent.objects.filter(event_type="management_allocation_version_approved").count(), 1)
+
+    def test_approving_new_version_supersedes_previous_approved_version(self):
+        organization, pool, period, first = self._setup_version()
+        ManagementAllocationVersionService.approve(ApproveManagementAllocationVersionCommand(version=first))
+        second = ManagementAllocationVersionService.create_version(
+            CreateManagementAllocationVersionCommand(period=period, pool=pool)
+        )
+
+        approved = ManagementAllocationVersionService.approve(ApproveManagementAllocationVersionCommand(version=second))
+        first.refresh_from_db()
+
+        self.assertEqual(approved.status, VersionStatus.APPROVED)
+        self.assertEqual(first.status, VersionStatus.SUPERSEDED)
+        self.assertEqual(
+            ManagementAllocationVersion.objects.filter(period=period, pool=pool, status=VersionStatus.APPROVED).count(),
+            1,
+        )
+        self.assertEqual(AuditEvent.objects.filter(event_type="management_allocation_version_superseded").count(), 1)
+
+    def test_inactive_pool_approval_rejected(self):
+        organization, pool, period, version = self._setup_version()
+        pool.is_active = False
+        pool.save()
+
+        with self.assertRaisesMessage(ValueError, "Inactive management cost pools cannot be approved"):
+            ManagementAllocationVersionService.approve(ApproveManagementAllocationVersionCommand(version=version))
+
+    def test_metadata_not_mutated(self):
+        organization, pool, period, version = self._setup_version()
+        metadata = {"source": {"screen": "approval"}}
+        original_metadata = {"source": {"screen": "approval"}}
+
+        ManagementAllocationVersionService.approve(
+            ApproveManagementAllocationVersionCommand(version=version, metadata=metadata)
+        )
+
+        self.assertEqual(metadata, original_metadata)
+
+    def test_organization_isolation(self):
+        first_org = create_organization("First Org")
+        second_org = create_organization("Second Org")
+        ManagementCostPool.objects.create(organization=first_org, name="Office")
+        ManagementCostPool.objects.create(organization=second_org, name="Office")
+
+        self.assertEqual(ManagementCostPool.objects.filter(organization=first_org).count(), 1)
+        self.assertEqual(ManagementCostPool.objects.filter(organization=second_org).count(), 1)
+
+    def test_rollback_if_audit_fails(self):
+        organization = create_organization()
+
+        with patch("apps.accounting.services.management_allocations.AuditService.record") as audit_mock:
+            audit_mock.side_effect = RuntimeError("audit failed")
+            with self.assertRaises(RuntimeError):
+                ManagementCostPoolService.create_pool(
+                    CreateManagementCostPoolCommand(organization=organization, name="Rollback Pool")
+                )
+
+        self.assertFalse(ManagementCostPool.objects.filter(name="Rollback Pool").exists())

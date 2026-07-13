@@ -12,7 +12,7 @@ Current engineering phase: Engineering Standards.
 
 Current implementation phase: Platform Core.
 
-Current implementation: Monthly GL Sync UI.
+Current implementation: Cost Pool and Allocation Rule Models.
 
 Planned financial follow-ups: multi-month historical GL backfill UI, background financial sync execution, scheduled GL synchronization, sync progress UI, FIN-008 Financial Alert Rules Engine, financial report drafts, scheduled report distribution, and invoice/payment reconciliation.
 

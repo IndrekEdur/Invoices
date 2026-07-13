@@ -60,6 +60,8 @@ The accounting app includes a GL transaction synchronization service and `sync_g
 
 The accounting app includes exact-code account classification configuration and a read-only project financial aggregation service. Project totals are calculated from local GL allocation rows, unclassified amounts stay visible and excluded from trusted result totals, and no financial UI or alert rules exist yet.
 
+The accounting app includes Management Cost Pool and Allocation Rule models for the future management accounting layer. Cost pools, GL account mappings, monthly periods, versioned allocation entries and rule configuration are stored separately from synchronized Merit GL cache data.
+
 GL Account Classification Settings at `/workspace/settings/account-classifications/` lets administrators map imported GL account codes into reporting categories without Django admin or shell commands. Mappings are exact-code, integration-scoped, audited, and affect project financial aggregation immediately without GL re-sync.
 
 Project Financial Overview UI at `/workspace/projects/<id>/financials/` shows monthly and period-based revenue, cost, result, margin, data-quality warnings, unclassified account impact, sync status, and read-only allocation drill-downs from local synchronized GL allocations. Invoice/payment reporting, alerts, snapshots, and report distribution are not implemented yet.
