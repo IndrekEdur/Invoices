@@ -320,6 +320,63 @@ class ProjectFinancialAggregationResult:
 
 
 @dataclass(frozen=True)
+class ManagementAllocationBreakdownItem:
+    pool: object
+    version: object
+    period: object
+    amount: object
+    percentage_of_total: object
+    source_version: str
+    approved_at: object
+    metadata: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ManagementFinancialMonth:
+    year: int
+    month: int
+    period_start: object
+    period_end: object
+    direct_revenue: object
+    direct_cost: object
+    allocated_management_cost: object
+    management_total_cost: object
+    accounting_result: object
+    management_result: object
+    accounting_margin: object
+    management_margin: object
+    warnings: list[str]
+    allocation_breakdown: list
+    metadata: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ManagementFinancialResult:
+    project: object
+    period_start: object
+    period_end: object
+    currency: str
+    months: list
+    direct_revenue: object
+    direct_cost: object
+    allocated_management_cost: object
+    management_total_cost: object
+    accounting_result: object
+    management_result: object
+    accounting_margin: object
+    management_margin: object
+    allocation_breakdown: list
+    warnings: list[str]
+    metadata: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class BuildManagementFinancialsCommand:
+    accounting_result: object
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
 class AggregateProjectFinancialsCommand:
     project: object
     period_start: object

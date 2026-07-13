@@ -9,8 +9,11 @@
             <a href="?{{ previous_month_query }}" class="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Previous month</a>
             <a href="?{{ current_month_query }}" class="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Current month</a>
             <a href="?{{ next_month_query }}" class="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Next month</a>
+            <a href="?{{ query_without_page }}&view=accounting" class="rounded-xl px-3 py-2 text-sm font-semibold {% if view_mode == 'accounting' %}bg-slate-950 text-white{% else %}border border-slate-300 bg-white text-slate-700 hover:bg-slate-50{% endif %}">Accounting</a>
+            <a href="?{{ query_without_page }}&view=management" class="rounded-xl px-3 py-2 text-sm font-semibold {% if view_mode == 'management' %}bg-slate-950 text-white{% else %}border border-slate-300 bg-white text-slate-700 hover:bg-slate-50{% endif %}">Management</a>
         </div>
         <form method="get" class="grid gap-4 xl:grid-cols-8">
+            <input type="hidden" name="view" value="{{ view_mode }}">
             <div>
                 <label class="text-xs font-semibold uppercase tracking-wide text-slate-500">Month</label>
                 <input type="month" name="month" value="{{ filters.month }}" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm">

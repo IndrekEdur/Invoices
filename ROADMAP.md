@@ -12,9 +12,9 @@ Current engineering phase: Engineering Standards.
 
 Current implementation phase: Platform Core.
 
-Current implementation: Allocation Review and Approval UI.
+Current implementation: Project Financial Management Integration.
 
-Planned financial follow-ups: multi-month historical GL backfill UI, background financial sync execution, scheduled GL synchronization, sync progress UI, COST-ALLOC-004 Project Financial Integration, COST-ALLOC-005 Allocation Revision/Audit Enhancements, management allocation reporting, automated monthly proposal jobs, FIN-008 Financial Alert Rules Engine, financial report drafts, scheduled report distribution, and invoice/payment reconciliation.
+Planned financial follow-ups: multi-month historical GL backfill UI, background financial sync execution, scheduled GL synchronization, sync progress UI, COST-ALLOC-005 Allocation Revision/Audit Enhancements, management allocation reporting, automated monthly proposal jobs, FIN-008 Financial Alert Rules Engine, financial report drafts, scheduled report distribution, and invoice/payment reconciliation.
 
 Planned follow-up: MERIT-014 should define explicit Merit dimension close/reopen behavior after Workspace project completion or archival. Current status changes are local, audited Workspace actions only.
 

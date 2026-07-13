@@ -1,5 +1,6 @@
 from datetime import date, timedelta
 from decimal import Decimal, ROUND_CEILING
+from urllib.parse import urlencode
 
 from django.core.paginator import Paginator
 from django.utils import timezone
@@ -14,6 +15,8 @@ from apps.accounting.models import (
 from apps.accounting.services import (
     AccountClassificationService,
     AggregateProjectFinancialsCommand,
+    BuildManagementFinancialsCommand,
+    ProjectManagementFinancialService,
     ProjectFinancialAggregationService,
 )
 from apps.projects.models import Project
@@ -49,6 +52,7 @@ class ProjectFinancialContextBuilder:
         period = cls._period(project, params)
         currency = (params.get("currency") or "").strip().upper() or None
         include_overhead = params.get("include_overhead", "1") != "0"
+        financial_view_mode = "accounting" if params.get("view") == "accounting" else "management"
         errors = list(period["errors"])
 
         result = ProjectFinancialAggregationService().aggregate(
@@ -61,25 +65,39 @@ class ProjectFinancialContextBuilder:
                 metadata={"source": "workspace_project_financials"},
             )
         )
+        management_result = ProjectManagementFinancialService.build(
+            BuildManagementFinancialsCommand(
+                accounting_result=result,
+                metadata={"source": "workspace_project_financials"},
+            )
+        )
 
         return {
             "project": project,
             "financial_result": result,
+            "management_financial_result": management_result,
+            "financial_view_mode": financial_view_mode,
+            "accounting_view_query": cls._view_query(params, "accounting"),
+            "management_view_query": cls._view_query(params, "management"),
             "period": period,
             "period_presets": cls._period_presets(),
             "currency_filter": currency or "",
             "include_overhead": include_overhead,
             "form_errors": errors,
-            "summary_cards": cls._summary_cards(result),
+            "summary_cards": cls._summary_cards(result, management_result, financial_view_mode),
+            "management_cost_breakdown": cls._management_breakdown_rows(management_result),
+            "allocated_management_cost_display": cls._money(management_result.allocated_management_cost),
             "cost_breakdown": cls._category_rows(result, OPERATIONAL_COST_CATEGORIES),
             "other_breakdown": cls._category_rows(result, OTHER_CATEGORIES),
-            "months_newest_first": cls._month_rows(result),
+            "months_newest_first": cls._month_rows(result, management_result, financial_view_mode),
             "trend_rows": cls._trend_rows(result),
-            "monthly_chart": cls._monthly_chart(result),
-            "warnings": cls._warnings(result, include_overhead, currency),
+            "monthly_chart": cls._monthly_chart(result, management_result, financial_view_mode),
+            "warnings": cls._warnings(result, management_result, include_overhead, currency),
             "unclassified_accounts": cls._unclassified_accounts(project, period["start"], period["end"], currency),
             "sync_context": cls._sync_context(project),
-            "result_status": cls._result_status(result.result),
+            "result_status": cls._result_status(
+                management_result.management_result if financial_view_mode == "management" else result.result
+            ),
         }
 
     @classmethod
@@ -196,14 +214,25 @@ class ProjectFinancialContextBuilder:
         ]
 
     @staticmethod
-    def _summary_cards(result):
+    def _summary_cards(result, management_result, financial_view_mode):
+        if financial_view_mode == "accounting":
+            return [
+                {"label": "Revenue", "display_value": ProjectFinancialContextBuilder._money(result.revenue), "status": "info"},
+                {"label": "Direct Cost", "display_value": ProjectFinancialContextBuilder._money(result.total_cost), "status": "neutral"},
+                {"label": "Accounting Result", "display_value": ProjectFinancialContextBuilder._money(result.result), "status": ProjectFinancialContextBuilder._result_status(result.result)},
+                {"label": "Accounting Margin", "display_value": ProjectFinancialContextBuilder._percent(result.margin), "status": "info"},
+                {"label": "Unclassified", "display_value": ProjectFinancialContextBuilder._money(result.unclassified_amount), "status": "warning" if result.unclassified_amount else "success"},
+                {"label": "GL Allocations", "display_value": str(result.allocation_count), "status": "neutral"},
+            ]
         return [
-            {"label": "Revenue", "display_value": ProjectFinancialContextBuilder._money(result.revenue), "status": "info"},
-            {"label": "Total cost", "display_value": ProjectFinancialContextBuilder._money(result.total_cost), "status": "neutral"},
-            {"label": "Result", "display_value": ProjectFinancialContextBuilder._money(result.result), "status": ProjectFinancialContextBuilder._result_status(result.result)},
-            {"label": "Margin", "display_value": ProjectFinancialContextBuilder._percent(result.margin), "status": "info"},
-            {"label": "Unclassified", "display_value": ProjectFinancialContextBuilder._money(result.unclassified_amount), "status": "warning" if result.unclassified_amount else "success"},
-            {"label": "Allocations", "display_value": str(result.allocation_count), "status": "neutral"},
+            {"label": "Revenue", "display_value": ProjectFinancialContextBuilder._money(management_result.direct_revenue), "status": "info"},
+            {"label": "Direct Cost", "display_value": ProjectFinancialContextBuilder._money(management_result.direct_cost), "status": "neutral"},
+            {"label": "Allocated Cost", "display_value": ProjectFinancialContextBuilder._money(management_result.allocated_management_cost), "status": "warning" if management_result.allocated_management_cost else "neutral"},
+            {"label": "Management Total Cost", "display_value": ProjectFinancialContextBuilder._money(management_result.management_total_cost), "status": "neutral"},
+            {"label": "Accounting Result", "display_value": ProjectFinancialContextBuilder._money(management_result.accounting_result), "status": ProjectFinancialContextBuilder._result_status(management_result.accounting_result)},
+            {"label": "Management Result", "display_value": ProjectFinancialContextBuilder._money(management_result.management_result), "status": ProjectFinancialContextBuilder._result_status(management_result.management_result)},
+            {"label": "Accounting Margin", "display_value": ProjectFinancialContextBuilder._percent(management_result.accounting_margin), "status": "info"},
+            {"label": "Management Margin", "display_value": ProjectFinancialContextBuilder._percent(management_result.management_margin), "status": "info"},
         ]
 
     @staticmethod
@@ -225,13 +254,19 @@ class ProjectFinancialContextBuilder:
         return rows
 
     @staticmethod
-    def _month_rows(result):
+    def _month_rows(result, management_result, financial_view_mode):
+        management_months = {(month.year, month.month): month for month in management_result.months}
         rows = []
         for month in reversed(result.months):
+            management_month = management_months[(month.year, month.month)]
             other_cost = month.equipment_cost + month.transport_cost + month.other_direct_cost
+            visible_cost = management_month.management_total_cost if financial_view_mode == "management" else month.total_cost
+            visible_result = management_month.management_result if financial_view_mode == "management" else month.result
+            visible_margin = management_month.management_margin if financial_view_mode == "management" else month.margin
             rows.append(
                 {
                     "month": month,
+                    "management_month": management_month,
                     "period_start": month.period_start,
                     "revenue_display": ProjectFinancialContextBuilder._money(month.revenue),
                     "material_cost_display": ProjectFinancialContextBuilder._money(month.material_cost),
@@ -240,11 +275,18 @@ class ProjectFinancialContextBuilder:
                     "other_cost_display": ProjectFinancialContextBuilder._money(other_cost),
                     "overhead_display": ProjectFinancialContextBuilder._money(month.overhead),
                     "total_cost_display": ProjectFinancialContextBuilder._money(month.total_cost),
+                    "allocated_management_cost_display": ProjectFinancialContextBuilder._money(management_month.allocated_management_cost),
+                    "management_total_cost_display": ProjectFinancialContextBuilder._money(management_month.management_total_cost),
                     "result_display": ProjectFinancialContextBuilder._money(month.result),
+                    "management_result_display": ProjectFinancialContextBuilder._money(management_month.management_result),
                     "margin_display": ProjectFinancialContextBuilder._percent(month.margin),
+                    "management_margin_display": ProjectFinancialContextBuilder._percent(management_month.management_margin),
+                    "visible_cost_display": ProjectFinancialContextBuilder._money(visible_cost),
+                    "visible_result_display": ProjectFinancialContextBuilder._money(visible_result),
+                    "visible_margin_display": ProjectFinancialContextBuilder._percent(visible_margin),
                     "unclassified_amount_display": ProjectFinancialContextBuilder._money(month.unclassified_amount),
                     "has_unclassified": bool(month.unclassified_amount),
-                    "result_status": ProjectFinancialContextBuilder._result_status(month.result),
+                    "result_status": ProjectFinancialContextBuilder._result_status(visible_result),
                 }
             )
         return rows
@@ -271,11 +313,16 @@ class ProjectFinancialContextBuilder:
         return rows
 
     @classmethod
-    def _monthly_chart(cls, result):
+    def _monthly_chart(cls, result, management_result, financial_view_mode):
         months = list(result.months)
+        management_months = {(month.year, month.month): month for month in management_result.months}
         values = []
         for month in months:
-            values.extend([month.revenue, month.total_cost, month.result])
+            if financial_view_mode == "management":
+                management_month = management_months[(month.year, month.month)]
+                values.extend([management_month.direct_revenue, management_month.management_total_cost, management_month.management_result])
+            else:
+                values.extend([month.revenue, month.total_cost, month.result])
         max_absolute = max([abs(value or ZERO) for value in values] + [ZERO])
         has_activity = bool(months) and any((value or ZERO) != ZERO for value in values)
         has_positive = any((value or ZERO) > ZERO for value in values)
@@ -304,9 +351,14 @@ class ProjectFinancialContextBuilder:
             "negative_area_percent": f"{negative_area_percent:.2f}",
             "zero_line_percent": f"{zero_line_percent:.2f}",
             "currency": result.currency,
+            "view_mode": financial_view_mode,
+            "cost_label": "Management total cost" if financial_view_mode == "management" else "Cost",
+            "result_label": "Management result" if financial_view_mode == "management" else "Result",
             "months": [
                 cls._monthly_chart_month(
                     month,
+                    management_month=management_months[(month.year, month.month)],
+                    financial_view_mode=financial_view_mode,
                     axis_min=axis_min,
                     axis_max=axis_max,
                     positive_area_percent=positive_area_percent,
@@ -318,13 +370,24 @@ class ProjectFinancialContextBuilder:
         }
 
     @classmethod
-    def _monthly_chart_month(cls, month, *, axis_min, axis_max, positive_area_percent, negative_area_percent, currency):
+    def _monthly_chart_month(cls, month, *, management_month, financial_view_mode, axis_min, axis_max, positive_area_percent, negative_area_percent, currency):
+        revenue = month.revenue
+        cost = month.total_cost
+        result = month.result
+        cost_label = "Cost"
+        result_label = "Result"
+        if financial_view_mode == "management":
+            revenue = management_month.direct_revenue
+            cost = management_month.management_total_cost
+            result = management_month.management_result
+            cost_label = "Management total cost"
+            result_label = "Management result"
         return {
             "label": month.period_start.strftime("%Y-%m"),
             "month": month,
             "revenue": cls._chart_bar(
                 "Revenue",
-                month.revenue,
+                revenue,
                 axis_min=axis_min,
                 axis_max=axis_max,
                 positive_area_percent=positive_area_percent,
@@ -333,8 +396,8 @@ class ProjectFinancialContextBuilder:
                 css_class="financial-chart__bar--revenue",
             ),
             "cost": cls._chart_bar(
-                "Cost",
-                month.total_cost,
+                cost_label,
+                cost,
                 axis_min=axis_min,
                 axis_max=axis_max,
                 positive_area_percent=positive_area_percent,
@@ -343,8 +406,8 @@ class ProjectFinancialContextBuilder:
                 css_class="financial-chart__bar--cost",
             ),
             "result": cls._chart_bar(
-                "Result",
-                month.result,
+                result_label,
+                result,
                 axis_min=axis_min,
                 axis_max=axis_max,
                 positive_area_percent=positive_area_percent,
@@ -352,7 +415,7 @@ class ProjectFinancialContextBuilder:
                 currency=currency,
                 css_class=(
                     "financial-chart__bar--result-negative"
-                    if month.result < ZERO
+                    if result < ZERO
                     else "financial-chart__bar--result-positive"
                 ),
             ),
@@ -451,8 +514,9 @@ class ProjectFinancialContextBuilder:
         return (Decimal(value) / interval).to_integral_value(rounding=ROUND_CEILING) * interval
 
     @staticmethod
-    def _warnings(result, include_overhead, currency):
+    def _warnings(result, management_result, include_overhead, currency):
         warnings = list(result.warnings)
+        warnings.extend(management_result.warnings)
         if not include_overhead:
             warnings.append("overhead_excluded")
         if currency:
@@ -460,6 +524,36 @@ class ProjectFinancialContextBuilder:
         if result.data_quality_status == "no_data" and "no_financial_data" not in warnings:
             warnings.append("no_financial_data")
         return warnings
+
+    @staticmethod
+    def _management_breakdown_rows(management_result):
+        rows = []
+        for item in management_result.allocation_breakdown:
+            rows.append(
+                {
+                    "pool": item.pool,
+                    "version": item.version,
+                    "period": item.period,
+                    "amount": item.amount,
+                    "amount_display": ProjectFinancialContextBuilder._money(item.amount),
+                    "percentage_display": ProjectFinancialContextBuilder._percent(item.percentage_of_total),
+                    "source_version": item.source_version,
+                    "approved_at": item.approved_at,
+                }
+            )
+        return rows
+
+    @staticmethod
+    def _view_query(params, view_mode):
+        query = {
+            "period": params.get("period") or "current_year",
+            "start": params.get("start") or "",
+            "end": params.get("end") or "",
+            "currency": params.get("currency") or "",
+            "include_overhead": params.get("include_overhead", "1"),
+            "view": view_mode,
+        }
+        return urlencode({key: value for key, value in query.items() if value not in {None, ""}})
 
     @classmethod
     def _unclassified_accounts(cls, project, start, end, currency):

@@ -704,12 +704,24 @@ class ProjectFinancialOverviewTests(TestCase):
         self.assertContains(response, "financial-chart__zero-line")
         self.assertContains(response, "2026-06 financial bars")
         self.assertContains(response, "Revenue")
-        self.assertContains(response, "Cost")
-        self.assertContains(response, "Result")
+        self.assertContains(response, "Management total cost")
+        self.assertContains(response, "Management result")
         self.assertContains(response, "Revenue - 1 000,00 EUR")
+        self.assertContains(response, "Management total cost - 250,00 EUR")
+        self.assertContains(response, "Management result - 750,00 EUR")
+        self.assertContains(response, "financial-chart__gridline")
+
+    def test_accounting_toggle_keeps_accounting_only_chart_labels(self):
+        _organization, _integration, project = self._classified_project()
+
+        response = self.client.get(
+            reverse("workspace:project_financials", args=[project.id]),
+            {"period": "custom", "start": "2026-06-01", "end": "2026-06-30", "view": "accounting"},
+        )
+
+        self.assertContains(response, "Current view: Accounting")
         self.assertContains(response, "Cost - 250,00 EUR")
         self.assertContains(response, "Result - 750,00 EUR")
-        self.assertContains(response, "financial-chart__gridline")
 
     def test_monthly_vertical_chart_renders_multiple_months_chronologically(self):
         _organization, integration, project = self._classified_project()
@@ -761,7 +773,7 @@ class ProjectFinancialOverviewTests(TestCase):
         )
 
         self.assertContains(response, "financial-chart__bar--result-negative")
-        self.assertContains(response, "Result - -500,00 EUR")
+        self.assertContains(response, "Management result - -500,00 EUR")
         self.assertContains(response, 'style="height: 83.33%"', html=False)
 
     def test_monthly_vertical_chart_zero_values_have_accessible_labels(self):
@@ -774,8 +786,8 @@ class ProjectFinancialOverviewTests(TestCase):
         )
 
         self.assertContains(response, "Revenue - 0,00 EUR")
-        self.assertContains(response, "Cost - 0,00 EUR")
-        self.assertContains(response, "Result - 0,00 EUR")
+        self.assertContains(response, "Management total cost - 0,00 EUR")
+        self.assertContains(response, "Management result - 0,00 EUR")
 
     def test_monthly_vertical_chart_all_zero_or_empty_state(self):
         organization = create_organization()
@@ -809,6 +821,58 @@ class ProjectFinancialOverviewTests(TestCase):
         self.assertContains(response, "<th class=\"px-4 py-3 text-left\">Month</th>", html=False)
         self.assertContains(response, "1 000,00")
         self.assertContains(response, "750,00")
+
+    def test_management_view_adds_approved_allocations_to_project_financials(self):
+        organization, _integration, project = self._classified_project()
+        pool = ManagementCostPool.objects.create(organization=organization, name="Office", default_strategy=AllocationStrategy.EQUAL)
+        period = ManagementAllocationPeriod.objects.create(organization=organization, year=2026, month=6)
+        version = ManagementAllocationVersion.objects.create(
+            period=period,
+            pool=pool,
+            version_number=1,
+            status=VersionStatus.APPROVED,
+            approved_at=timezone.now(),
+            metadata={"source_amount": "125.000000"},
+        )
+        ManagementAllocationEntry.objects.create(version=version, project=project, percentage="100.0000", amount="125.000000")
+
+        response = self.client.get(
+            reverse("workspace:project_financials", args=[project.id]),
+            {"period": "custom", "start": "2026-06-01", "end": "2026-06-30"},
+        )
+
+        self.assertContains(response, "Current view: Management")
+        self.assertContains(response, "Allocated Cost")
+        self.assertContains(response, "Management Total Cost")
+        self.assertContains(response, "Management Result")
+        self.assertContains(response, "Office")
+        self.assertContains(response, "125,00")
+        self.assertContains(response, "375,00")
+        self.assertContains(response, "625,00")
+
+    def test_accounting_view_keeps_direct_accounting_result_visible(self):
+        organization, _integration, project = self._classified_project()
+        pool = ManagementCostPool.objects.create(organization=organization, name="Office", default_strategy=AllocationStrategy.EQUAL)
+        period = ManagementAllocationPeriod.objects.create(organization=organization, year=2026, month=6)
+        version = ManagementAllocationVersion.objects.create(
+            period=period,
+            pool=pool,
+            version_number=1,
+            status=VersionStatus.APPROVED,
+            approved_at=timezone.now(),
+        )
+        ManagementAllocationEntry.objects.create(version=version, project=project, percentage="100.0000", amount="125.000000")
+
+        response = self.client.get(
+            reverse("workspace:project_financials", args=[project.id]),
+            {"period": "custom", "start": "2026-06-01", "end": "2026-06-30", "view": "accounting"},
+        )
+
+        self.assertContains(response, "Current view: Accounting")
+        self.assertContains(response, "Accounting Result")
+        self.assertContains(response, "750,00")
+        self.assertContains(response, "Cost - 250,00 EUR")
+        self.assertContains(response, "Result - 750,00 EUR")
 
     def test_financial_money_formatting_uses_estonian_two_decimal_display(self):
         _organization, integration, project = self._classified_project()

@@ -66,6 +66,8 @@ The accounting app includes a monthly management allocation proposal service. It
 
 The Workspace Management Allocations UI at `/workspace/management-allocations/` lets users generate, review, edit, approve and revise monthly management allocation drafts. Approved versions are immutable, revisions create new draft versions, only one approved version can exist for each pool/month, and Project Financials integration remains a later step.
 
+Project Financials now separates Accounting and Management views. Accounting Result remains based only on synchronized Merit GL data. Management Result adds approved Management Cost Allocation entries for matching months as an internal reporting layer, while keeping allocated cost, pool, version, month, and approval traceability visible.
+
 GL Account Classification Settings at `/workspace/settings/account-classifications/` lets administrators map imported GL account codes into reporting categories without Django admin or shell commands. Mappings are exact-code, integration-scoped, audited, and affect project financial aggregation immediately without GL re-sync.
 
 Project Financial Overview UI at `/workspace/projects/<id>/financials/` shows monthly and period-based revenue, cost, result, margin, data-quality warnings, unclassified account impact, sync status, and read-only allocation drill-downs from local synchronized GL allocations. Invoice/payment reporting, alerts, snapshots, and report distribution are not implemented yet.

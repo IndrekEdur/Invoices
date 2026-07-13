@@ -61,6 +61,7 @@ from apps.accounting.services import (
     AccountingDimensionSyncService,
     AccountingSyncStateService,
     ApproveManagementAllocationVersionCommand,
+    BuildManagementFinancialsCommand,
     CreateAccountingDimensionValueCommand,
     CreateManagementAllocationRuleCommand,
     CreateManagementAllocationVersionCommand,
@@ -82,6 +83,7 @@ from apps.accounting.services import (
     ManagementAllocationVersionService,
     ManagementAllocationProposalService,
     ManagementCostPoolService,
+    ProjectManagementFinancialService,
     SuggestNextProjectCodeCommand,
     StartAccountingSyncRunCommand,
     SyncAccountingDimensionsCommand,
@@ -1276,6 +1278,184 @@ class ProjectFinancialAggregationServiceTests(TestCase):
                 AccountingGLEntry.objects.count(),
                 AccountingGLAllocation.objects.count(),
                 AccountingAccountClassification.objects.count(),
+            ),
+        )
+
+
+class ProjectManagementFinancialServiceTests(TestCase):
+    def _setup_project(self):
+        organization = create_organization()
+        integration = create_merit_integration(organization)
+        project = Project.objects.create(organization=organization, code="26124", name="Kanarbiku")
+        AccountingAccountClassification.objects.create(
+            organization=organization,
+            integration=integration,
+            account_code="3000",
+            account_name="Revenue",
+            category=AccountingAccountClassification.Category.REVENUE,
+            reporting_sign=Decimal("-1"),
+        )
+        AccountingAccountClassification.objects.create(
+            organization=organization,
+            integration=integration,
+            account_code="5000",
+            account_name="Materials",
+            category=AccountingAccountClassification.Category.MATERIAL_COST,
+            reporting_sign=Decimal("1"),
+        )
+        self._allocation(project, integration, "3000", Decimal("-1000.000000"), "rev")
+        self._allocation(project, integration, "5000", Decimal("250.000000"), "cost")
+        return organization, integration, project
+
+    def _allocation(self, project, integration, account_code, amount, suffix, batch_date=date(2026, 6, 15)):
+        batch = AccountingGLBatch.objects.create(
+            organization=project.organization,
+            integration=integration,
+            external_id=f"mgmt-batch-{suffix}",
+            batch_date=batch_date,
+            currency_code="EUR",
+        )
+        entry = AccountingGLEntry.objects.create(
+            organization=project.organization,
+            integration=integration,
+            batch=batch,
+            external_id=f"mgmt-entry-{suffix}",
+            account_code=account_code,
+            account_name=f"Account {account_code}",
+        )
+        return AccountingGLAllocation.objects.create(
+            organization=project.organization,
+            integration=integration,
+            entry=entry,
+            external_id=f"mgmt-allocation-{suffix}",
+            dimension_code=project.code,
+            dimension_name=project.name,
+            amount=amount,
+            project=project,
+        )
+
+    def _accounting_result(self, project, start=date(2026, 6, 1), end=date(2026, 6, 30)):
+        return ProjectFinancialAggregationService().aggregate(
+            AggregateProjectFinancialsCommand(project=project, period_start=start, period_end=end)
+        )
+
+    def _pool(self, organization, name="Office"):
+        return ManagementCostPool.objects.create(organization=organization, name=name, default_strategy=AllocationStrategy.EQUAL)
+
+    def _entry(self, project, amount, *, pool=None, status=VersionStatus.APPROVED, year=2026, month=6, version_number=1):
+        pool = pool or self._pool(project.organization)
+        period, _created = ManagementAllocationPeriod.objects.get_or_create(organization=project.organization, year=year, month=month)
+        version = ManagementAllocationVersion.objects.create(
+            period=period,
+            pool=pool,
+            version_number=version_number,
+            status=status,
+            approved_at=timezone.now() if status == VersionStatus.APPROVED else None,
+            metadata={"source_amount": str(amount)},
+        )
+        return ManagementAllocationEntry.objects.create(
+            version=version,
+            project=project,
+            percentage=Decimal("100.0000"),
+            amount=Decimal(amount),
+        )
+
+    def _management_result(self, accounting_result):
+        return ProjectManagementFinancialService.build(BuildManagementFinancialsCommand(accounting_result=accounting_result))
+
+    def test_accounting_result_is_unchanged_and_management_result_adds_allocated_cost_once(self):
+        organization, _integration, project = self._setup_project()
+        self._entry(project, "125.000000", pool=self._pool(organization, "Office"))
+        accounting = self._accounting_result(project)
+
+        management = self._management_result(accounting)
+
+        self.assertEqual(accounting.total_cost, Decimal("250.000000"))
+        self.assertEqual(accounting.result, Decimal("750.000000"))
+        self.assertEqual(management.direct_revenue, Decimal("1000.000000"))
+        self.assertEqual(management.direct_cost, Decimal("250.000000"))
+        self.assertEqual(management.allocated_management_cost, Decimal("125.000000"))
+        self.assertEqual(management.management_total_cost, Decimal("375.000000"))
+        self.assertEqual(management.accounting_result, Decimal("750.000000"))
+        self.assertEqual(management.management_result, Decimal("625.000000"))
+
+    def test_approved_only_draft_and_superseded_ignored(self):
+        organization, _integration, project = self._setup_project()
+        self._entry(project, "100.000000", pool=self._pool(organization, "Approved"), status=VersionStatus.APPROVED)
+        self._entry(project, "999.000000", pool=self._pool(organization, "Draft"), status=VersionStatus.DRAFT)
+        self._entry(project, "888.000000", pool=self._pool(organization, "Old"), status=VersionStatus.SUPERSEDED)
+
+        management = self._management_result(self._accounting_result(project))
+
+        self.assertEqual(management.allocated_management_cost, Decimal("100.000000"))
+        self.assertEqual(len(management.allocation_breakdown), 1)
+
+    def test_correct_month_matching(self):
+        organization, _integration, project = self._setup_project()
+        self._entry(project, "100.000000", pool=self._pool(organization, "June"), year=2026, month=6)
+        self._entry(project, "200.000000", pool=self._pool(organization, "July"), year=2026, month=7)
+
+        june = self._management_result(self._accounting_result(project, date(2026, 6, 1), date(2026, 6, 30)))
+        both = self._management_result(self._accounting_result(project, date(2026, 6, 1), date(2026, 7, 31)))
+
+        self.assertEqual(june.allocated_management_cost, Decimal("100.000000"))
+        self.assertEqual(both.allocated_management_cost, Decimal("300.000000"))
+        self.assertEqual(
+            [(month.year, month.month, month.allocated_management_cost) for month in both.months],
+            [(2026, 6, Decimal("100.000000")), (2026, 7, Decimal("200.000000"))],
+        )
+
+    def test_allocation_breakdown_traceability_and_margins(self):
+        organization, _integration, project = self._setup_project()
+        self._entry(project, "125.000000", pool=self._pool(organization, "Office"))
+        self._entry(project, "75.000000", pool=self._pool(organization, "Accounting"))
+
+        management = self._management_result(self._accounting_result(project))
+
+        self.assertEqual(management.allocated_management_cost, Decimal("200.000000"))
+        self.assertEqual(management.management_margin, Decimal("55.00"))
+        self.assertEqual([item.pool.name for item in management.allocation_breakdown], ["Accounting", "Office"])
+        self.assertEqual([item.percentage_of_total for item in management.allocation_breakdown], [Decimal("37.50"), Decimal("62.50")])
+        self.assertTrue(management.allocation_breakdown[0].source_version.startswith("v"))
+        self.assertIsNotNone(management.allocation_breakdown[0].approved_at)
+
+    def test_warnings_and_organization_isolation(self):
+        organization, _integration, project = self._setup_project()
+        other_org = create_organization("Other management org")
+        other_project = Project.objects.create(organization=other_org, code="26124", name="Other")
+        self._entry(other_project, "999.000000", pool=self._pool(other_org))
+        self._entry(project, "10.000000", pool=self._pool(organization, "Draft warning"), status=VersionStatus.DRAFT)
+
+        management = self._management_result(self._accounting_result(project))
+
+        self.assertEqual(management.allocated_management_cost, Decimal("0"))
+        self.assertIn("no_approved_management_allocations", management.warnings)
+        self.assertIn("draft_management_allocation_exists", management.warnings)
+
+    def test_no_database_writes_and_no_proposal_recalculation(self):
+        organization, _integration, project = self._setup_project()
+        self._entry(project, "100.000000", pool=self._pool(organization))
+        accounting = self._accounting_result(project)
+        counts = (
+            ManagementAllocationPeriod.objects.count(),
+            ManagementAllocationVersion.objects.count(),
+            ManagementAllocationEntry.objects.count(),
+            AccountingGLAllocation.objects.count(),
+            AuditEvent.objects.count(),
+        )
+
+        with patch("apps.accounting.services.management_allocations.ManagementAllocationProposalService.generate") as generate_mock:
+            self._management_result(accounting)
+
+        generate_mock.assert_not_called()
+        self.assertEqual(
+            counts,
+            (
+                ManagementAllocationPeriod.objects.count(),
+                ManagementAllocationVersion.objects.count(),
+                ManagementAllocationEntry.objects.count(),
+                AccountingGLAllocation.objects.count(),
+                AuditEvent.objects.count(),
             ),
         )
 

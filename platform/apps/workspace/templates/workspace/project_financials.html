@@ -5,13 +5,14 @@
 {% endblock %}
 {% block content %}
 <div class="space-y-8">
-    {% include "workspace/partials/components/page_header.html" with eyebrow="Project Financials" title=project.name body="Read-only financial overview from synchronized GL allocation rows. No Merit API calls are made while rendering this page." %}
+    {% include "workspace/partials/components/page_header.html" with eyebrow="Project Financials" title=project.name body="Read-only financial overview from synchronized GL allocation rows and approved internal management allocations. No Merit API calls are made while rendering this page." %}
 
     <nav class="sticky top-24 z-10 flex flex-wrap gap-2 rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-sm backdrop-blur" aria-label="Project workspace sections">
         <a href="{% url 'workspace:project_detail' project.id %}" class="rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Overview</a>
         <a href="{% url 'workspace:project_financials' project.id %}" class="rounded-xl bg-slate-950 px-3 py-2 text-sm font-semibold text-white">Financials</a>
         <a href="{% url 'workspace:project_financial_allocations' project.id %}?start={{ period.start|date:'Y-m-d' }}&end={{ period.end|date:'Y-m-d' }}&currency={{ currency_filter }}" class="rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Allocation Drill-down</a>
         <a href="#financial-summary" class="rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Summary</a>
+        <a href="#management-costs" class="rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Management Costs</a>
         <a href="#monthly-trend" class="rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Monthly Trend</a>
         <a href="#data-quality" class="rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Data Quality</a>
     </nav>
@@ -22,6 +23,7 @@
                 <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">{{ project.code }} · {{ project.status }}</div>
                 <h2 class="mt-2 text-xl font-semibold text-slate-950">{{ period.start|date:"Y-m-d" }} to {{ period.end|date:"Y-m-d" }}</h2>
                 <p class="mt-2 text-sm text-slate-600">Currency: {{ financial_result.currency|default:currency_filter|default:"not selected" }}</p>
+                <p class="mt-1 text-sm text-slate-600">Current view: {{ financial_view_mode|title }}. Merit remains the accounting source of truth; management allocations are reporting-only.</p>
             </div>
             {% include "workspace/partials/components/status_badge.html" with status=financial_result.data_quality_status label=financial_result.data_quality_status %}
         </div>
@@ -32,8 +34,16 @@
         {% endif %}
     </section>
 
+    <section class="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+        <div class="flex flex-wrap gap-2" aria-label="Financial view mode">
+            <a href="?{{ management_view_query }}" class="rounded-xl px-4 py-2.5 text-sm font-semibold {% if financial_view_mode == 'management' %}bg-slate-950 text-white{% else %}border border-slate-300 text-slate-700 hover:bg-slate-50{% endif %}">Management</a>
+            <a href="?{{ accounting_view_query }}" class="rounded-xl px-4 py-2.5 text-sm font-semibold {% if financial_view_mode == 'accounting' %}bg-slate-950 text-white{% else %}border border-slate-300 text-slate-700 hover:bg-slate-50{% endif %}">Accounting</a>
+        </div>
+    </section>
+
     <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <form method="get" class="grid gap-4 lg:grid-cols-5">
+            <input type="hidden" name="view" value="{{ financial_view_mode }}">
             <div>
                 <label class="text-xs font-semibold uppercase tracking-wide text-slate-500">Period</label>
                 <select name="period" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm">
@@ -64,7 +74,7 @@
         </form>
     </section>
 
-    <section id="financial-summary" class="scroll-mt-36 grid gap-5 sm:grid-cols-2 xl:grid-cols-6">
+    <section id="financial-summary" class="scroll-mt-36 grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
         {% for card in summary_cards %}
             <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
                 <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">{{ card.label }}</div>
@@ -74,6 +84,38 @@
                 <div class="mt-4">{% include "workspace/partials/components/status_badge.html" with status=card.status label=card.status %}</div>
             </article>
         {% endfor %}
+    </section>
+
+    <section id="management-costs" class="scroll-mt-36 space-y-4">
+        {% include "workspace/partials/components/section_header.html" with title="Management Cost Allocations" body="Approved internal allocation entries added after direct accounting aggregation. Draft and superseded versions are ignored." %}
+        {% if management_cost_breakdown %}
+            <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-slate-200 text-sm">
+                        <thead class="bg-slate-50">
+                            <tr><th class="px-4 py-3 text-left">Pool</th><th class="px-4 py-3 text-left">Amount</th><th class="px-4 py-3 text-left">Share</th><th class="px-4 py-3 text-left">Month</th><th class="px-4 py-3 text-left">Version</th><th class="px-4 py-3 text-left">Approved</th></tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-100">
+                            {% for row in management_cost_breakdown %}
+                                <tr>
+                                    <td class="px-4 py-3 font-semibold text-slate-950">{{ row.pool.name }}</td>
+                                    <td class="px-4 py-3">{{ row.amount_display }}</td>
+                                    <td class="px-4 py-3">{{ row.percentage_display }}</td>
+                                    <td class="px-4 py-3">{{ row.period.period_label }}</td>
+                                    <td class="px-4 py-3">{{ row.source_version }}</td>
+                                    <td class="px-4 py-3">{{ row.approved_at|date:"Y-m-d H:i"|default:"-" }}</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                        <tfoot class="bg-slate-50">
+                            <tr><th class="px-4 py-3 text-left">Total Allocated</th><th class="px-4 py-3 text-left">{{ allocated_management_cost_display }}</th><th colspan="4"></th></tr>
+                        </tfoot>
+                    </table>
+                </div>
+            </div>
+        {% else %}
+            {% include "workspace/partials/components/empty_state.html" with title="No approved management allocations found for this project and period." body="Accounting result is still available. Management result will include approved allocation versions for matching months after review and approval." %}
+        {% endif %}
     </section>
 
     {% if financial_result.allocation_count == 0 %}
@@ -117,7 +159,7 @@
     </section>
 
     <section id="monthly-trend" class="scroll-mt-36 space-y-4">
-        {% include "workspace/partials/components/section_header.html" with title="Monthly Trend" body="Vertical monthly comparison of revenue, total cost and result. The table below remains the exact numeric source." %}
+        {% include "workspace/partials/components/section_header.html" with title="Monthly Trend" body="Vertical monthly comparison of revenue, cost and result for the selected financial view. The table below remains the exact numeric source." %}
         <div class="financial-chart rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             {% if warnings %}
                 <div class="mb-5 rounded-xl border border-orange-200 bg-orange-50 px-4 py-3 text-sm font-medium text-orange-900">
@@ -129,8 +171,8 @@
                 <div class="mb-5 flex flex-wrap items-center justify-between gap-4">
                     <div class="flex flex-wrap gap-3 text-xs font-semibold uppercase tracking-wide text-slate-600" aria-label="Financial chart legend">
                         <span class="inline-flex items-center gap-2"><span class="h-3 w-3 rounded bg-blue-500"></span>Revenue</span>
-                        <span class="inline-flex items-center gap-2"><span class="h-3 w-3 rounded bg-slate-500"></span>Cost</span>
-                        <span class="inline-flex items-center gap-2"><span class="h-3 w-3 rounded bg-green-500"></span>Result</span>
+                        <span class="inline-flex items-center gap-2"><span class="h-3 w-3 rounded bg-slate-500"></span>{{ monthly_chart.cost_label }}</span>
+                        <span class="inline-flex items-center gap-2"><span class="h-3 w-3 rounded bg-green-500"></span>{{ monthly_chart.result_label }}</span>
                         <span class="inline-flex items-center gap-2"><span class="h-3 w-3 rounded bg-red-500"></span>Negative result</span>
                     </div>
                     <div class="text-xs font-medium text-slate-500">Scale max: {{ monthly_chart.max_absolute_display }}</div>
@@ -199,14 +241,14 @@
     </section>
 
     <section class="space-y-4">
-        {% include "workspace/partials/components/section_header.html" with title="Monthly Financials" body="Newest month first." %}
+        {% include "workspace/partials/components/section_header.html" with title="Monthly Financials" body="Newest month first. Toggle controls whether this table shows accounting-only or management-adjusted result columns." %}
         <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
             <div class="overflow-x-auto">
                 <table class="min-w-full divide-y divide-slate-200 text-sm">
-                    <thead class="bg-slate-50"><tr><th class="px-4 py-3 text-left">Month</th><th class="px-4 py-3 text-left">Revenue</th><th class="px-4 py-3 text-left">Material</th><th class="px-4 py-3 text-left">Subcontractor</th><th class="px-4 py-3 text-left">Labor</th><th class="px-4 py-3 text-left">Other</th><th class="px-4 py-3 text-left">Overhead</th><th class="px-4 py-3 text-left">Cost</th><th class="px-4 py-3 text-left">Result</th><th class="px-4 py-3 text-left">Margin</th><th class="px-4 py-3 text-left">Unclassified</th><th class="px-4 py-3 text-left">Status</th></tr></thead>
+                    <thead class="bg-slate-50"><tr><th class="px-4 py-3 text-left">Month</th><th class="px-4 py-3 text-left">Revenue</th><th class="px-4 py-3 text-left">Material</th><th class="px-4 py-3 text-left">Subcontractor</th><th class="px-4 py-3 text-left">Labor</th><th class="px-4 py-3 text-left">Other</th><th class="px-4 py-3 text-left">Overhead</th>{% if financial_view_mode == "management" %}<th class="px-4 py-3 text-left">Allocated Cost</th><th class="px-4 py-3 text-left">Management Cost</th><th class="px-4 py-3 text-left">Management Result</th><th class="px-4 py-3 text-left">Management Margin</th>{% else %}<th class="px-4 py-3 text-left">Direct Cost</th><th class="px-4 py-3 text-left">Accounting Result</th><th class="px-4 py-3 text-left">Accounting Margin</th>{% endif %}<th class="px-4 py-3 text-left">Unclassified</th><th class="px-4 py-3 text-left">Status</th></tr></thead>
                     <tbody class="divide-y divide-slate-100">
                         {% for month in months_newest_first %}
-                            <tr class="hover:bg-blue-50/60"><td class="px-4 py-3 font-semibold">{{ month.period_start|date:"Y-m" }}</td><td class="px-4 py-3">{{ month.revenue_display }}</td><td class="px-4 py-3">{{ month.material_cost_display }}</td><td class="px-4 py-3">{{ month.subcontractor_cost_display }}</td><td class="px-4 py-3">{{ month.labor_cost_display }}</td><td class="px-4 py-3">{{ month.other_cost_display }}</td><td class="px-4 py-3">{{ month.overhead_display }}</td><td class="px-4 py-3">{{ month.total_cost_display }}</td><td class="px-4 py-3 {% if month.month.result < 0 %}text-red-700 font-semibold{% endif %}">{{ month.result_display }}</td><td class="px-4 py-3">{{ month.margin_display }}</td><td class="px-4 py-3">{{ month.unclassified_amount_display }}</td><td class="px-4 py-3">{% if month.has_unclassified %}{% include "workspace/partials/components/status_badge.html" with status="warning" label="unclassified" %}{% else %}{% include "workspace/partials/components/status_badge.html" with status="success" label="complete" %}{% endif %}</td></tr>
+                            <tr class="hover:bg-blue-50/60"><td class="px-4 py-3 font-semibold">{{ month.period_start|date:"Y-m" }}</td><td class="px-4 py-3">{{ month.revenue_display }}</td><td class="px-4 py-3">{{ month.material_cost_display }}</td><td class="px-4 py-3">{{ month.subcontractor_cost_display }}</td><td class="px-4 py-3">{{ month.labor_cost_display }}</td><td class="px-4 py-3">{{ month.other_cost_display }}</td><td class="px-4 py-3">{{ month.overhead_display }}</td>{% if financial_view_mode == "management" %}<td class="px-4 py-3">{{ month.allocated_management_cost_display }}</td><td class="px-4 py-3">{{ month.management_total_cost_display }}</td><td class="px-4 py-3 {% if month.management_month.management_result < 0 %}text-red-700 font-semibold{% endif %}">{{ month.management_result_display }}</td><td class="px-4 py-3">{{ month.management_margin_display }}</td>{% else %}<td class="px-4 py-3">{{ month.total_cost_display }}</td><td class="px-4 py-3 {% if month.month.result < 0 %}text-red-700 font-semibold{% endif %}">{{ month.result_display }}</td><td class="px-4 py-3">{{ month.margin_display }}</td>{% endif %}<td class="px-4 py-3">{{ month.unclassified_amount_display }}</td><td class="px-4 py-3">{% if month.has_unclassified %}{% include "workspace/partials/components/status_badge.html" with status="warning" label="unclassified" %}{% else %}{% include "workspace/partials/components/status_badge.html" with status="success" label="complete" %}{% endif %}</td></tr>
                         {% endfor %}
                     </tbody>
                 </table>

@@ -9,7 +9,12 @@ from django.urls import reverse
 from django.utils import timezone
 
 from apps.accounting.models import AccountingGLAllocation, AccountingIntegration, AccountingSyncRun, AccountingSyncState
-from apps.accounting.services import AggregateProjectFinancialsCommand, ProjectFinancialAggregationService
+from apps.accounting.services import (
+    AggregateProjectFinancialsCommand,
+    BuildManagementFinancialsCommand,
+    ProjectManagementFinancialService,
+    ProjectFinancialAggregationService,
+)
 from apps.core.models import Organization
 from apps.projects.models import Project
 from apps.workspace.services.formatting import format_money, format_percent
@@ -122,6 +127,7 @@ class OrganizationFinancialDashboardContextBuilder:
             "next_month_query": cls._month_query(filters, 1),
             "current_month_query": cls._current_month_query(filters),
             "show_no_data": filters["show_no_data"],
+            "view_mode": filters["view_mode"],
         }
 
     @classmethod
@@ -167,6 +173,7 @@ class OrganizationFinancialDashboardContextBuilder:
             "sort": sort,
             "direction": direction,
             "show_no_data": params.get("show_no_data") == "1",
+            "view_mode": "management" if params.get("view") == "management" else "accounting",
             "errors": errors,
         }
 
@@ -226,14 +233,35 @@ class OrganizationFinancialDashboardContextBuilder:
     @classmethod
     def _row_from_result(cls, result, filters):
         project = result.project
+        management_result = None
+        if filters["view_mode"] == "management":
+            management_result = ProjectManagementFinancialService.build(
+                BuildManagementFinancialsCommand(
+                    accounting_result=result,
+                    metadata={"source": "workspace_organization_financial_dashboard"},
+                )
+            )
         query = {
             "period": "custom",
             "start": filters["period_start"].isoformat(),
             "end": filters["period_end"].isoformat(),
             "currency": filters["currency"],
             "include_overhead": "1" if filters["include_overhead"] else "0",
+            "view": filters["view_mode"],
         }
         query_string = urlencode(query)
+        revenue = result.revenue
+        total_cost = result.total_cost
+        project_result = result.result
+        margin = result.margin
+        warnings = list(result.warnings)
+        metadata = {"source_batch_count": result.source_batch_count, "source_entry_count": result.source_entry_count}
+        if management_result:
+            total_cost = management_result.management_total_cost
+            project_result = management_result.management_result
+            margin = management_result.management_margin
+            warnings.extend(management_result.warnings)
+            metadata["allocated_management_cost"] = management_result.allocated_management_cost
         return ProjectFinancialDashboardRow(
             project=project,
             project_id=project.id,
@@ -241,33 +269,45 @@ class OrganizationFinancialDashboardContextBuilder:
             project_name=project.name,
             project_status=project.status,
             currency=result.currency,
-            revenue=result.revenue,
-            total_cost=result.total_cost,
-            result=result.result,
-            margin=result.margin,
+            revenue=revenue,
+            total_cost=total_cost,
+            result=project_result,
+            margin=margin,
             unclassified_amount=result.unclassified_amount,
             allocation_count=result.allocation_count,
             data_quality_status=result.data_quality_status,
-            result_status=cls._result_status(result),
+            result_status=cls._result_status(result, management_result),
             financials_url=f"{reverse('workspace:project_financials', args=[project.id])}?{query_string}",
             allocations_url=f"{reverse('workspace:project_financial_allocations', args=[project.id])}?{query_string}",
             project_url=reverse("workspace:project_detail", args=[project.id]),
-            warnings=list(result.warnings),
-            metadata={"source_batch_count": result.source_batch_count, "source_entry_count": result.source_entry_count},
+            warnings=warnings,
+            metadata=metadata,
         )
 
     @staticmethod
-    def _result_status(result):
-        if result.allocation_count == 0 and all(
+    def _result_status(result, management_result=None):
+        if management_result:
+            allocation_count = management_result.metadata.get("allocation_entry_count", 0)
+            revenue = management_result.direct_revenue
+            total_cost = management_result.management_total_cost
+            project_result = management_result.management_result
+            unclassified_amount = result.unclassified_amount
+        else:
+            allocation_count = result.allocation_count
+            revenue = result.revenue
+            total_cost = result.total_cost
+            project_result = result.result
+            unclassified_amount = result.unclassified_amount
+        if allocation_count == 0 and all(
             value == ZERO
-            for value in [result.revenue, result.total_cost, result.result, result.unclassified_amount]
+            for value in [revenue, total_cost, project_result, unclassified_amount]
         ):
             return "no_data"
-        if result.revenue == ZERO and result.total_cost != ZERO:
+        if revenue == ZERO and total_cost != ZERO:
             return "costs_without_revenue"
-        if result.result > ZERO:
+        if project_result > ZERO:
             return "positive"
-        if result.result < ZERO:
+        if project_result < ZERO:
             return "negative"
         return "zero"
 
@@ -531,6 +571,8 @@ class OrganizationFinancialDashboardContextBuilder:
             "sort": filters["sort"],
             "direction": filters["direction"],
         }
+        if filters["view_mode"] == "management":
+            query["view"] = "management"
         if filters["show_no_data"]:
             query["show_no_data"] = "1"
         if include_page and filters.get("page"):
