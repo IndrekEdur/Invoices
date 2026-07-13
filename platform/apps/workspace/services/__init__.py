@@ -1,6 +1,7 @@
 from .dashboard import DashboardContextBuilder
 from .financial_dashboard import OrganizationFinancialDashboardContextBuilder
 from .inbox import InboxContextBuilder
+from .management_allocations import ManagementAllocationContextBuilder
 from .project_link_reviews import ProjectLinkReviewContextBuilder
 from .projects import ProjectsContextBuilder
 from .project_financials import ProjectFinancialContextBuilder
@@ -16,6 +17,7 @@ __all__ = [
     "DashboardContextBuilder",
     "OrganizationFinancialDashboardContextBuilder",
     "InboxContextBuilder",
+    "ManagementAllocationContextBuilder",
     "ProjectLinkReviewContextBuilder",
     "ProjectFinancialContextBuilder",
     "ProjectsContextBuilder",

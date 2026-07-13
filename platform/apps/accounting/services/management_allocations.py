@@ -12,6 +12,7 @@ from apps.core.services import AuditService
 
 from .commands import (
     AggregateProjectFinancialsCommand,
+    CreateManagementAllocationRevisionResult,
     CreateManagementAllocationVersionCommand,
     GenerateManagementAllocationProposalResult,
 )
@@ -122,6 +123,74 @@ class ManagementAllocationVersionService:
 
     @staticmethod
     @transaction.atomic
+    def create_revision(command):
+        metadata = deepcopy(command.metadata or {})
+        source = (
+            ManagementAllocationVersion.objects.select_for_update()
+            .select_related("period", "pool")
+            .prefetch_related("entries")
+            .get(pk=command.source_version.pk)
+        )
+        if source.status not in {VersionStatus.APPROVED, VersionStatus.SUPERSEDED}:
+            raise ValueError("Only approved or superseded management allocation versions can be revised.")
+        if source.period.status == PeriodStatus.ARCHIVED:
+            raise ValueError("Archived management allocation periods cannot receive revisions.")
+        latest = (
+            ManagementAllocationVersion.objects.filter(period=source.period, pool=source.pool)
+            .aggregate(max_version=Max("version_number"))
+            .get("max_version")
+            or 0
+        )
+        revision_metadata = deepcopy(source.metadata or {})
+        revision_metadata["revision_source_version_id"] = source.id
+        revision_metadata["revision_created_at"] = timezone.now().isoformat()
+        revision_metadata["revision_reason"] = command.reason
+
+        version = ManagementAllocationVersion.objects.create(
+            period=source.period,
+            pool=source.pool,
+            version_number=latest + 1,
+            status=VersionStatus.DRAFT,
+            created_by=command.actor,
+            reason=command.reason or source.reason,
+            metadata=revision_metadata,
+        )
+        entries = [
+            ManagementAllocationEntry.objects.create(
+                version=version,
+                project=entry.project,
+                percentage=entry.percentage,
+                amount=entry.amount,
+                manual_override=entry.manual_override,
+                notes=entry.notes,
+            )
+            for entry in source.entries.select_related("project").order_by("project__code", "project_id")
+        ]
+        AuditService.record(
+            event_type="management_allocation_revision_created",
+            message=f"Management allocation revision created from {source}",
+            organization=source.period.organization,
+            actor=command.actor,
+            object_type="ManagementAllocationVersion",
+            object_id=str(version.id),
+            metadata={
+                **metadata,
+                "source_version_id": source.id,
+                "new_version_id": version.id,
+                "period": source.period.period_label,
+                "pool_id": source.pool_id,
+                "reason": command.reason,
+            },
+        )
+        return CreateManagementAllocationRevisionResult(
+            source_version=source,
+            version=version,
+            entries=entries,
+            metadata={"source_version_id": source.id},
+        )
+
+    @staticmethod
+    @transaction.atomic
     def approve(command):
         metadata = deepcopy(command.metadata or {})
         version = (
@@ -129,10 +198,13 @@ class ManagementAllocationVersionService:
             .select_related("period", "pool")
             .get(pk=command.version.pk)
         )
-        if version.status == VersionStatus.SUPERSEDED:
-            raise ValueError("Superseded management allocation versions cannot be approved.")
+        if version.status != VersionStatus.DRAFT:
+            raise ValueError("Only draft management allocation versions can be approved.")
+        if version.period.status == PeriodStatus.ARCHIVED:
+            raise ValueError("Archived management allocation periods cannot be approved.")
         if not version.pool.is_active:
             raise ValueError("Inactive management cost pools cannot be approved.")
+        ManagementAllocationVersionService._validate_approval_balance(version)
 
         previous_versions = (
             ManagementAllocationVersion.objects.select_for_update()
@@ -172,6 +244,165 @@ class ManagementAllocationVersionService:
         )
         return version
 
+    @staticmethod
+    def _validate_approval_balance(version):
+        if "source_amount" not in (version.metadata or {}):
+            return
+        entries = list(version.entries.all())
+        source_amount = Decimal(str((version.metadata or {}).get("source_amount", "0")))
+        if not entries:
+            raise ValueError("Management allocation version cannot be approved without entries.")
+        if sum(entry.amount for entry in entries) != source_amount:
+            raise ValueError("Management allocation version amounts do not balance.")
+        if source_amount != ZERO and sum(entry.percentage for entry in entries) != ONE_HUNDRED:
+            raise ValueError("Management allocation version percentages do not balance.")
+
+
+class ManagementAllocationDraftService:
+    """Edit draft allocation entries without approving or mutating history."""
+
+    EDIT_PERCENTAGES = "percentages_authoritative"
+    EDIT_AMOUNTS = "amounts_authoritative"
+
+    @staticmethod
+    @transaction.atomic
+    def update(command):
+        metadata = deepcopy(command.metadata or {})
+        input_entries = deepcopy(command.entries or [])
+        version = (
+            ManagementAllocationVersion.objects.select_for_update()
+            .select_related("period", "pool")
+            .get(pk=command.version.pk)
+        )
+        if version.status != VersionStatus.DRAFT:
+            raise ValueError("Only draft management allocation versions can be edited.")
+        if version.period.status == PeriodStatus.ARCHIVED:
+            raise ValueError("Archived management allocation periods cannot be edited.")
+        if command.edit_mode not in {
+            ManagementAllocationDraftService.EDIT_PERCENTAGES,
+            ManagementAllocationDraftService.EDIT_AMOUNTS,
+        }:
+            raise ValueError("Unsupported management allocation draft edit mode.")
+
+        source_amount = Decimal(str((version.metadata or {}).get("source_amount", "0")))
+        project_ids = [int(item["project_id"]) for item in input_entries]
+        if len(project_ids) != len(set(project_ids)):
+            raise ValueError("Management allocation draft cannot contain duplicate Projects.")
+        projects = list(
+            Project.objects.filter(
+                organization=version.period.organization,
+                id__in=project_ids,
+            ).order_by("code", "id")
+        )
+        if len(projects) != len(project_ids):
+            raise ValueError("Management allocation draft Projects must belong to the period organization.")
+        project_by_id = {project.id: project for project in projects}
+        ordered_inputs = sorted(input_entries, key=lambda item: (project_by_id[int(item["project_id"])].code, int(item["project_id"])))
+        payloads = ManagementAllocationDraftService._payloads(
+            ordered_inputs,
+            project_by_id,
+            source_amount,
+            command.edit_mode,
+        )
+
+        previous_project_ids = list(version.entries.values_list("project_id", flat=True))
+        version.entries.all().delete()
+        entries = [
+            ManagementAllocationEntry.objects.create(
+                version=version,
+                project=item["project"],
+                percentage=item["percentage"],
+                amount=item["amount"],
+                manual_override=item["manual_override"],
+                notes=item["notes"],
+            )
+            for item in payloads
+        ]
+        version_metadata = deepcopy(version.metadata or {})
+        version_metadata["last_edit_mode"] = command.edit_mode
+        version_metadata["last_edit_reason"] = command.reason
+        version_metadata["last_edited_at"] = timezone.now().isoformat()
+        version.metadata = version_metadata
+        if command.reason:
+            version.reason = command.reason
+        version.save(update_fields=["metadata", "reason"])
+
+        AuditService.record(
+            event_type="management_allocation_draft_edited",
+            message=f"Management allocation draft edited: {version}",
+            organization=version.period.organization,
+            actor=command.actor,
+            object_type="ManagementAllocationVersion",
+            object_id=str(version.id),
+            metadata={
+                **metadata,
+                "version_id": version.id,
+                "pool_id": version.pool_id,
+                "period": version.period.period_label,
+                "edit_mode": command.edit_mode,
+                "reason": command.reason,
+                "previous_project_ids": previous_project_ids,
+                "new_project_ids": [entry.project_id for entry in entries],
+                "allocated_amount": str(sum(entry.amount for entry in entries)),
+                "total_percentage": str(sum(entry.percentage for entry in entries)),
+            },
+        )
+        return version
+
+    @staticmethod
+    def _payloads(input_entries, project_by_id, source_amount, edit_mode):
+        payloads = []
+        if edit_mode == ManagementAllocationDraftService.EDIT_PERCENTAGES:
+            total_percentage = ZERO
+            for item in input_entries:
+                percentage = Decimal(str(item.get("percentage", "0"))).quantize(PERCENT_QUANT)
+                if percentage < ZERO or percentage > ONE_HUNDRED:
+                    raise ValueError("Management allocation draft percentages must be between 0 and 100.")
+                total_percentage += percentage
+            if total_percentage != ONE_HUNDRED and source_amount != ZERO:
+                raise ValueError("Management allocation draft percentages must total exactly 100.")
+            allocated = ZERO
+            for item in input_entries:
+                percentage = Decimal(str(item.get("percentage", "0"))).quantize(PERCENT_QUANT)
+                amount = (source_amount * percentage / ONE_HUNDRED).quantize(CURRENCY_QUANT, rounding=ROUND_HALF_UP)
+                payloads.append(
+                    {
+                        "project": project_by_id[int(item["project_id"])],
+                        "percentage": percentage,
+                        "amount": amount,
+                        "manual_override": bool(item.get("manual_override")),
+                        "notes": item.get("notes", ""),
+                    }
+                )
+                allocated += amount
+            if payloads:
+                payloads[-1]["amount"] += source_amount - allocated
+            return payloads
+
+        total_amount = ZERO
+        for item in input_entries:
+            total_amount += Decimal(str(item.get("amount", "0"))).quantize(CURRENCY_QUANT, rounding=ROUND_HALF_UP)
+        if total_amount != source_amount:
+            raise ValueError("Management allocation draft amounts must total exactly to source amount.")
+        percentage_total = ZERO
+        for item in input_entries:
+            amount = Decimal(str(item.get("amount", "0"))).quantize(CURRENCY_QUANT, rounding=ROUND_HALF_UP)
+            percentage = ZERO
+            if source_amount != ZERO:
+                percentage = (amount / source_amount * ONE_HUNDRED).quantize(PERCENT_QUANT)
+            payloads.append(
+                {
+                    "project": project_by_id[int(item["project_id"])],
+                    "percentage": percentage,
+                    "amount": amount,
+                    "manual_override": bool(item.get("manual_override")),
+                    "notes": item.get("notes", ""),
+                }
+            )
+            percentage_total += percentage
+        if payloads and source_amount != ZERO:
+            payloads[-1]["percentage"] += ONE_HUNDRED - percentage_total
+        return payloads
 
 class ManagementAllocationProposalService:
     """Generate draft management allocation versions from explicit project selections."""

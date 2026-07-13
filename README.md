@@ -64,6 +64,8 @@ The accounting app includes Management Cost Pool and Allocation Rule models for 
 
 The accounting app includes a monthly management allocation proposal service. It generates draft allocation versions for explicitly selected Projects using revenue-proportional, equal, project-manager, manual percentage, or manual amount strategies. Source amounts come from mapped local GL accounts or an explicit manual amount, proposals remain draft for later review/approval, and no Merit write-back occurs.
 
+The Workspace Management Allocations UI at `/workspace/management-allocations/` lets users generate, review, edit, approve and revise monthly management allocation drafts. Approved versions are immutable, revisions create new draft versions, only one approved version can exist for each pool/month, and Project Financials integration remains a later step.
+
 GL Account Classification Settings at `/workspace/settings/account-classifications/` lets administrators map imported GL account codes into reporting categories without Django admin or shell commands. Mappings are exact-code, integration-scoped, audited, and affect project financial aggregation immediately without GL re-sync.
 
 Project Financial Overview UI at `/workspace/projects/<id>/financials/` shows monthly and period-based revenue, cost, result, margin, data-quality warnings, unclassified account impact, sync status, and read-only allocation drill-downs from local synchronized GL allocations. Invoice/payment reporting, alerts, snapshots, and report distribution are not implemented yet.

@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block actions %}
+<a href="{% url 'workspace:management_allocation_create' %}" class="rounded-xl bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">Create proposal</a>
+{% endblock %}
+
+{% block content %}
+<div class="space-y-8">
+    <div>
+        <h1 class="text-3xl font-semibold tracking-tight text-slate-950">Management Allocations</h1>
+        <p class="mt-2 text-sm text-slate-600">Draft, approve and review internal management cost allocations. Merit GL data remains unchanged.</p>
+    </div>
+
+    <div class="grid gap-4 md:grid-cols-3 xl:grid-cols-6">
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><div class="text-xs text-slate-500">Active pools</div><div class="mt-2 text-2xl font-semibold">{{ summary.active_pools|default:0 }}</div></div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><div class="text-xs text-slate-500">Drafts</div><div class="mt-2 text-2xl font-semibold">{{ summary.drafts|default:0 }}</div></div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><div class="text-xs text-slate-500">Approved</div><div class="mt-2 text-2xl font-semibold">{{ summary.approved|default:0 }}</div></div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><div class="text-xs text-slate-500">Needs review</div><div class="mt-2 text-2xl font-semibold">{{ summary.needs_review|default:0 }}</div></div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><div class="text-xs text-slate-500">Superseded</div><div class="mt-2 text-2xl font-semibold">{{ summary.superseded|default:0 }}</div></div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><div class="text-xs text-slate-500">Allocated</div><div class="mt-2 text-2xl font-semibold">{{ summary.allocated_amount_display|default:"0,00 EUR" }}</div></div>
+    </div>
+
+    <form method="get" class="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm md:grid-cols-5">
+        <input type="month" name="month" value="{{ filters.month }}" class="rounded-xl border border-slate-300 px-3 py-2 text-sm">
+        <select name="pool" class="rounded-xl border border-slate-300 px-3 py-2 text-sm">
+            <option value="">All pools</option>
+            {% for pool in pools %}<option value="{{ pool.id }}" {% if filters.pool_id == pool.id|stringformat:"s" %}selected{% endif %}>{{ pool.name }}</option>{% endfor %}
+        </select>
+        <select name="status" class="rounded-xl border border-slate-300 px-3 py-2 text-sm">
+            <option value="">All statuses</option>
+            {% for value,label in status_choices %}<option value="{{ value }}" {% if filters.status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+        </select>
+        <input type="search" name="q" value="{{ filters.q }}" placeholder="Pool or reason" class="rounded-xl border border-slate-300 px-3 py-2 text-sm">
+        <button class="rounded-xl bg-slate-950 px-4 py-2 text-sm font-semibold text-white" type="submit">Filter</button>
+    </form>
+
+    <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <table class="min-w-full divide-y divide-slate-200 text-sm">
+            <thead class="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                <tr>
+                    <th class="px-4 py-3">Period</th><th class="px-4 py-3">Pool</th><th class="px-4 py-3">Version</th><th class="px-4 py-3">Strategy</th><th class="px-4 py-3">Source</th><th class="px-4 py-3">Allocated</th><th class="px-4 py-3">Status</th><th class="px-4 py-3">Projects</th><th class="px-4 py-3">Warnings</th><th class="px-4 py-3">Actions</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+                {% for row in versions %}
+                <tr class="hover:bg-slate-50">
+                    <td class="px-4 py-3">{{ row.period }}</td>
+                    <td class="px-4 py-3 font-medium">{{ row.version.pool.name }}</td>
+                    <td class="px-4 py-3">v{{ row.version.version_number }}</td>
+                    <td class="px-4 py-3">{{ row.strategy|default:"-" }}</td>
+                    <td class="px-4 py-3">{{ row.source_amount_display }}</td>
+                    <td class="px-4 py-3">{{ row.allocated_amount_display }}</td>
+                    <td class="px-4 py-3"><span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">{{ row.version.status }}</span></td>
+                    <td class="px-4 py-3">{{ row.project_count }}</td>
+                    <td class="px-4 py-3">{{ row.warning_count }}</td>
+                    <td class="px-4 py-3"><a class="font-semibold text-slate-900 underline" href="{% url 'workspace:management_allocation_detail' row.version.id %}">Open</a></td>
+                </tr>
+                {% empty %}
+                <tr><td class="px-4 py-10 text-center text-slate-500" colspan="10">No management allocation versions found.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

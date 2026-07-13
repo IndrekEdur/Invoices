@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+
+{% block actions %}
+<a href="{% url 'workspace:management_allocation_detail' version.id %}" class="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Review</a>
+{% endblock %}
+
+{% block content %}
+<div class="space-y-8">
+    <div>
+        <h1 class="text-3xl font-semibold tracking-tight text-slate-950">Edit draft v{{ version.version_number }}</h1>
+        <p class="mt-2 text-sm text-slate-600">{{ version.period.period_label }} / {{ version.pool.name }}. Approved and superseded versions are immutable.</p>
+    </div>
+
+    {% if edit_blocked %}
+    <div class="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">This version is {{ version.status }} and cannot be edited. Create a revised draft instead.</div>
+    {% else %}
+    <form method="post" class="space-y-6">
+        {% csrf_token %}
+        <div class="grid gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm md:grid-cols-3">
+            <label class="text-sm font-medium">Edit mode
+                <select name="edit_mode" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2">
+                    <option value="percentages_authoritative">Percentages authoritative</option>
+                    <option value="amounts_authoritative">Amounts authoritative</option>
+                </select>
+            </label>
+            <div class="text-sm"><div class="font-medium text-slate-600">Source amount</div><div class="mt-2 text-lg font-semibold">{{ source_amount_display }}</div></div>
+            <label class="text-sm font-medium">Reason
+                <input name="reason" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2" placeholder="Reason for audit">
+            </label>
+        </div>
+
+        <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+            <table class="min-w-full divide-y divide-slate-200 text-sm">
+                <thead class="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                    <tr><th class="px-4 py-3">Include</th><th class="px-4 py-3">Project</th><th class="px-4 py-3">Percentage</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Manual</th><th class="px-4 py-3">Notes</th></tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                    {% for entry in entries %}
+                    <tr>
+                        <td class="px-4 py-3"><input type="checkbox" checked name="project_ids" value="{{ entry.project.id }}"></td>
+                        <td class="px-4 py-3"><div class="font-semibold">{{ entry.project.code }}</div><div class="text-slate-500">{{ entry.project.name }}</div></td>
+                        <td class="px-4 py-3"><input type="number" step="0.0001" name="percentage_{{ entry.project.id }}" value="{{ entry.percentage }}" class="w-32 rounded-lg border border-slate-300 px-2 py-1"></td>
+                        <td class="px-4 py-3"><input type="number" step="0.01" name="amount_{{ entry.project.id }}" value="{{ entry.amount }}" class="w-32 rounded-lg border border-slate-300 px-2 py-1"></td>
+                        <td class="px-4 py-3"><input type="checkbox" name="manual_override_{{ entry.project.id }}" {% if entry.manual_override %}checked{% endif %}></td>
+                        <td class="px-4 py-3"><input name="notes_{{ entry.project.id }}" value="{{ entry.notes }}" class="w-full rounded-lg border border-slate-300 px-2 py-1"></td>
+                    </tr>
+                    {% endfor %}
+                    {% for project in projects %}
+                    {% if project.id not in version.metadata.selected_project_ids %}
+                    <tr class="bg-slate-50/60">
+                        <td class="px-4 py-3"><input type="checkbox" name="project_ids" value="{{ project.id }}"></td>
+                        <td class="px-4 py-3"><div class="font-semibold">{{ project.code }}</div><div class="text-slate-500">{{ project.name }}</div></td>
+                        <td class="px-4 py-3"><input type="number" step="0.0001" name="percentage_{{ project.id }}" value="0" class="w-32 rounded-lg border border-slate-300 px-2 py-1"></td>
+                        <td class="px-4 py-3"><input type="number" step="0.01" name="amount_{{ project.id }}" value="0" class="w-32 rounded-lg border border-slate-300 px-2 py-1"></td>
+                        <td class="px-4 py-3"><input type="checkbox" name="manual_override_{{ project.id }}"></td>
+                        <td class="px-4 py-3"><input name="notes_{{ project.id }}" class="w-full rounded-lg border border-slate-300 px-2 py-1"></td>
+                    </tr>
+                    {% endif %}
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="flex justify-end"><button class="rounded-xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white hover:bg-slate-800" type="submit">Save draft</button></div>
+    </form>
+    {% endif %}
+</div>
+{% endblock %}

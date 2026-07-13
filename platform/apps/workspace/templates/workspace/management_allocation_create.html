@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+
+{% block actions %}
+<a href="{% url 'workspace:management_allocations' %}" class="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Back to allocations</a>
+{% endblock %}
+
+{% block content %}
+<form method="post" class="space-y-8">
+    {% csrf_token %}
+    <div>
+        <h1 class="text-3xl font-semibold tracking-tight text-slate-950">Create allocation proposal</h1>
+        <p class="mt-2 text-sm text-slate-600">Projects must be selected explicitly. The service generates a draft only; approval happens later.</p>
+    </div>
+
+    <div class="grid gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm md:grid-cols-3">
+        <label class="text-sm font-medium text-slate-700">Cost pool
+            <select name="pool_id" required class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2">
+                <option value="">Choose pool</option>
+                {% for pool in pools %}<option value="{{ pool.id }}">{{ pool.name }} ({{ pool.default_strategy }})</option>{% endfor %}
+            </select>
+        </label>
+        <label class="text-sm font-medium text-slate-700">Month
+            <input type="month" name="month" value="{{ selected_month }}" required class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2">
+        </label>
+        <label class="text-sm font-medium text-slate-700">Strategy
+            <select name="strategy" required class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2">
+                {% for value,label in strategy_choices %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+            </select>
+        </label>
+        <label class="text-sm font-medium text-slate-700">Source amount mode
+            <select name="source_amount_mode" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2">
+                <option value="derive">Derive from mapped GL accounts</option>
+                <option value="manual">Enter manually</option>
+            </select>
+        </label>
+        <label class="text-sm font-medium text-slate-700">Manual source amount
+            <input type="number" step="0.01" name="source_amount" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2" placeholder="Optional">
+        </label>
+        <label class="text-sm font-medium text-slate-700">Project manager
+            <select name="project_manager_id" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2">
+                <option value="">Only for Project manager strategy</option>
+                {% for manager in project_managers %}<option value="{{ manager.id }}">{{ manager.name }} {% if manager.email %}({{ manager.email }}){% endif %} - {{ manager.project.code }}</option>{% endfor %}
+            </select>
+        </label>
+        <label class="md:col-span-3 text-sm font-medium text-slate-700">Reason
+            <textarea name="reason" rows="2" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2" placeholder="Why this allocation is being generated"></textarea>
+        </label>
+    </div>
+
+    <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div class="border-b border-slate-200 p-4">
+            <h2 class="text-lg font-semibold">Explicit Project selection</h2>
+            <p class="mt-1 text-sm text-slate-500">Manual percentage and amount inputs are used only for the matching manual strategies.</p>
+        </div>
+        <table class="min-w-full divide-y divide-slate-200 text-sm">
+            <thead class="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                <tr><th class="px-4 py-3">Select</th><th class="px-4 py-3">Project</th><th class="px-4 py-3">Status</th><th class="px-4 py-3">Revenue</th><th class="px-4 py-3">Direct cost</th><th class="px-4 py-3">Managers</th><th class="px-4 py-3">Manual %</th><th class="px-4 py-3">Manual amount</th></tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+                {% for row in projects %}
+                <tr>
+                    <td class="px-4 py-3"><input type="checkbox" name="project_ids" value="{{ row.project.id }}" class="h-4 w-4 rounded border-slate-300"></td>
+                    <td class="px-4 py-3"><div class="font-semibold">{{ row.project.code }}</div><div class="text-slate-500">{{ row.project.name }}</div><div class="text-xs text-slate-400">ID {{ row.project.id }}</div></td>
+                    <td class="px-4 py-3">{{ row.project.status }}</td>
+                    <td class="px-4 py-3">{{ row.revenue_display }}</td>
+                    <td class="px-4 py-3">{{ row.cost_display }}</td>
+                    <td class="px-4 py-3">{% for manager in row.managers %}<div>{{ manager.name }}</div>{% empty %}<span class="text-slate-400">-</span>{% endfor %}</td>
+                    <td class="px-4 py-3"><input type="number" step="0.0001" name="manual_percentage_{{ row.project.id }}" class="w-28 rounded-lg border border-slate-300 px-2 py-1"></td>
+                    <td class="px-4 py-3"><input type="number" step="0.01" name="manual_amount_{{ row.project.id }}" class="w-32 rounded-lg border border-slate-300 px-2 py-1"></td>
+                </tr>
+                {% empty %}
+                <tr><td class="px-4 py-8 text-center text-slate-500" colspan="8">No Projects available. Create Projects before generating allocations.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="flex justify-end">
+        <button type="submit" class="rounded-xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white hover:bg-slate-800">Generate draft proposal</button>
+    </div>
+</form>
+{% endblock %}

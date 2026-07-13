@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+
+{% block actions %}
+<a href="{% url 'workspace:management_allocations' %}" class="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Back</a>
+{% if version.status == "draft" %}
+<a href="{% url 'workspace:management_allocation_edit' version.id %}" class="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Edit draft</a>
+<form method="post" action="{% url 'workspace:management_allocation_approve' version.id %}" class="inline">{% csrf_token %}<button class="rounded-xl bg-green-700 px-4 py-2 text-sm font-semibold text-white hover:bg-green-800" type="submit">Approve</button></form>
+{% else %}
+<form method="post" action="{% url 'workspace:management_allocation_revise' version.id %}" class="inline">{% csrf_token %}<button class="rounded-xl bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800" type="submit">Create revised draft</button></form>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="space-y-8">
+    <div>
+        <div class="text-sm font-semibold uppercase tracking-wide text-slate-500">{{ version.period.period_label }} / {{ version.pool.name }}</div>
+        <h1 class="mt-2 text-3xl font-semibold tracking-tight text-slate-950">Allocation v{{ version.version_number }}</h1>
+        <p class="mt-2 text-sm text-slate-600">Status: <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold">{{ version.status }}</span></p>
+    </div>
+
+    <div class="grid gap-4 md:grid-cols-4">
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><div class="text-xs text-slate-500">Strategy</div><div class="mt-2 text-xl font-semibold">{{ strategy|default:"-" }}</div></div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><div class="text-xs text-slate-500">Source amount</div><div class="mt-2 text-xl font-semibold">{{ source_amount_display }}</div><div class="text-xs text-slate-500">{{ source_origin }}</div></div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><div class="text-xs text-slate-500">Allocated</div><div class="mt-2 text-xl font-semibold">{{ allocated_amount_display }}</div></div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><div class="text-xs text-slate-500">Balance</div><div class="mt-2 text-xl font-semibold {% if balanced %}text-green-700{% else %}text-red-700{% endif %}">{% if balanced %}Balanced{% else %}Unbalanced{% endif %}</div><div class="text-xs text-slate-500">Unallocated {{ unallocated_amount_display }}</div></div>
+    </div>
+
+    {% if warnings %}
+    <div class="rounded-xl border border-orange-200 bg-orange-50 p-4 text-sm text-orange-900">
+        <div class="font-semibold">Warnings</div>
+        <ul class="mt-2 list-disc pl-5">
+            {% for warning in warnings %}<li>{{ warning.code|default:warning }}</li>{% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <table class="min-w-full divide-y divide-slate-200 text-sm">
+            <thead class="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                <tr><th class="px-4 py-3">Project ID</th><th class="px-4 py-3">Code</th><th class="px-4 py-3">Name</th><th class="px-4 py-3">Status</th><th class="px-4 py-3">Percentage</th><th class="px-4 py-3">Amount</th><th class="px-4 py-3">Manual</th><th class="px-4 py-3">Notes</th></tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+                {% for entry in entries %}
+                <tr>
+                    <td class="px-4 py-3">{{ entry.project.id }}</td>
+                    <td class="px-4 py-3 font-semibold">{{ entry.project.code }}</td>
+                    <td class="px-4 py-3">{{ entry.project.name }}</td>
+                    <td class="px-4 py-3">{{ entry.project.status }}</td>
+                    <td class="px-4 py-3">{{ entry.percentage }}%</td>
+                    <td class="px-4 py-3">{{ entry.amount }}</td>
+                    <td class="px-4 py-3">{{ entry.manual_override|yesno:"Yes,No" }}</td>
+                    <td class="px-4 py-3">{{ entry.notes }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+            <tfoot class="bg-slate-50 font-semibold">
+                <tr><td class="px-4 py-3" colspan="4">Totals</td><td class="px-4 py-3">{{ total_percentage_display }}</td><td class="px-4 py-3">{{ allocated_amount_display }}</td><td class="px-4 py-3" colspan="2">Source {{ source_amount_display }}</td></tr>
+            </tfoot>
+        </table>
+    </div>
+
+    <div class="grid gap-6 lg:grid-cols-2">
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 class="text-lg font-semibold">Source diagnostics</h2>
+            <dl class="mt-4 space-y-2 text-sm">
+                <div><dt class="font-medium text-slate-600">Mapped GL accounts</dt><dd>{{ diagnostics.source.mapped_account_codes|default:"-" }}</dd></div>
+                <div><dt class="font-medium text-slate-600">Source entry count</dt><dd>{{ diagnostics.source.entry_count|default:"-" }}</dd></div>
+                <div><dt class="font-medium text-slate-600">Rounding</dt><dd>{{ diagnostics.balancing.currency_precision|default:"0.01" }}</dd></div>
+            </dl>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 class="text-lg font-semibold">Version history</h2>
+            <div class="mt-4 space-y-2 text-sm">
+                {% for row in history %}
+                <a class="flex justify-between rounded-lg border border-slate-200 px-3 py-2 hover:bg-slate-50" href="{% url 'workspace:management_allocation_detail' row.version.id %}">
+                    <span>v{{ row.version.version_number }} {{ row.version.status }}</span>
+                    <span>{{ row.allocated_amount_display }}</span>
+                </a>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

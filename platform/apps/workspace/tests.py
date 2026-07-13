@@ -23,10 +23,21 @@ from apps.accounting.models import (
     AccountingIntegration,
     AccountingSyncRun,
     AccountingSyncState,
+    AllocationStrategy,
+    ManagementAllocationEntry,
+    ManagementAllocationPeriod,
+    ManagementAllocationVersion,
+    ManagementCostPool,
+    ManagementCostPoolAccount,
+    VersionStatus,
 )
 from apps.accounting.connectors import MeritAPIClient
 from apps.accounting.services import (
+    AggregateProjectFinancialsCommand,
     CreateAccountingDimensionValueResult,
+    ManagementAllocationProposalService,
+    ManagementAllocationVersionService,
+    ApproveManagementAllocationVersionCommand,
     ProjectFinancialAggregationService,
     SyncAccountingDimensionsResult,
     SyncGeneralLedgerResult,
@@ -3850,3 +3861,231 @@ class EmailReplyDraftUITests(TestCase):
 
         draft.refresh_from_db()
         self.assertEqual(draft.status, EmailAnswerDraft.Status.DRAFT)
+
+
+class ManagementAllocationWorkspaceTests(TestCase):
+    def setUp(self):
+        self.organization = create_organization()
+        self.pool = ManagementCostPool.objects.create(
+            organization=self.organization,
+            name="Office",
+            default_strategy=AllocationStrategy.EQUAL,
+        )
+        self.first_project = create_project(self.organization, code="26124", name="First Project")
+        self.second_project = create_project(self.organization, code="26125", name="Second Project")
+
+    def _draft_version(self):
+        period = ManagementAllocationPeriod.objects.create(organization=self.organization, year=2026, month=6)
+        version = ManagementAllocationVersion.objects.create(
+            period=period,
+            pool=self.pool,
+            version_number=1,
+            metadata={
+                "strategy": AllocationStrategy.EQUAL,
+                "source_amount": "100.00",
+                "source_amount_origin": "manual",
+                "selected_project_ids": [self.first_project.id, self.second_project.id],
+                "calculation_diagnostics": {"warnings": [], "source": {"mapped_account_codes": ["5000"]}},
+            },
+        )
+        ManagementAllocationEntry.objects.create(
+            version=version,
+            project=self.first_project,
+            percentage=Decimal("50.0000"),
+            amount=Decimal("50.00"),
+        )
+        ManagementAllocationEntry.objects.create(
+            version=version,
+            project=self.second_project,
+            percentage=Decimal("50.0000"),
+            amount=Decimal("50.00"),
+        )
+        return version
+
+    def test_list_route_returns_200_and_sidebar_link_rendered(self):
+        response = self.client.get(reverse("workspace:management_allocations"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Management Allocations")
+
+    def test_list_filters_and_summary_render(self):
+        version = self._draft_version()
+
+        response = self.client.get(
+            reverse("workspace:management_allocations"),
+            {"month": "2026-06", "pool": self.pool.id, "status": VersionStatus.DRAFT},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, version.pool.name)
+        self.assertContains(response, "100,00 EUR")
+
+    def test_create_page_returns_200_and_requires_explicit_project_selection(self):
+        response = self.client.get(reverse("workspace:management_allocation_create"))
+        post_response = self.client.post(
+            reverse("workspace:management_allocation_create"),
+            {
+                "pool_id": self.pool.id,
+                "month": "2026-06",
+                "strategy": AllocationStrategy.EQUAL,
+                "source_amount_mode": "manual",
+                "source_amount": "100.00",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, self.first_project.code)
+        self.assertEqual(post_response.status_code, 200)
+        self.assertContains(post_response, "Choose at least one participating Project explicitly")
+
+    def test_valid_equal_proposal_generated_and_redirects_to_review(self):
+        response = self.client.post(
+            reverse("workspace:management_allocation_create"),
+            {
+                "pool_id": self.pool.id,
+                "month": "2026-06",
+                "strategy": AllocationStrategy.EQUAL,
+                "source_amount_mode": "manual",
+                "source_amount": "100.00",
+                "project_ids": [self.first_project.id, self.second_project.id],
+            },
+        )
+
+        version = ManagementAllocationVersion.objects.get()
+        self.assertRedirects(response, reverse("workspace:management_allocation_detail", args=[version.id]))
+        self.assertEqual(version.status, VersionStatus.DRAFT)
+        self.assertEqual(version.entries.count(), 2)
+
+    def test_create_calls_proposal_service_once_and_no_merit_api(self):
+        with patch.object(ManagementAllocationProposalService, "generate", wraps=ManagementAllocationProposalService().generate) as generate_mock:
+            with patch("apps.accounting.connectors.MeritAPIClient.request") as merit_mock:
+                self.client.post(
+                    reverse("workspace:management_allocation_create"),
+                    {
+                        "pool_id": self.pool.id,
+                        "month": "2026-06",
+                        "strategy": AllocationStrategy.EQUAL,
+                        "source_amount_mode": "manual",
+                        "source_amount": "100.00",
+                        "project_ids": [self.first_project.id, self.second_project.id],
+                    },
+                )
+
+        self.assertEqual(generate_mock.call_count, 1)
+        merit_mock.assert_not_called()
+
+    def test_detail_route_shows_source_entries_totals_warnings_and_history(self):
+        version = self._draft_version()
+
+        response = self.client.get(reverse("workspace:management_allocation_detail", args=[version.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Source amount")
+        self.assertContains(response, self.first_project.code)
+        self.assertContains(response, "Totals")
+        self.assertContains(response, "Version history")
+        self.assertNotContains(response, "api-secret")
+
+    def test_edit_draft_percentages_authoritative(self):
+        version = self._draft_version()
+
+        response = self.client.post(
+            reverse("workspace:management_allocation_edit", args=[version.id]),
+            {
+                "edit_mode": "percentages_authoritative",
+                "project_ids": [self.first_project.id, self.second_project.id],
+                f"percentage_{self.first_project.id}": "60",
+                f"percentage_{self.second_project.id}": "40",
+                f"amount_{self.first_project.id}": "0",
+                f"amount_{self.second_project.id}": "0",
+                f"manual_override_{self.first_project.id}": "on",
+                "reason": "Reviewed split",
+            },
+        )
+
+        self.assertRedirects(response, reverse("workspace:management_allocation_detail", args=[version.id]))
+        amounts = list(version.entries.order_by("project__code").values_list("amount", flat=True))
+        self.assertEqual(amounts, [Decimal("60.000000"), Decimal("40.000000")])
+        self.assertEqual(AuditEvent.objects.filter(event_type="management_allocation_draft_edited").count(), 1)
+
+    def test_edit_rejects_approved_version(self):
+        version = self._draft_version()
+        ManagementAllocationVersionService.approve(ApproveManagementAllocationVersionCommand(version=version))
+
+        response = self.client.post(
+            reverse("workspace:management_allocation_edit", args=[version.id]),
+            {
+                "edit_mode": "percentages_authoritative",
+                "project_ids": [self.first_project.id],
+                f"percentage_{self.first_project.id}": "100",
+                f"amount_{self.first_project.id}": "100",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Only draft management allocation versions can be edited")
+
+    def test_approval_post_only_and_supersedes_prior(self):
+        first = self._draft_version()
+        ManagementAllocationVersionService.approve(ApproveManagementAllocationVersionCommand(version=first))
+        second = ManagementAllocationVersion.objects.create(
+            period=first.period,
+            pool=self.pool,
+            version_number=2,
+            metadata=first.metadata,
+        )
+        ManagementAllocationEntry.objects.create(
+            version=second,
+            project=self.first_project,
+            percentage=Decimal("100.0000"),
+            amount=Decimal("100.00"),
+        )
+
+        get_response = self.client.get(reverse("workspace:management_allocation_approve", args=[second.id]))
+        post_response = self.client.post(reverse("workspace:management_allocation_approve", args=[second.id]))
+        first.refresh_from_db()
+        second.refresh_from_db()
+
+        self.assertEqual(get_response.status_code, 405)
+        self.assertRedirects(post_response, reverse("workspace:management_allocation_detail", args=[second.id]))
+        self.assertEqual(second.status, VersionStatus.APPROVED)
+        self.assertEqual(first.status, VersionStatus.SUPERSEDED)
+        self.assertEqual(
+            ManagementAllocationVersion.objects.filter(period=first.period, pool=self.pool, status=VersionStatus.APPROVED).count(),
+            1,
+        )
+
+    def test_revision_creates_new_draft_and_keeps_old_version(self):
+        version = self._draft_version()
+        ManagementAllocationVersionService.approve(ApproveManagementAllocationVersionCommand(version=version))
+
+        response = self.client.post(reverse("workspace:management_allocation_revise", args=[version.id]), {"reason": "Correction"})
+        revision = ManagementAllocationVersion.objects.order_by("-version_number").first()
+        version.refresh_from_db()
+
+        self.assertRedirects(response, reverse("workspace:management_allocation_edit", args=[revision.id]))
+        self.assertEqual(revision.status, VersionStatus.DRAFT)
+        self.assertEqual(revision.entries.count(), version.entries.count())
+        self.assertEqual(version.status, VersionStatus.APPROVED)
+        self.assertEqual(revision.metadata["revision_source_version_id"], version.id)
+
+    def test_financial_boundary_project_financials_unchanged(self):
+        version = self._draft_version()
+        before = ProjectFinancialAggregationService().aggregate(
+            AggregateProjectFinancialsCommand(
+                project=self.first_project,
+                period_start=timezone.datetime(2026, 6, 1).date(),
+                period_end=timezone.datetime(2026, 6, 30).date(),
+            )
+        )
+        ManagementAllocationVersionService.approve(ApproveManagementAllocationVersionCommand(version=version))
+        after = ProjectFinancialAggregationService().aggregate(
+            AggregateProjectFinancialsCommand(
+                project=self.first_project,
+                period_start=timezone.datetime(2026, 6, 1).date(),
+                period_end=timezone.datetime(2026, 6, 30).date(),
+            )
+        )
+
+        self.assertEqual(before.revenue, after.revenue)
+        self.assertEqual(before.total_cost, after.total_cost)

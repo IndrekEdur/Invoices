@@ -401,3 +401,29 @@ class GenerateManagementAllocationProposalResult:
     warnings: list
     created: bool
     metadata: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class UpdateManagementAllocationDraftCommand:
+    version: object
+    entries: list
+    edit_mode: str
+    reason: str = ""
+    actor: object = None
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class CreateManagementAllocationRevisionCommand:
+    source_version: object
+    reason: str = ""
+    actor: object = None
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class CreateManagementAllocationRevisionResult:
+    source_version: object
+    version: object
+    entries: list
+    metadata: dict = field(default_factory=dict)

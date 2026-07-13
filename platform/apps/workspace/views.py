@@ -28,18 +28,33 @@ from apps.communications.services import (
     RejectEmailProjectLinkCommand,
     SyncEmailAccountCommand,
 )
-from apps.accounting.models import AccountingAccountClassification, AccountingIntegration, AccountingSyncState
+from apps.accounting.models import (
+    AccountingAccountClassification,
+    AccountingIntegration,
+    AccountingSyncState,
+    AllocationStrategy,
+    ManagementAllocationVersion,
+    ManagementCostPool,
+    VersionStatus,
+)
 from apps.accounting.models import AccountingDimension
 from apps.accounting.connectors import MeritAPIClient
 from apps.accounting.services import (
     AccountingDimensionSyncService,
     AccountingDimensionValueService,
     AccountingAccountClassificationManagementService,
+    ApproveManagementAllocationVersionCommand,
+    CreateManagementAllocationRevisionCommand,
     CreateAccountingDimensionValueCommand,
+    GenerateManagementAllocationProposalCommand,
     GeneralLedgerSyncService,
+    ManagementAllocationDraftService,
+    ManagementAllocationProposalService,
+    ManagementAllocationVersionService,
     SaveAccountingAccountClassificationCommand,
     SyncGeneralLedgerCommand,
     SyncAccountingDimensionsCommand,
+    UpdateManagementAllocationDraftCommand,
 )
 from apps.core.models import Organization
 from apps.projects.models import Project
@@ -72,6 +87,7 @@ from .services import (
     OrganizationFinancialDashboardContextBuilder,
     ProjectLinkReviewContextBuilder,
     ProjectFinancialContextBuilder,
+    ManagementAllocationContextBuilder,
     ProjectsContextBuilder,
     SettingsContextBuilder,
 )
@@ -253,6 +269,184 @@ class ProjectLinkCorrectView(ProjectLinkActionMixin, View):
             f"Project link corrected and confirmed: {confirmed_link.project.code} {confirmed_link.project.name}.",
         )
         return self._redirect_back(request)
+
+
+class ManagementAllocationListView(WorkspacePageView):
+    template_name = "workspace/management_allocations.html"
+    page_title = "Management Allocations"
+    section = "management_allocations"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(
+            ManagementAllocationContextBuilder.build_list(
+                month=self.request.GET.get("month", ""),
+                pool_id=self.request.GET.get("pool", ""),
+                status=self.request.GET.get("status", ""),
+                strategy=self.request.GET.get("strategy", ""),
+                query=self.request.GET.get("q", ""),
+            )
+        )
+        return context
+
+
+class ManagementAllocationCreateView(WorkspacePageView):
+    template_name = "workspace/management_allocation_create.html"
+    page_title = "Create Management Allocation"
+    section = "management_allocations"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(ManagementAllocationContextBuilder.build_create(month=self.request.GET.get("month", "")))
+        return context
+
+    def post(self, request, *args, **kwargs):
+        pool = ManagementCostPool.objects.filter(id=request.POST.get("pool_id"), is_active=True).first()
+        if not pool:
+            messages.error(request, "Choose an active management cost pool.")
+            return self.render_to_response(self.get_context_data())
+        project_ids = request.POST.getlist("project_ids")
+        if not project_ids:
+            messages.error(request, "Choose at least one participating Project explicitly.")
+            return self.render_to_response(self.get_context_data())
+        try:
+            year, month = self._parse_month(request.POST.get("month"))
+            result = ManagementAllocationProposalService().generate(
+                GenerateManagementAllocationProposalCommand(
+                    pool=pool,
+                    year=year,
+                    month=month,
+                    project_ids=[int(project_id) for project_id in project_ids],
+                    strategy=request.POST.get("strategy") or None,
+                    source_amount=self._source_amount(request),
+                    project_manager_id=request.POST.get("project_manager_id") or None,
+                    manual_percentages=self._manual_values(request, "manual_percentage_"),
+                    manual_amounts=self._manual_values(request, "manual_amount_"),
+                    reason=request.POST.get("reason", "").strip(),
+                    actor=request.user if request.user.is_authenticated else None,
+                    metadata={"source": "workspace_management_allocation_create"},
+                )
+            )
+        except Exception as exc:
+            messages.error(request, f"Management allocation proposal could not be generated: {exc}")
+            return self.render_to_response(self.get_context_data())
+
+        messages.success(request, f"Draft allocation proposal v{result.version.version_number} generated.")
+        return redirect("workspace:management_allocation_detail", version_id=result.version.id)
+
+    @staticmethod
+    def _parse_month(value):
+        year_text, month_text = str(value or "").split("-", 1)
+        return int(year_text), int(month_text)
+
+    @staticmethod
+    def _source_amount(request):
+        if request.POST.get("source_amount_mode") == "manual":
+            return request.POST.get("source_amount") or "0"
+        return None
+
+    @staticmethod
+    def _manual_values(request, prefix):
+        values = {}
+        for key, value in request.POST.items():
+            if key.startswith(prefix) and value not in {"", None}:
+                values[int(key.replace(prefix, ""))] = value
+        return values or None
+
+
+class ManagementAllocationDetailView(WorkspacePageView):
+    template_name = "workspace/management_allocation_detail.html"
+    page_title = "Management Allocation"
+    section = "management_allocations"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(ManagementAllocationContextBuilder.build_detail(self.kwargs["version_id"]))
+        return context
+
+
+class ManagementAllocationEditView(WorkspacePageView):
+    template_name = "workspace/management_allocation_edit.html"
+    page_title = "Edit Management Allocation"
+    section = "management_allocations"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(ManagementAllocationContextBuilder.build_detail(self.kwargs["version_id"]))
+        if context["version"].status != VersionStatus.DRAFT:
+            context["edit_blocked"] = True
+        return context
+
+    def post(self, request, version_id, *args, **kwargs):
+        version = get_object_or_404(ManagementAllocationVersion, id=version_id)
+        entries = []
+        for project_id in request.POST.getlist("project_ids"):
+            entries.append(
+                {
+                    "project_id": int(project_id),
+                    "percentage": request.POST.get(f"percentage_{project_id}", "0"),
+                    "amount": request.POST.get(f"amount_{project_id}", "0"),
+                    "manual_override": request.POST.get(f"manual_override_{project_id}") == "on",
+                    "notes": request.POST.get(f"notes_{project_id}", ""),
+                }
+            )
+        try:
+            ManagementAllocationDraftService.update(
+                UpdateManagementAllocationDraftCommand(
+                    version=version,
+                    entries=entries,
+                    edit_mode=request.POST.get("edit_mode") or ManagementAllocationDraftService.EDIT_PERCENTAGES,
+                    reason=request.POST.get("reason", "").strip(),
+                    actor=request.user if request.user.is_authenticated else None,
+                    metadata={"source": "workspace_management_allocation_edit"},
+                )
+            )
+        except Exception as exc:
+            messages.error(request, f"Draft allocation could not be saved: {exc}")
+            return self.render_to_response(self.get_context_data())
+
+        messages.success(request, "Draft allocation updated.")
+        return redirect("workspace:management_allocation_detail", version_id=version.id)
+
+
+class ManagementAllocationApproveView(View):
+    def post(self, request, version_id, *args, **kwargs):
+        version = get_object_or_404(ManagementAllocationVersion.objects.select_related("period", "pool"), id=version_id)
+        try:
+            ManagementAllocationVersionService.approve(
+                ApproveManagementAllocationVersionCommand(
+                    version=version,
+                    actor=request.user if request.user.is_authenticated else None,
+                    reason=request.POST.get("reason", "").strip(),
+                    metadata={"source": "workspace_management_allocation_approval"},
+                )
+            )
+        except Exception as exc:
+            messages.error(request, f"Management allocation could not be approved: {exc}")
+            return redirect("workspace:management_allocation_detail", version_id=version.id)
+
+        messages.success(request, "Management allocation approved. Previous approved version was superseded if present.")
+        return redirect("workspace:management_allocation_detail", version_id=version.id)
+
+
+class ManagementAllocationReviseView(View):
+    def post(self, request, version_id, *args, **kwargs):
+        source = get_object_or_404(ManagementAllocationVersion, id=version_id)
+        try:
+            result = ManagementAllocationVersionService.create_revision(
+                CreateManagementAllocationRevisionCommand(
+                    source_version=source,
+                    reason=request.POST.get("reason", "").strip(),
+                    actor=request.user if request.user.is_authenticated else None,
+                    metadata={"source": "workspace_management_allocation_revision"},
+                )
+            )
+        except Exception as exc:
+            messages.error(request, f"Revised draft could not be created: {exc}")
+            return redirect("workspace:management_allocation_detail", version_id=source.id)
+
+        messages.success(request, f"Revised draft v{result.version.version_number} created.")
+        return redirect("workspace:management_allocation_edit", version_id=result.version.id)
 
 
 class EmailDraftActionMixin:
