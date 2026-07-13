@@ -1116,6 +1116,89 @@ class OrganizationFinancialDashboardTests(TestCase):
         ascending_content = ascending.content.decode().split("Project Financial Ranking", 1)[1]
         self.assertLess(ascending_content.index("Low revenue"), ascending_content.index("High revenue"))
 
+    def test_financial_dashboard_chart_renders_revenue_cost_result_and_margin(self):
+        _organization, _integration, project = self._project_with_activity(
+            code="26190",
+            name="Chart metrics",
+            revenue="1000.000000",
+            cost="250.000000",
+        )
+
+        response = self.client.get(reverse("workspace:financial_dashboard"), {"month": "2026-06", "currency": "EUR"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Project Revenue, Cost and Result Comparison")
+        self.assertContains(response, f"{project.code} {project.name} Revenue: 1 000,00 EUR")
+        self.assertContains(response, f"{project.code} {project.name} Cost: 250,00 EUR")
+        self.assertContains(response, f"{project.code} {project.name} Result: 750,00 EUR")
+        self.assertContains(response, "75,00%")
+        self.assertContains(response, "Project Financial Ranking")
+
+    def test_financial_dashboard_chart_revenue_zero_gives_no_margin(self):
+        _organization, _integration, project = self._project_with_activity(
+            code="26191",
+            name="Cost without revenue chart",
+            revenue=None,
+            cost="250.000000",
+        )
+
+        response = self.client.get(reverse("workspace:financial_dashboard"), {"month": "2026-06", "currency": "EUR"})
+
+        chart_section = response.content.decode().split("Project Revenue, Cost and Result Comparison", 1)[1].split("Project Financial Ranking", 1)[0]
+        self.assertIn(project.name, chart_section)
+        self.assertIn("Margin", chart_section)
+        self.assertIn("-", chart_section)
+
+    def test_financial_dashboard_chart_negative_result_uses_negative_style(self):
+        _organization, _integration, project = self._project_with_activity(
+            code="26192",
+            name="Negative result chart",
+            revenue="100.000000",
+            cost="250.000000",
+        )
+
+        response = self.client.get(reverse("workspace:financial_dashboard"), {"month": "2026-06", "currency": "EUR"})
+
+        self.assertContains(response, f"{project.code} {project.name} Result: -150,00 EUR")
+        self.assertContains(response, "bg-red-500")
+        self.assertContains(response, "left: 20.00%; width: 30.00%;")
+
+    def test_financial_dashboard_chart_uses_shared_monetary_scale(self):
+        organization, integration = self._setup()
+        largest = create_project(organization, code="26193", name="Largest chart")
+        smaller = create_project(organization, code="26194", name="Smaller chart")
+        self._allocation(largest, integration, "3000", "-1000.000000", suffix="largest-rev")
+        self._allocation(smaller, integration, "3000", "-500.000000", suffix="smaller-rev")
+        self._allocation(smaller, integration, "4000", "250.000000", suffix="smaller-cost")
+
+        response = self.client.get(reverse("workspace:financial_dashboard"), {"month": "2026-06", "currency": "EUR"})
+        chart_rows = response.context["chart_rows"]
+
+        self.assertEqual(chart_rows[0]["row"].project_code, largest.code)
+        self.assertEqual(chart_rows[0]["metrics"][0]["width_percent"], "100.00")
+        self.assertEqual(chart_rows[1]["metrics"][0]["width_percent"], "50.00")
+        self.assertEqual(chart_rows[1]["metrics"][1]["width_percent"], "25.00")
+
+    def test_financial_dashboard_chart_top_10_and_data_quality_marker(self):
+        organization, integration = self._setup()
+        for index in range(12):
+            project = create_project(organization, code=f"262{index:02d}", name=f"Chart top {index:02d}")
+            self._allocation(project, integration, "3000", f"-{1000 - index}.000000", suffix=f"rev-{index}")
+        unclassified = create_project(organization, code="26299", name="Chart unclassified")
+        self._allocation(unclassified, integration, "3000", "-100.000000", suffix="unclassified-rev")
+        self._allocation(unclassified, integration, "9999", "5000.000000", suffix="unclassified")
+
+        response = self.client.get(reverse("workspace:financial_dashboard"), {"month": "2026-06", "sort": "revenue", "direction": "desc"})
+        chart_section = response.content.decode().split("Project Revenue, Cost and Result Comparison", 1)[1].split("Project Financial Ranking", 1)[0]
+
+        self.assertEqual(len(response.context["chart_rows"]), 10)
+        self.assertIn("Chart top 00", chart_section)
+        self.assertNotIn("Chart top 10", chart_section)
+
+        unclassified_response = self.client.get(reverse("workspace:financial_dashboard"), {"month": "2026-06", "search": "Chart unclassified"})
+        self.assertContains(unclassified_response, "Chart unclassified")
+        self.assertContains(unclassified_response, "unclassified")
+
     def test_summary_cards_use_totals_and_overall_margin(self):
         organization, integration = self._setup()
         first = create_project(organization, code="26181", name="First")

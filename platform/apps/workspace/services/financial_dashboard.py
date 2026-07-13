@@ -114,7 +114,7 @@ class OrganizationFinancialDashboardContextBuilder:
             "summary_cards": cls._summary_cards(rows, filters),
             "totals_by_currency": cls._totals_by_currency(rows),
             "currency_warning": cls._currency_warning(rows, filters),
-            "chart_rows": cls._chart_rows(rows, filters),
+            "chart_rows": cls._chart_rows(rows),
             "sync_context": cls._sync_context(organization, filters),
             "sort_links": cls._sort_links(filters),
             "query_without_page": query_without_page,
@@ -379,25 +379,78 @@ class OrganizationFinancialDashboardContextBuilder:
         return ""
 
     @classmethod
-    def _chart_rows(cls, rows, filters):
-        top_rows = cls._sort_rows(rows, "revenue", "desc")[:10]
-        max_value = max([row.revenue for row in top_rows] + [ZERO])
+    def _chart_rows(cls, rows):
+        top_rows = rows[:10]
+        max_value = max(
+            [abs(value) for row in top_rows for value in [row.revenue, row.total_cost, row.result]] + [ZERO]
+        )
+        if max_value == ZERO:
+            return []
+        has_negative = any(row.result < ZERO for row in top_rows)
         chart_rows = []
         for row in top_rows:
-            width = Decimal("0")
-            if max_value:
-                width = (row.revenue / max_value * Decimal("100")).quantize(Decimal("0.01"))
             chart_rows.append(
                 {
                     "row": row,
-                    "width": f"{width:.2f}",
-                    "revenue_display": format_money(row.revenue, row.currency),
-                    "cost_display": format_money(row.total_cost, row.currency),
-                    "result_display": format_money(row.result, row.currency),
-                    "aria_label": f"{row.project_code} {row.project_name}: revenue {format_money(row.revenue, row.currency)}, cost {format_money(row.total_cost, row.currency)}, result {format_money(row.result, row.currency)}",
+                    "project_label": f"{row.project_code} {row.project_name}",
+                    "margin_display": row.margin_display,
+                    "max_value_display": format_money(max_value, row.currency),
+                    "has_negative": has_negative,
+                    "metrics": [
+                        cls._chart_metric(
+                            row=row,
+                            label="Revenue",
+                            value=row.revenue,
+                            max_value=max_value,
+                            has_negative=has_negative,
+                            css_class="bg-blue-500",
+                        ),
+                        cls._chart_metric(
+                            row=row,
+                            label="Cost",
+                            value=row.total_cost,
+                            max_value=max_value,
+                            has_negative=has_negative,
+                            css_class="bg-slate-500",
+                        ),
+                        cls._chart_metric(
+                            row=row,
+                            label="Result",
+                            value=row.result,
+                            max_value=max_value,
+                            has_negative=has_negative,
+                            css_class="bg-green-500" if row.result >= ZERO else "bg-red-500",
+                        ),
+                    ],
+                    "aria_label": (
+                        f"{row.project_code} {row.project_name}: revenue {row.revenue_display}, "
+                        f"cost {row.total_cost_display}, result {row.result_display}, margin {row.margin_display}"
+                    ),
                 }
             )
         return chart_rows
+
+    @staticmethod
+    def _chart_metric(row, label, value, max_value, has_negative, css_class):
+        scale = Decimal("50") if has_negative else Decimal("100")
+        width = Decimal("0")
+        if max_value:
+            width = (abs(value) / max_value * scale).quantize(Decimal("0.01"))
+        if has_negative:
+            left = Decimal("50.00") - width if value < ZERO else Decimal("50.00")
+        else:
+            left = Decimal("0.00")
+        display_value = format_money(value, row.currency)
+        return {
+            "label": label,
+            "value": value,
+            "display_value": display_value,
+            "width_percent": f"{width:.2f}",
+            "left_percent": f"{left:.2f}",
+            "is_negative": value < ZERO,
+            "css_class": css_class,
+            "aria_label": f"{row.project_code} {row.project_name} {label}: {display_value}",
+        }
 
     @staticmethod
     def _sync_context(organization, filters):
