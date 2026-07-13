@@ -53,3 +53,24 @@ class UpdateProjectDetailsCommand:
     end_date: object = None
     actor: object = None
     metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class CreateProjectFromAccountingDimensionCommand:
+    accounting_dimension: object
+    project_name: str | None = None
+    project_type: str = "electrical"
+    status: str = "active"
+    description: str = ""
+    actor: object = None
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class CreateProjectFromAccountingDimensionResult:
+    project: object
+    accounting_dimension: object
+    created: bool
+    linked_allocation_count: int
+    message: str
+    metadata: dict = field(default_factory=dict)

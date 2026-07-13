@@ -27,6 +27,7 @@ from apps.communications.services import (
     SyncEmailAccountCommand,
 )
 from apps.accounting.models import AccountingAccountClassification, AccountingIntegration
+from apps.accounting.models import AccountingDimension
 from apps.accounting.connectors import MeritAPIClient
 from apps.accounting.services import (
     AccountingDimensionSyncService,
@@ -40,7 +41,9 @@ from apps.core.models import Organization
 from apps.projects.models import Project
 from apps.projects.services import (
     ChangeProjectStatusCommand,
+    CreateProjectFromAccountingDimensionCommand,
     CreateProjectWithSuggestedCodeCommand,
+    ProjectDimensionImportService,
     ProjectCreationService,
     ProjectDetailsService,
     ProjectStatusService,
@@ -473,6 +476,40 @@ class ProjectStatusView(View):
         else:
             messages.info(request, result.message)
         return redirect("workspace:project_detail", project_id=project.id)
+
+
+class ProjectCreateFromDimensionView(View):
+    def post(self, request, dimension_id, *args, **kwargs):
+        organization = ProjectsContextBuilder.get_default_organization()
+        dimension = AccountingDimension.objects.filter(id=dimension_id)
+        if organization:
+            dimension = dimension.filter(organization=organization)
+        dimension = dimension.select_related("organization", "integration").first()
+        if not dimension:
+            messages.error(request, "Accounting dimension was not found.")
+            return redirect("workspace:projects")
+
+        try:
+            result = ProjectDimensionImportService.create_project(
+                CreateProjectFromAccountingDimensionCommand(
+                    accounting_dimension=dimension,
+                    project_name=request.POST.get("project_name") or None,
+                    project_type=request.POST.get("project_type") or Project.Type.ELECTRICAL,
+                    status=Project.Status.ACTIVE,
+                    description=request.POST.get("description", ""),
+                    actor=request.user if request.user.is_authenticated else None,
+                    metadata={"source": "workspace_project_from_dimension"},
+                )
+            )
+        except Exception:
+            messages.error(request, "Workspace project could not be created from the accounting dimension.")
+            return redirect("workspace:projects")
+
+        messages.success(
+            request,
+            f"{result.message} Linked GL allocations: {result.linked_allocation_count}.",
+        )
+        return redirect("workspace:project_detail", project_id=result.project.id)
 
 
 class ProjectCreateView(WorkspacePageView):

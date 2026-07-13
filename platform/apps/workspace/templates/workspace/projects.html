@@ -75,6 +75,7 @@
                                 <th class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Name</th>
                                 <th class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Status</th>
                                 <th class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Type</th>
+                                <th class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Dimension</th>
                                 <th class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Accounting</th>
                                 <th class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Created</th>
                                 <th class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Updated</th>
@@ -101,6 +102,21 @@
                                         {% endif %}
                                     </td>
                                     <td class="px-5 py-4 text-slate-700">{{ row.project_type|default:"-" }}</td>
+                                    <td class="px-5 py-4 text-slate-700">
+                                        {% if row.dimension %}
+                                            <div class="font-semibold text-slate-950">#{{ row.dimension.id }}</div>
+                                            <div class="mt-1 text-xs text-slate-500">{{ row.dimension.provider }}{% if row.dimension.integration %} / {{ row.dimension.integration.display_name }}{% endif %}</div>
+                                            <div class="mt-2">
+                                                {% if row.dimension.is_active %}
+                                                    {% include "workspace/partials/components/status_badge.html" with status="success" label="active" %}
+                                                {% else %}
+                                                    {% include "workspace/partials/components/status_badge.html" with status="neutral" label="inactive" %}
+                                                {% endif %}
+                                            </div>
+                                        {% else %}
+                                            <span class="text-slate-400">-</span>
+                                        {% endif %}
+                                    </td>
                                     <td class="px-5 py-4">
                                         {% if row.sync_status == "linked" %}
                                             {% include "workspace/partials/components/status_badge.html" with status="success" label="linked" %}
@@ -121,7 +137,11 @@
                                                 <a href="{% url 'workspace:project_detail' row.project.id %}#lifecycle" class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">Change status</a>
                                             </div>
                                         {% else %}
-                                            <span class="text-xs text-slate-500">Create Workspace Project first</span>
+                                            <form method="post" action="{% url 'workspace:project_create_from_dimension' row.dimension.id %}">
+                                                {% csrf_token %}
+                                                <input type="hidden" name="project_name" value="{{ row.dimension.name }}">
+                                                <button type="submit" class="rounded-lg bg-slate-950 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800">Create Workspace Project</button>
+                                            </form>
                                         {% endif %}
                                     </td>
                                 </tr>

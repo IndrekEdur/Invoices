@@ -1,14 +1,17 @@
 from django.db import IntegrityError
 from django.test import TestCase
+from django.utils import timezone
 from unittest.mock import patch
 
-from apps.accounting.models import AccountingDimension
+from apps.accounting.models import AccountingDimension, AccountingGLAllocation, AccountingGLBatch, AccountingGLEntry, AccountingIntegration
 from apps.accounting.services import ProjectCodeSuggestion
 from apps.core.models import AuditEvent
 from apps.core.services import CreateOrganizationCommand, OrganizationService
 from apps.projects.services import (
     ChangeProjectStatusCommand,
+    CreateProjectFromAccountingDimensionCommand,
     CreateProjectWithSuggestedCodeCommand,
+    ProjectDimensionImportService,
     ProjectCreationService,
     ProjectStatusService,
 )
@@ -26,6 +29,45 @@ def create_project(organization=None, code="26070", name="Kanarbiku"):
         organization=organization,
         code=code,
         name=name,
+    )
+
+
+def create_integration(organization):
+    return AccountingIntegration.objects.create(
+        organization=organization,
+        provider=AccountingIntegration.Provider.MERIT,
+        display_name="Merit",
+        api_base_url="https://merit.example.test",
+    )
+
+
+def create_gl_allocation(organization, code, dimension=None, project=None, amount="100.000000"):
+    integration = dimension.integration if dimension and dimension.integration else create_integration(organization)
+    batch = AccountingGLBatch.objects.create(
+        organization=organization,
+        integration=integration,
+        external_id=f"batch-{code}-{AccountingGLBatch.objects.count()}",
+        batch_date=timezone.datetime(2026, 6, 1).date(),
+        currency_code="EUR",
+    )
+    entry = AccountingGLEntry.objects.create(
+        organization=organization,
+        integration=integration,
+        batch=batch,
+        external_id=f"entry-{code}-{AccountingGLEntry.objects.count()}",
+        account_code="4000",
+        account_name="Materials",
+    )
+    return AccountingGLAllocation.objects.create(
+        organization=organization,
+        integration=integration,
+        entry=entry,
+        external_id=f"allocation-{code}-{AccountingGLAllocation.objects.count()}",
+        dimension_code=code,
+        dimension_name=dimension.name if dimension else "",
+        amount=amount,
+        accounting_dimension=dimension,
+        project=project,
     )
 
 
@@ -546,3 +588,145 @@ class ProjectStatusServiceTests(TestCase):
 
         dimension.refresh_from_db()
         self.assertTrue(dimension.is_active)
+
+
+class ProjectDimensionImportServiceTests(TestCase):
+    def test_creates_project_from_accounting_dimension(self):
+        organization = create_organization()
+        dimension = AccountingDimension.objects.create(
+            organization=organization,
+            code="27001",
+            name="Merit project",
+        )
+
+        result = ProjectDimensionImportService.create_project(
+            CreateProjectFromAccountingDimensionCommand(accounting_dimension=dimension)
+        )
+
+        self.assertTrue(result.created)
+        self.assertEqual(result.project.organization, organization)
+        self.assertEqual(result.project.code, "27001")
+        self.assertEqual(result.project.name, "Merit project")
+        self.assertEqual(result.project.status, Project.Status.ACTIVE)
+        self.assertEqual(result.project.project_type, Project.Type.ELECTRICAL)
+
+    def test_existing_project_is_not_duplicated(self):
+        organization = create_organization()
+        existing = create_project(organization, code="27002", name="Existing")
+        dimension = AccountingDimension.objects.create(
+            organization=organization,
+            code="27002",
+            name="Merit project",
+        )
+
+        result = ProjectDimensionImportService.create_project(
+            CreateProjectFromAccountingDimensionCommand(accounting_dimension=dimension)
+        )
+
+        self.assertFalse(result.created)
+        self.assertEqual(result.project, existing)
+        self.assertEqual(Project.objects.filter(organization=organization, code="27002").count(), 1)
+
+    def test_non_project_dimension_is_rejected(self):
+        organization = create_organization()
+        dimension = AccountingDimension.objects.create(
+            organization=organization,
+            code="D001",
+            name="Department",
+            dimension_type=AccountingDimension.DimensionType.DEPARTMENT,
+        )
+
+        with self.assertRaises(ValueError):
+            ProjectDimensionImportService.create_project(
+                CreateProjectFromAccountingDimensionCommand(accounting_dimension=dimension)
+            )
+
+        self.assertFalse(Project.objects.filter(code="D001").exists())
+
+    def test_creates_audit_event(self):
+        organization = create_organization()
+        dimension = AccountingDimension.objects.create(organization=organization, code="27003", name="Audited")
+
+        result = ProjectDimensionImportService.create_project(
+            CreateProjectFromAccountingDimensionCommand(accounting_dimension=dimension)
+        )
+
+        audit = AuditEvent.objects.get(event_type="project.created_from_accounting_dimension")
+        self.assertEqual(audit.object_id, str(result.project.id))
+        self.assertEqual(audit.metadata["accounting_dimension_id"], dimension.id)
+        self.assertEqual(audit.metadata["created"], True)
+
+    def test_metadata_is_not_mutated(self):
+        organization = create_organization()
+        dimension = AccountingDimension.objects.create(organization=organization, code="27004", name="Metadata")
+        metadata = {"source": {"nested": "value"}}
+        original = {"source": {"nested": "value"}}
+
+        result = ProjectDimensionImportService.create_project(
+            CreateProjectFromAccountingDimensionCommand(accounting_dimension=dimension, metadata=metadata)
+        )
+        result.metadata["source"] = "changed"
+
+        self.assertEqual(metadata, original)
+
+    def test_matching_gl_allocations_are_linked(self):
+        organization = create_organization()
+        integration = create_integration(organization)
+        dimension = AccountingDimension.objects.create(
+            organization=organization,
+            integration=integration,
+            code="27005",
+            name="Allocation project",
+        )
+        matching = create_gl_allocation(organization, "27005", dimension=dimension)
+        no_dimension_match = create_gl_allocation(organization, "27005")
+        non_matching = create_gl_allocation(organization, "99999")
+
+        result = ProjectDimensionImportService.create_project(
+            CreateProjectFromAccountingDimensionCommand(accounting_dimension=dimension)
+        )
+
+        matching.refresh_from_db()
+        no_dimension_match.refresh_from_db()
+        non_matching.refresh_from_db()
+        self.assertEqual(result.linked_allocation_count, 2)
+        self.assertEqual(matching.project, result.project)
+        self.assertEqual(no_dimension_match.project, result.project)
+        self.assertIsNone(non_matching.project)
+
+    def test_cross_organization_allocations_are_not_linked(self):
+        organization = create_organization("Visible")
+        other = create_organization("Other")
+        dimension = AccountingDimension.objects.create(organization=organization, code="27006", name="Visible")
+        other_allocation = create_gl_allocation(other, "27006")
+
+        result = ProjectDimensionImportService.create_project(
+            CreateProjectFromAccountingDimensionCommand(accounting_dimension=dimension)
+        )
+
+        other_allocation.refresh_from_db()
+        self.assertEqual(result.linked_allocation_count, 0)
+        self.assertIsNone(other_allocation.project)
+
+    def test_api_is_not_called(self):
+        organization = create_organization()
+        dimension = AccountingDimension.objects.create(organization=organization, code="27007", name="No API")
+
+        with patch("apps.accounting.connectors.MeritAPIClient.request") as request_mock:
+            ProjectDimensionImportService.create_project(
+                CreateProjectFromAccountingDimensionCommand(accounting_dimension=dimension)
+            )
+
+        request_mock.assert_not_called()
+
+    def test_transaction_rollback(self):
+        organization = create_organization()
+        dimension = AccountingDimension.objects.create(organization=organization, code="27008", name="Rollback")
+
+        with patch("apps.projects.services.dimension_import.AuditService.record", side_effect=RuntimeError("audit")):
+            with self.assertRaises(RuntimeError):
+                ProjectDimensionImportService.create_project(
+                    CreateProjectFromAccountingDimensionCommand(accounting_dimension=dimension)
+                )
+
+        self.assertFalse(Project.objects.filter(code="27008").exists())

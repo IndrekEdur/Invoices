@@ -34,7 +34,12 @@ from apps.core.services import CreateOrganizationCommand, OrganizationService
 from apps.documents.models import Document
 from apps.knowledge.services import ProjectKnowledgeBuilder
 from apps.projects.models import Project, ProjectAddress, ProjectParty
-from apps.projects.services import ChangeProjectStatusCommand, CreateProjectWithSuggestedCodeResult, ProjectStatusService
+from apps.projects.services import (
+    ChangeProjectStatusCommand,
+    CreateProjectFromAccountingDimensionResult,
+    CreateProjectWithSuggestedCodeResult,
+    ProjectStatusService,
+)
 from apps.workflow.models import WorkflowDefinition, WorkflowInstance, WorkflowState
 
 
@@ -2030,8 +2035,135 @@ class ProjectListManagementUITests(TestCase):
         response = self.client.get(reverse("workspace:projects"))
 
         self.assertContains(response, "Only in Merit")
-        self.assertContains(response, "Create Workspace Project first")
+        self.assertContains(response, "Create Workspace Project")
         self.assertNotContains(response, "/workspace/projects/26149/edit/")
+
+    def test_missing_dimension_row_shows_dimension_details_and_create_action(self):
+        organization = create_organization()
+        integration = create_merit_integration(organization)
+        dimension = AccountingDimension.objects.create(
+            organization=organization,
+            integration=integration,
+            code="26156",
+            name="Merit only detail",
+            provider=AccountingDimension.Provider.MERIT,
+            is_active=True,
+        )
+
+        response = self.client.get(reverse("workspace:projects"))
+
+        self.assertContains(response, f"#{dimension.id}")
+        self.assertContains(response, "merit")
+        self.assertContains(response, "Merit Aktiva")
+        self.assertContains(response, "active")
+        self.assertContains(response, reverse("workspace:project_create_from_dimension", args=[dimension.id]))
+        self.assertContains(response, "Create Workspace Project")
+
+    def test_create_from_dimension_get_does_not_mutate(self):
+        organization = create_organization()
+        dimension = AccountingDimension.objects.create(
+            organization=organization,
+            code="26157",
+            name="GET no mutate",
+        )
+
+        response = self.client.get(reverse("workspace:project_create_from_dimension", args=[dimension.id]))
+
+        self.assertEqual(response.status_code, 405)
+        self.assertFalse(Project.objects.filter(code="26157").exists())
+
+    @patch("apps.workspace.views.ProjectDimensionImportService.create_project")
+    def test_create_from_dimension_post_calls_service(self, import_mock):
+        organization = create_organization()
+        dimension = AccountingDimension.objects.create(
+            organization=organization,
+            code="26158",
+            name="Import through UI",
+        )
+        project = Project.objects.create(
+            organization=organization,
+            code="26158",
+            name="Import through UI",
+        )
+        import_mock.return_value = CreateProjectFromAccountingDimensionResult(
+            project=project,
+            accounting_dimension=dimension,
+            created=True,
+            linked_allocation_count=0,
+            message="created",
+        )
+
+        response = self.client.post(reverse("workspace:project_create_from_dimension", args=[dimension.id]))
+
+        self.assertRedirects(response, reverse("workspace:project_detail", args=[project.id]))
+        import_mock.assert_called_once()
+        command = import_mock.call_args.args[0]
+        self.assertEqual(command.accounting_dimension, dimension)
+        self.assertEqual(command.status, Project.Status.ACTIVE)
+        self.assertEqual(command.project_type, Project.Type.ELECTRICAL)
+
+    def test_create_from_dimension_relinks_gl_and_financials_are_available(self):
+        organization = create_organization()
+        project_code = "26159"
+        integration, _batch, _entry, allocation = create_gl_account(
+            organization,
+            account_code="4002",
+            account_name="Materials",
+        )
+        allocation.dimension_code = project_code
+        allocation.dimension_name = "Imported Merit project"
+        allocation.project = None
+        allocation.save(update_fields=["dimension_code", "dimension_name", "project"])
+        AccountingAccountClassification.objects.create(
+            organization=organization,
+            integration=integration,
+            account_code="4002",
+            account_name="Materials",
+            category=AccountingAccountClassification.Category.MATERIAL_COST,
+            reporting_sign="1",
+        )
+        dimension = AccountingDimension.objects.create(
+            organization=organization,
+            integration=integration,
+            code=project_code,
+            name="Imported Merit project",
+        )
+        allocation.accounting_dimension = dimension
+        allocation.save(update_fields=["accounting_dimension"])
+
+        response = self.client.post(reverse("workspace:project_create_from_dimension", args=[dimension.id]))
+
+        project = Project.objects.get(code=project_code)
+        self.assertRedirects(response, reverse("workspace:project_detail", args=[project.id]))
+        allocation.refresh_from_db()
+        self.assertEqual(allocation.project, project)
+        financials = self.client.get(
+            reverse("workspace:project_financials", args=[project.id]),
+            {"period": "custom", "start": "2026-06-01", "end": "2026-06-30"},
+        )
+        self.assertEqual(financials.status_code, 200)
+        self.assertContains(financials, "75.000000")
+
+    def test_projects_list_changes_to_linked_after_dimension_import(self):
+        organization = create_organization()
+        dimension = AccountingDimension.objects.create(
+            organization=organization,
+            code="26160",
+            name="Linked after import",
+        )
+
+        before = self.client.get(reverse("workspace:projects"))
+        self.assertContains(before, "missing_in_workspace")
+
+        self.client.post(reverse("workspace:project_create_from_dimension", args=[dimension.id]))
+        after = self.client.get(reverse("workspace:projects"))
+
+        project = Project.objects.get(code="26160")
+        self.assertContains(after, str(project.id))
+        self.assertContains(after, "active")
+        self.assertContains(after, "linked")
+        self.assertContains(after, reverse("workspace:project_edit", args=[project.id]))
+        self.assertContains(after, reverse("workspace:project_financials", args=[project.id]))
 
     def test_project_edit_page_returns_200_and_shows_read_only_identity(self):
         organization = create_organization()
