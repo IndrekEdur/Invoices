@@ -92,6 +92,7 @@ from .services import (
     ProjectsContextBuilder,
     SettingsContextBuilder,
 )
+from .services.formatting import format_money, format_percent
 
 
 class WorkspacePageView(TemplateView):
@@ -295,13 +296,89 @@ class ManagementAllocationCreateView(WorkspacePageView):
     template_name = "workspace/management_allocation_create.html"
     page_title = "Create Management Allocation"
     section = "management_allocations"
+    session_key = "management_allocation_wizard"
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context.update(self._build_create_context(self.request.GET))
+        state = self._wizard_state()
+        if self.request.GET:
+            display_data = self._merge_wizard_state(state, self.request.GET)
+            if "month" in self.request.GET or "recipient_preselection" in self.request.GET or "project_q" in self.request.GET:
+                display_data["step"] = 3
+        else:
+            display_data = state
+        selected_project_ids = display_data.get("project_ids") if display_data else None
+        preserve_selection = bool(selected_project_ids)
+        context.update(
+            self._build_create_context(
+                display_data,
+                selected_project_ids=selected_project_ids,
+                preserve_selection=preserve_selection,
+            )
+        )
+        context.update(self._wizard_context(display_data, context))
         return context
 
     def post(self, request, *args, **kwargs):
+        action = request.POST.get("_wizard_action")
+        if not action:
+            return self._direct_create(request)
+        if action in {"cancel", "start_over"}:
+            self._clear_wizard()
+            messages.info(request, "Management allocation wizard cleared.")
+            return redirect("workspace:management_allocations")
+
+        state = self._merge_wizard_state(self._wizard_state(), request.POST)
+        current_step = int(state.get("step") or 1)
+        try:
+            if action == "back":
+                state["step"] = max(1, current_step - 1)
+                self._save_wizard(state)
+                return redirect("workspace:management_allocation_create")
+            if action == "continue":
+                self._validate_wizard_state(state, through_step=current_step)
+                state["step"] = min(5, current_step + 1)
+                self._drop_preview(state)
+                self._save_wizard(state)
+                return redirect("workspace:management_allocation_create")
+            if action == "preview":
+                self._validate_wizard_state(state, through_step=3)
+                preview = self._preview_from_state(state)
+                state["preview_fingerprint"] = preview.metadata["fingerprint"]
+                state["previewed_at"] = preview.metadata.get("generated_at", "")
+                state["step"] = 5
+                self._save_wizard(state)
+                return redirect("workspace:management_allocation_create")
+            if action == "create_draft":
+                self._validate_wizard_state(state, through_step=5)
+                preview = self._preview_from_state(state)
+                if state.get("preview_fingerprint") != preview.metadata["fingerprint"]:
+                    state["step"] = 4
+                    self._drop_preview(state)
+                    self._save_wizard(state)
+                    messages.warning(request, "Preview is stale. Review the refreshed allocation preview before creating a draft.")
+                    return redirect("workspace:management_allocation_create")
+                result = ManagementAllocationProposalService().generate(
+                    self._command_from_state(
+                        state,
+                        actor=request.user if request.user.is_authenticated else None,
+                        metadata=self._wizard_metadata(state, preview),
+                    )
+                )
+                self._clear_wizard()
+                messages.success(request, f"Draft allocation proposal v{result.version.version_number} generated.")
+                return redirect("workspace:management_allocation_detail", version_id=result.version.id)
+        except Exception as exc:
+            state["last_error"] = str(exc)
+            self._save_wizard(state)
+            messages.error(request, f"Management allocation wizard needs attention: {exc}")
+            return redirect("workspace:management_allocation_create")
+
+        messages.error(request, "Unsupported wizard action.")
+        self._save_wizard(state)
+        return redirect("workspace:management_allocation_create")
+
+    def _direct_create(self, request):
         source_type = request.POST.get("source_type") or AllocationSourceType.COST_POOL
         pool = None
         source_project = None
@@ -361,6 +438,226 @@ class ManagementAllocationCreateView(WorkspacePageView):
 
         messages.success(request, f"Draft allocation proposal v{result.version.version_number} generated.")
         return redirect("workspace:management_allocation_detail", version_id=result.version.id)
+
+    def _wizard_state(self):
+        state = self.request.session.get(self.session_key, {})
+        if not isinstance(state, dict):
+            return {}
+        return state
+
+    def _save_wizard(self, state):
+        self.request.session[self.session_key] = state
+        self.request.session.modified = True
+
+    def _clear_wizard(self):
+        self.request.session.pop(self.session_key, None)
+        self.request.session.modified = True
+
+    def _merge_wizard_state(self, current, data):
+        state = dict(current or {})
+        state["step"] = int(state.get("step") or 1)
+        scalar_fields = [
+            "source_type",
+            "pool_id",
+            "source_project_id",
+            "month",
+            "source_amount_basis",
+            "source_currency",
+            "source_amount_mode",
+            "source_amount",
+            "reason",
+            "strategy",
+            "project_manager_id",
+            "recipient_preselection",
+            "project_q",
+            "project_status",
+            "project_filter",
+            "sort",
+            "suggested_project_ids",
+        ]
+        for field in scalar_fields:
+            if field in data:
+                state[field] = data.get(field, "")
+        if "project_ids" in data:
+            state["project_ids"] = [str(item) for item in data.getlist("project_ids")]
+        manual_percentages = {}
+        manual_amounts = {}
+        for key, value in data.items():
+            if key.startswith("manual_percentage_") and value not in {"", None}:
+                manual_percentages[key.replace("manual_percentage_", "")] = value
+            if key.startswith("manual_amount_") and value not in {"", None}:
+                manual_amounts[key.replace("manual_amount_", "")] = value
+        if manual_percentages or "project_ids" in data:
+            state["manual_percentages"] = manual_percentages
+        if manual_amounts or "project_ids" in data:
+            state["manual_amounts"] = manual_amounts
+        state.setdefault("source_type", AllocationSourceType.COST_POOL)
+        state.setdefault("source_amount_mode", "derive")
+        state.setdefault("recipient_preselection", ManagementAllocationContextBuilder.PRESELECTION_POSITIVE_REVENUE)
+        state.setdefault("strategy", AllocationStrategy.REVENUE)
+        state.setdefault("project_ids", [])
+        return state
+
+    def _wizard_context(self, state, create_context):
+        step = int(state.get("step") or 1)
+        preview = None
+        preview_error = ""
+        if state.get("preview_fingerprint") or step >= 4:
+            try:
+                preview = self._preview_from_state(state)
+            except Exception as exc:
+                preview_error = str(exc)
+        preview_rows = self._preview_rows(preview) if preview else []
+        preview_fresh = bool(preview and state.get("preview_fingerprint") == preview.metadata["fingerprint"])
+        return {
+            "wizard_step": step,
+            "wizard_steps": self._wizard_steps(step),
+            "wizard_state": state,
+            "selected_pool_id": str(state.get("pool_id", "")),
+            "selected_strategy": state.get("strategy", AllocationStrategy.REVENUE),
+            "selected_source_amount_basis": state.get("source_amount_basis", ""),
+            "source_amount_mode": state.get("source_amount_mode", "derive"),
+            "source_amount": state.get("source_amount", ""),
+            "reason": state.get("reason", ""),
+            "selected_project_manager_id": str(state.get("project_manager_id", "")),
+            "manual_percentages": state.get("manual_percentages", {}),
+            "manual_amounts": state.get("manual_amounts", {}),
+            "preview": preview,
+            "preview_rows": preview_rows,
+            "preview_error": preview_error,
+            "preview_fresh": preview_fresh,
+            "preview_source_amount_display": format_money(preview.source_amount, preview.source_currency or "EUR") if preview else "",
+            "preview_allocated_display": format_money(preview.allocated_amount, preview.source_currency or "EUR") if preview else "",
+            "preview_unallocated_display": format_money(preview.unallocated_amount, preview.source_currency or "EUR") if preview else "",
+            "preview_total_percentage_display": format_percent(preview.total_percentage, places=4) if preview else "",
+            "can_create_draft": bool(preview and preview_fresh and not preview.blocking_errors),
+            "selected_count": len(state.get("project_ids") or create_context.get("selected_project_ids") or []),
+        }
+
+    @staticmethod
+    def _wizard_steps(current_step):
+        labels = [
+            (1, "Source"),
+            (2, "Period and amount"),
+            (3, "Recipient Projects"),
+            (4, "Allocation preview"),
+            (5, "Create draft"),
+        ]
+        return [
+            {
+                "number": number,
+                "label": label,
+                "current": number == current_step,
+                "complete": number < current_step,
+            }
+            for number, label in labels
+        ]
+
+    def _validate_wizard_state(self, state, *, through_step):
+        organization = ManagementAllocationContextBuilder.get_default_organization()
+        if not organization:
+            raise ValueError("No Organization is available for management allocations.")
+        if through_step >= 1:
+            source_type = state.get("source_type") or AllocationSourceType.COST_POOL
+            if source_type == AllocationSourceType.COST_POOL:
+                pool = ManagementCostPool.objects.filter(
+                    organization=organization,
+                    id=state.get("pool_id"),
+                    is_active=True,
+                ).first()
+                if not pool:
+                    raise ValueError("Choose an active management cost pool.")
+            elif source_type == AllocationSourceType.WORKSPACE_PROJECT:
+                source_project = Project.objects.filter(organization=organization, id=state.get("source_project_id")).first()
+                if not source_project:
+                    raise ValueError("Choose a source Project.")
+            else:
+                raise ValueError("Choose a valid management allocation source type.")
+        if through_step >= 2:
+            self._parse_month(state.get("month"))
+            if state.get("source_amount_mode") == "manual" and state.get("source_amount", "") in {"", None}:
+                raise ValueError("Enter a manual source amount or use derived source amount.")
+        if through_step >= 3:
+            project_ids = [int(item) for item in state.get("project_ids", [])]
+            if not project_ids:
+                raise ValueError("Choose at least one participating Project explicitly.")
+            if state.get("source_type") == AllocationSourceType.WORKSPACE_PROJECT and state.get("source_project_id"):
+                if int(state["source_project_id"]) in project_ids:
+                    raise ValueError("A source Project cannot also be selected as a target Project.")
+        if through_step >= 5:
+            if not state.get("preview_fingerprint"):
+                raise ValueError("Preview the allocation before creating a draft.")
+
+    def _preview_from_state(self, state):
+        return ManagementAllocationProposalService().preview(self._command_from_state(state))
+
+    def _command_from_state(self, state, actor=None, metadata=None):
+        organization = ManagementAllocationContextBuilder.get_default_organization()
+        year, month = self._parse_month(state.get("month"))
+        source_type = state.get("source_type") or AllocationSourceType.COST_POOL
+        pool = None
+        source_project = None
+        if source_type == AllocationSourceType.COST_POOL:
+            pool = ManagementCostPool.objects.filter(organization=organization, id=state.get("pool_id")).first()
+        elif source_type == AllocationSourceType.WORKSPACE_PROJECT:
+            source_project = Project.objects.filter(organization=organization, id=state.get("source_project_id")).first()
+        return GenerateManagementAllocationProposalCommand(
+            year=year,
+            month=month,
+            project_ids=[int(project_id) for project_id in state.get("project_ids", [])],
+            pool=pool,
+            source_type=source_type,
+            source_project=source_project,
+            source_amount_basis=state.get("source_amount_basis") or None,
+            source_currency=str(state.get("source_currency", "")).strip().upper(),
+            strategy=state.get("strategy") or None,
+            source_amount=state.get("source_amount") if state.get("source_amount_mode") == "manual" else None,
+            project_manager_id=state.get("project_manager_id") or None,
+            manual_percentages=state.get("manual_percentages") or None,
+            manual_amounts=state.get("manual_amounts") or None,
+            reason=state.get("reason", "").strip(),
+            actor=actor,
+            metadata=metadata or {"source": "workspace_management_allocation_wizard"},
+        )
+
+    def _preview_rows(self, preview):
+        rows = []
+        currency = preview.source_currency or "EUR"
+        for entry in preview.entries:
+            rows.append(
+                {
+                    "entry": entry,
+                    "basis_display": format_money(entry.basis_value, currency)
+                    if preview.strategy not in {AllocationStrategy.MANUAL_PERCENT}
+                    else format_percent(entry.basis_value, places=4),
+                    "percentage_display": format_percent(entry.percentage, places=4),
+                    "amount_display": format_money(entry.allocated_amount, currency),
+                    "before_direct_cost_display": format_money(entry.before_direct_cost, currency),
+                    "current_allocated_in_display": format_money(entry.current_allocated_in, currency),
+                    "current_allocated_out_display": format_money(entry.current_allocated_out, currency),
+                    "current_management_total_display": format_money(entry.current_management_total_cost, currency),
+                    "projected_management_total_display": format_money(entry.projected_management_total_cost, currency),
+                }
+            )
+        return rows
+
+    def _wizard_metadata(self, state, preview):
+        suggested_ids = self._ids_from_csv(state.get("suggested_project_ids", ""))
+        final_ids = [int(project_id) for project_id in state.get("project_ids", [])]
+        return {
+            "source": "workspace_management_allocation_wizard",
+            "recipient_preselection_criterion": state.get("recipient_preselection", ""),
+            "suggested_project_ids": suggested_ids,
+            "final_selected_project_ids": final_ids,
+            "user_changes_count": self._user_changes_count(suggested_ids, final_ids),
+            "source_preview_fingerprint": preview.metadata["fingerprint"],
+            "preview_timestamp": state.get("previewed_at", ""),
+        }
+
+    @staticmethod
+    def _drop_preview(state):
+        state.pop("preview_fingerprint", None)
+        state.pop("previewed_at", None)
 
     @staticmethod
     def _parse_month(value):

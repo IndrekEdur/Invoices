@@ -5,152 +5,273 @@
 {% endblock %}
 
 {% block content %}
-<form method="post" class="space-y-8">
-    {% csrf_token %}
+<div class="space-y-6">
     <div>
         <h1 class="text-3xl font-semibold tracking-tight text-slate-950">Create allocation proposal</h1>
-        <p class="mt-2 text-sm text-slate-600">Projects must be selected explicitly. The service generates a draft only; approval happens later.</p>
+        <p class="mt-2 text-sm text-slate-600">Use the wizard to review the source, recipients, strategy and read-only preview before creating a draft.</p>
     </div>
 
-    <div class="grid gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm md:grid-cols-3">
-        <label class="text-sm font-medium text-slate-700">Source type
-            <select name="source_type" required class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2">
-                {% for value,label in source_type_choices %}<option value="{{ value }}" {% if selected_source_type == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
-            </select>
-        </label>
-        <label class="text-sm font-medium text-slate-700">Cost pool
-            <select name="pool_id" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2">
-                <option value="">Choose pool</option>
-                {% for pool in pools %}<option value="{{ pool.id }}">{{ pool.name }} ({{ pool.default_strategy }})</option>{% endfor %}
-            </select>
-        </label>
-        <label class="text-sm font-medium text-slate-700">Workspace Project source
-            <select name="source_project_id" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2">
-                <option value="">Only for Workspace Project source</option>
-                {% for project in source_projects %}<option value="{{ project.id }}" {% if selected_source_project.id == project.id %}selected{% endif %}>{{ project.code }} {{ project.name }}</option>{% endfor %}
-            </select>
-        </label>
-        <label class="text-sm font-medium text-slate-700">Month
-            <input type="month" name="month" value="{{ selected_month }}" required class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2">
-        </label>
-        <label class="text-sm font-medium text-slate-700">Strategy
-            <select name="strategy" required class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2">
-                {% for value,label in strategy_choices %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
-            </select>
-        </label>
-        <label class="text-sm font-medium text-slate-700">Source amount mode
-            <select name="source_amount_mode" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2">
-                <option value="derive">Derive from mapped GL accounts</option>
-                <option value="manual">Enter manually</option>
-            </select>
-        </label>
-        <label class="text-sm font-medium text-slate-700">Source basis
-            <select name="source_amount_basis" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2">
-                {% for value,label in source_amount_basis_choices %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
-            </select>
-        </label>
-        <label class="text-sm font-medium text-slate-700">Source currency
-            <input name="source_currency" value="{{ source_currency }}" maxlength="8" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2" placeholder="EUR">
-        </label>
-        <label class="text-sm font-medium text-slate-700">Manual source amount
-            <input type="number" step="0.01" name="source_amount" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2" placeholder="Optional">
-        </label>
-        <label class="text-sm font-medium text-slate-700">Project manager
-            <select name="project_manager_id" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2">
-                <option value="">Only for Project manager strategy</option>
-                {% for manager in project_managers %}<option value="{{ manager.id }}">{{ manager.name }} {% if manager.email %}({{ manager.email }}){% endif %} - {{ manager.project.code }}</option>{% endfor %}
-            </select>
-        </label>
-        <label class="md:col-span-3 text-sm font-medium text-slate-700">Reason
-            <textarea name="reason" rows="2" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2" placeholder="Why this allocation is being generated"></textarea>
-        </label>
-        <div class="md:col-span-3 rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900">
-            <div class="font-semibold">Workspace Project source preview</div>
+    <ol class="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm md:grid-cols-5" aria-label="Allocation wizard steps">
+        {% for step in wizard_steps %}
+        <li class="rounded-xl border px-3 py-3 {% if step.current %}border-slate-950 bg-slate-950 text-white{% elif step.complete %}border-green-200 bg-green-50 text-green-900{% else %}border-slate-200 bg-slate-50 text-slate-600{% endif %}" {% if step.current %}aria-current="step"{% endif %}>
+            <div class="text-xs font-semibold uppercase tracking-wide">Step {{ step.number }}</div>
+            <div class="mt-1 text-sm font-semibold">{{ step.label }}</div>
+        </li>
+        {% endfor %}
+    </ol>
+
+    <form method="post" class="space-y-6">
+        {% csrf_token %}
+
+        {% if wizard_step == 1 %}
+        <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 class="text-xl font-semibold text-slate-950">Step 1: Allocation source</h2>
+            <p class="mt-1 text-sm text-slate-500">Choose what is being redistributed. The source is validated before continuing.</p>
+            <div class="mt-5 grid gap-4 md:grid-cols-3">
+                <label class="text-sm font-medium text-slate-700">Source type
+                    <select name="source_type" required class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2">
+                        {% for value,label in source_type_choices %}<option value="{{ value }}" {% if selected_source_type == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+                    </select>
+                </label>
+                <label class="text-sm font-medium text-slate-700">Cost pool
+                    <select name="pool_id" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2">
+                        <option value="">Choose pool</option>
+                        {% for pool in pools %}<option value="{{ pool.id }}" {% if selected_pool_id == pool.id|stringformat:"s" %}selected{% endif %}>{{ pool.name }} ({{ pool.default_strategy }})</option>{% endfor %}
+                    </select>
+                </label>
+                <label class="text-sm font-medium text-slate-700">Workspace Project source
+                    <select name="source_project_id" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2">
+                        <option value="">Only for Workspace Project source</option>
+                        {% for project in source_projects %}<option value="{{ project.id }}" {% if selected_source_project.id == project.id %}selected{% endif %}>{{ project.code }} {{ project.name }}</option>{% endfor %}
+                    </select>
+                </label>
+            </div>
+            <div class="mt-5 grid gap-4 md:grid-cols-2">
+                <div class="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                    <div class="text-sm font-semibold text-slate-900">Cost Pool source</div>
+                    <p class="mt-1 text-sm text-slate-600">Uses mapped GL accounts for the selected month, unless a manual source amount is entered later.</p>
+                </div>
+                <div class="rounded-xl border border-blue-100 bg-blue-50 p-4">
+                    <div class="text-sm font-semibold text-blue-950">Workspace Project source</div>
+                    <p class="mt-1 text-sm text-blue-900">Only direct accounting cost is redistributed. Existing management allocations are excluded.</p>
+                </div>
+            </div>
+        </section>
+        {% endif %}
+
+        {% if wizard_step == 2 %}
+        <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 class="text-xl font-semibold text-slate-950">Step 2: Period and source amount</h2>
+            <p class="mt-1 text-sm text-slate-500">Select the accounting month and whether the source amount is derived or manually entered.</p>
+            <div class="mt-5 grid gap-4 md:grid-cols-3">
+                <label class="text-sm font-medium text-slate-700">Month
+                    <input type="month" name="month" value="{{ selected_month }}" required class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2">
+                </label>
+                <label class="text-sm font-medium text-slate-700">Source amount mode
+                    <select name="source_amount_mode" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2">
+                        <option value="derive" {% if source_amount_mode != "manual" %}selected{% endif %}>Derive from source data</option>
+                        <option value="manual" {% if source_amount_mode == "manual" %}selected{% endif %}>Enter manually</option>
+                    </select>
+                </label>
+                <label class="text-sm font-medium text-slate-700">Source basis
+                    <select name="source_amount_basis" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2">
+                        {% for value,label in source_amount_basis_choices %}<option value="{{ value }}" {% if selected_source_amount_basis == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+                    </select>
+                </label>
+                <label class="text-sm font-medium text-slate-700">Source currency
+                    <input name="source_currency" value="{{ source_currency }}" maxlength="8" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2" placeholder="EUR">
+                </label>
+                <label class="text-sm font-medium text-slate-700">Manual source amount
+                    <input type="number" step="0.01" name="source_amount" value="{{ source_amount }}" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2" placeholder="Optional">
+                </label>
+                <label class="text-sm font-medium text-slate-700">Reason
+                    <input name="reason" value="{{ reason }}" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2" placeholder="Why this allocation is being generated">
+                </label>
+            </div>
             {% if source_preview %}
-            <div class="mt-1">Source Project {{ source_preview.project.code }} direct cost: <strong>{{ source_preview.amount_display }}</strong> for {{ source_preview.period_start }} - {{ source_preview.period_end }}.</div>
-            <div class="mt-1 text-xs">Data quality: {{ source_preview.data_quality_status }}</div>
-            {% else %}
-            <div class="mt-1">Choose Workspace Project as source and open the preview route to inspect direct cost before creating a draft.</div>
+            <div class="mt-5 rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-950">
+                <div class="font-semibold">Source preview</div>
+                <div class="mt-1">Project {{ source_preview.project.code }} direct cost: <strong>{{ source_preview.amount_display }}</strong> for {{ source_preview.period_start }} - {{ source_preview.period_end }}.</div>
+                <div class="mt-1 text-xs">Data quality: {{ source_preview.data_quality_status }}</div>
+                <div class="mt-2 text-xs">Only direct accounting cost is redistributed. Existing management allocations are excluded.</div>
+            </div>
             {% endif %}
-            <a class="mt-2 inline-flex rounded-lg border border-blue-200 bg-white px-3 py-1.5 text-xs font-semibold text-blue-800" href="{% url 'workspace:management_allocation_source_preview' %}?month={{ selected_month }}&source_type=workspace_project{% if selected_source_project %}&source_project_id={{ selected_source_project.id }}{% endif %}&source_currency={{ source_currency }}">Open source preview</a>
-        </div>
-    </div>
+        </section>
+        {% endif %}
 
-    <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-        <div class="space-y-4 border-b border-slate-200 p-4">
+        {% if wizard_step == 3 %}
+        <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div class="space-y-4 border-b border-slate-200 p-5">
+                <div class="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                        <h2 class="text-xl font-semibold text-slate-950">Step 3: Recipient Projects</h2>
+                        <p class="mt-1 text-sm text-slate-500">Preselection is only a suggestion. Final recipients remain explicitly user-approved.</p>
+                    </div>
+                    <div class="rounded-full bg-slate-100 px-3 py-1 text-sm font-semibold text-slate-700"><span id="selected-count">{{ selected_count }}</span> selected</div>
+                </div>
+                <div class="grid gap-3 md:grid-cols-6">
+                    <label class="text-sm font-medium text-slate-700">Preselection
+                        <select name="recipient_preselection" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2">
+                            {% for value,label in recipient_preselection_choices %}<option value="{{ value }}" {% if project_filters.recipient_preselection == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+                        </select>
+                    </label>
+                    <label class="text-sm font-medium text-slate-700">Search
+                        <input type="search" name="project_q" value="{{ project_filters.project_query }}" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2" placeholder="ID, code or name">
+                    </label>
+                    <label class="text-sm font-medium text-slate-700">Status
+                        <select name="project_status" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2">
+                            <option value="">All statuses</option>
+                            {% for value,label in project_status_choices %}<option value="{{ value }}" {% if project_filters.project_status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+                        </select>
+                    </label>
+                    <label class="text-sm font-medium text-slate-700">Filter
+                        <select name="project_filter" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2">
+                            {% for value,label in project_filter_choices %}<option value="{{ value }}" {% if project_filters.project_filter == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+                        </select>
+                    </label>
+                    <label class="text-sm font-medium text-slate-700">Sort
+                        <select name="sort" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2">
+                            {% for value,label in project_sort_choices %}<option value="{{ value }}" {% if project_filters.sort == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+                        </select>
+                    </label>
+                    <label class="text-sm font-medium text-slate-700">Strategy
+                        <select name="strategy" required class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2">
+                            {% for value,label in strategy_choices %}<option value="{{ value }}" {% if selected_strategy == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+                        </select>
+                    </label>
+                </div>
+                <label class="block max-w-sm text-sm font-medium text-slate-700">Project manager
+                    <select name="project_manager_id" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2">
+                        <option value="">Only for Project manager strategy</option>
+                        {% for manager in project_managers %}<option value="{{ manager.id }}" {% if selected_project_manager_id == manager.id|stringformat:"s" %}selected{% endif %}>{{ manager.name }} {% if manager.email %}({{ manager.email }}){% endif %} - {{ manager.project.code }}</option>{% endfor %}
+                    </select>
+                </label>
+                <div class="flex flex-wrap gap-2">
+                    <button type="submit" name="_wizard_action" value="continue" class="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Apply preselection</button>
+                    <button type="button" data-select-visible class="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Select all visible</button>
+                    <button type="button" data-clear-selection class="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Clear selection</button>
+                </div>
+                {% if no_preselection_message %}
+                <div class="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">{{ no_preselection_message }}</div>
+                {% endif %}
+                {% if selected_source_type == "workspace_project" %}
+                <div class="rounded-xl border border-blue-100 bg-blue-50 p-3 text-sm text-blue-950">
+                    Workspace Project source: selected source Project remains visible but disabled so it cannot receive its own redistributed cost.
+                </div>
+                {% endif %}
+                <input type="hidden" name="suggested_project_ids" value="{{ suggested_project_ids_csv }}">
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-200 text-sm">
+                    <thead class="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                        <tr><th class="px-4 py-3">Select</th><th class="px-4 py-3">Project</th><th class="px-4 py-3">Status</th><th class="px-4 py-3">Revenue</th><th class="px-4 py-3">Direct cost</th><th class="px-4 py-3">Data</th><th class="px-4 py-3">Managers</th><th class="px-4 py-3">Manual %</th><th class="px-4 py-3">Manual amount</th></tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100">
+                        {% for row in projects %}
+                        <tr>
+                            <td class="px-4 py-3"><input type="checkbox" name="project_ids" value="{{ row.project.id }}" class="project-selection h-4 w-4 rounded border-slate-300" {% if row.selected %}checked{% endif %} {% if row.is_source_project %}disabled{% endif %}></td>
+                            <td class="px-4 py-3"><div class="font-semibold">{{ row.project.code }}</div><div class="text-slate-500">{{ row.project.name }}</div><div class="text-xs text-slate-400">ID {{ row.project.id }}{% if row.selection_reason %} - {{ row.selection_reason }}{% endif %}</div></td>
+                            <td class="px-4 py-3">{{ row.project.status }}</td>
+                            <td class="px-4 py-3">{{ row.revenue_display }}</td>
+                            <td class="px-4 py-3">{{ row.cost_display }}</td>
+                            <td class="px-4 py-3"><span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">{{ row.data_quality_badge }}</span></td>
+                            <td class="px-4 py-3">{% for manager in row.managers %}<div>{{ manager.name }}</div>{% empty %}<span class="text-slate-400">-</span>{% endfor %}</td>
+                            <td class="px-4 py-3"><input type="number" step="0.0001" name="manual_percentage_{{ row.project.id }}" class="w-28 rounded-lg border border-slate-300 px-2 py-1"></td>
+                            <td class="px-4 py-3"><input type="number" step="0.01" name="manual_amount_{{ row.project.id }}" class="w-32 rounded-lg border border-slate-300 px-2 py-1"></td>
+                        </tr>
+                        {% empty %}
+                        <tr><td class="px-4 py-8 text-center text-slate-500" colspan="9">No Projects available for the current filters.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+        {% endif %}
+
+        {% if wizard_step == 4 or wizard_step == 5 %}
+        <section class="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <div class="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                    <h2 class="text-lg font-semibold">Explicit Project selection</h2>
-                    <p class="mt-1 text-sm text-slate-500">Preselection is only a suggestion. Review and change the selected Projects before generating the proposal.</p>
+                    <h2 class="text-xl font-semibold text-slate-950">{% if wizard_step == 5 %}Step 5: Create draft{% else %}Step 4: Allocation preview{% endif %}</h2>
+                    <p class="mt-1 text-sm text-slate-500">Preview is read-only. It creates no draft, entries or audit event.</p>
                 </div>
-                <div class="rounded-full bg-slate-100 px-3 py-1 text-sm font-semibold text-slate-700"><span id="selected-count">{{ selected_count }}</span> selected</div>
+                {% if preview_fresh %}
+                <span class="rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-800">Preview fresh</span>
+                {% else %}
+                <span class="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800">Preview required</span>
+                {% endif %}
             </div>
-            <div class="grid gap-3 md:grid-cols-6">
-                <label class="text-sm font-medium text-slate-700">Recipient preselection
-                    <select name="recipient_preselection" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2">
-                        {% for value,label in recipient_preselection_choices %}<option value="{{ value }}" {% if project_filters.recipient_preselection == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
-                    </select>
-                </label>
-                <label class="text-sm font-medium text-slate-700">Search
-                    <input type="search" name="project_q" value="{{ project_filters.project_query }}" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2" placeholder="ID, code or name">
-                </label>
-                <label class="text-sm font-medium text-slate-700">Status
-                    <select name="project_status" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2">
-                        <option value="">All statuses</option>
-                        {% for value,label in project_status_choices %}<option value="{{ value }}" {% if project_filters.project_status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
-                    </select>
-                </label>
-                <label class="text-sm font-medium text-slate-700">Filter
-                    <select name="project_filter" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2">
-                        {% for value,label in project_filter_choices %}<option value="{{ value }}" {% if project_filters.project_filter == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
-                    </select>
-                </label>
-                <label class="text-sm font-medium text-slate-700">Sort
-                    <select name="sort" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2">
-                        {% for value,label in project_sort_choices %}<option value="{{ value }}" {% if project_filters.sort == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
-                    </select>
-                </label>
-                <div class="flex items-end">
-                    <button type="submit" formmethod="get" class="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Apply preselection</button>
-                </div>
-            </div>
-            <div class="flex flex-wrap gap-2">
-                <button type="button" data-select-visible class="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Select all visible</button>
-                <button type="button" data-clear-selection class="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Clear selection</button>
-            </div>
-            {% if no_preselection_message %}
-            <div class="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">{{ no_preselection_message }}</div>
+            {% if preview_error %}
+            <div class="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">{{ preview_error }}</div>
             {% endif %}
-            <input type="hidden" name="suggested_project_ids" value="{{ suggested_project_ids_csv }}">
-        </div>
-        <table class="min-w-full divide-y divide-slate-200 text-sm">
-            <thead class="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
-                <tr><th class="px-4 py-3">Select</th><th class="px-4 py-3">Project</th><th class="px-4 py-3">Status</th><th class="px-4 py-3">Revenue</th><th class="px-4 py-3">Direct cost</th><th class="px-4 py-3">Data</th><th class="px-4 py-3">Managers</th><th class="px-4 py-3">Manual %</th><th class="px-4 py-3">Manual amount</th></tr>
-            </thead>
-            <tbody class="divide-y divide-slate-100">
-                {% for row in projects %}
-                <tr>
-                    <td class="px-4 py-3"><input type="checkbox" name="project_ids" value="{{ row.project.id }}" class="project-selection h-4 w-4 rounded border-slate-300" {% if row.selected %}checked{% endif %} {% if row.is_source_project %}disabled{% endif %}></td>
-                    <td class="px-4 py-3"><div class="font-semibold">{{ row.project.code }}</div><div class="text-slate-500">{{ row.project.name }}</div><div class="text-xs text-slate-400">ID {{ row.project.id }}{% if row.selection_reason %} - {{ row.selection_reason }}{% endif %}</div>{% if row.selected %}<div class="mt-1 text-xs font-semibold text-green-700">Selected</div>{% endif %}</td>
-                    <td class="px-4 py-3">{{ row.project.status }}</td>
-                    <td class="px-4 py-3">{{ row.revenue_display }}</td>
-                    <td class="px-4 py-3">{{ row.cost_display }}</td>
-                    <td class="px-4 py-3"><span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">{{ row.data_quality_badge }}</span></td>
-                    <td class="px-4 py-3">{% for manager in row.managers %}<div>{{ manager.name }}</div>{% empty %}<span class="text-slate-400">-</span>{% endfor %}</td>
-                    <td class="px-4 py-3"><input type="number" step="0.0001" name="manual_percentage_{{ row.project.id }}" class="w-28 rounded-lg border border-slate-300 px-2 py-1"></td>
-                    <td class="px-4 py-3"><input type="number" step="0.01" name="manual_amount_{{ row.project.id }}" class="w-32 rounded-lg border border-slate-300 px-2 py-1"></td>
-                </tr>
-                {% empty %}
-                <tr><td class="px-4 py-8 text-center text-slate-500" colspan="9">No Projects available for the current filters.</td></tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
+            {% if preview %}
+            <div class="grid gap-4 md:grid-cols-4">
+                <div class="rounded-xl border border-slate-200 bg-slate-50 p-4"><div class="text-xs uppercase text-slate-500">Source amount</div><div class="mt-1 text-lg font-semibold">{{ preview_source_amount_display }}</div></div>
+                <div class="rounded-xl border border-slate-200 bg-slate-50 p-4"><div class="text-xs uppercase text-slate-500">Allocated</div><div class="mt-1 text-lg font-semibold">{{ preview_allocated_display }}</div></div>
+                <div class="rounded-xl border border-slate-200 bg-slate-50 p-4"><div class="text-xs uppercase text-slate-500">Unallocated</div><div class="mt-1 text-lg font-semibold">{{ preview_unallocated_display }}</div></div>
+                <div class="rounded-xl border border-slate-200 bg-slate-50 p-4"><div class="text-xs uppercase text-slate-500">Total percent</div><div class="mt-1 text-lg font-semibold">{{ preview_total_percentage_display }}</div></div>
+            </div>
+            {% if preview.warnings %}
+            <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                <div class="font-semibold">Warnings</div>
+                <ul class="mt-2 list-disc pl-5">{% for warning in preview.warnings %}<li>{{ warning.message|default:warning.code }}</li>{% endfor %}</ul>
+            </div>
+            {% endif %}
+            <div class="overflow-x-auto rounded-xl border border-slate-200">
+                <table class="min-w-full divide-y divide-slate-200 text-sm">
+                    <thead class="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                        <tr><th class="px-4 py-3">Project</th><th class="px-4 py-3">Basis</th><th class="px-4 py-3">Direct cost</th><th class="px-4 py-3">Allocated in</th><th class="px-4 py-3">Allocated out</th><th class="px-4 py-3">Proposed %</th><th class="px-4 py-3">Proposed amount</th><th class="px-4 py-3">Current total</th><th class="px-4 py-3">Projected total</th></tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100">
+                        {% for row in preview_rows %}
+                        <tr>
+                            <td class="px-4 py-3"><div class="font-semibold">{{ row.entry.project.code }}</div><div class="text-slate-500">{{ row.entry.project.name }}</div></td>
+                            <td class="px-4 py-3">{{ row.basis_display }}</td>
+                            <td class="px-4 py-3">{{ row.before_direct_cost_display }}</td>
+                            <td class="px-4 py-3">{{ row.current_allocated_in_display }}</td>
+                            <td class="px-4 py-3">{{ row.current_allocated_out_display }}</td>
+                            <td class="px-4 py-3">{{ row.percentage_display }}</td>
+                            <td class="px-4 py-3 font-semibold">{{ row.amount_display }}</td>
+                            <td class="px-4 py-3">{{ row.current_management_total_display }}</td>
+                            <td class="px-4 py-3 font-semibold">{{ row.projected_management_total_display }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% if preview.source_project %}
+            <div class="rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-950">
+                Source Project {{ preview.source_project.code }} will show the approved allocation as allocated-out after approval. It is not counted as revenue.
+            </div>
+            {% endif %}
+            <p class="text-sm text-slate-600">This creates a draft only. Approval happens later.</p>
+            {% else %}
+            <div class="rounded-xl border border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500">Preview the allocation to inspect proposed amounts before creating a draft.</div>
+            {% endif %}
+        </section>
+        {% endif %}
 
-    <div class="flex justify-end">
-        <button type="submit" class="rounded-xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white hover:bg-slate-800">Generate draft proposal</button>
-    </div>
-</form>
+        <div class="flex flex-wrap items-center justify-between gap-3">
+            <div class="flex gap-2">
+                {% if wizard_step > 1 %}
+                <button type="submit" name="_wizard_action" value="back" class="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Back</button>
+                {% endif %}
+                <button type="submit" name="_wizard_action" value="cancel" class="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Cancel wizard</button>
+            </div>
+            <div class="flex gap-2">
+                {% if wizard_step < 3 %}
+                <button type="submit" name="_wizard_action" value="continue" class="rounded-xl bg-slate-950 px-5 py-2 text-sm font-semibold text-white hover:bg-slate-800">Continue</button>
+                {% elif wizard_step == 3 %}
+                <button type="submit" name="_wizard_action" value="preview" class="rounded-xl bg-slate-950 px-5 py-2 text-sm font-semibold text-white hover:bg-slate-800">Preview allocation</button>
+                {% elif wizard_step == 4 %}
+                <button type="submit" name="_wizard_action" value="preview" class="rounded-xl bg-slate-950 px-5 py-2 text-sm font-semibold text-white hover:bg-slate-800">Refresh preview</button>
+                {% else %}
+                <button type="submit" name="_wizard_action" value="create_draft" {% if not can_create_draft %}disabled{% endif %} class="rounded-xl bg-slate-950 px-5 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300">Create draft allocation</button>
+                {% endif %}
+            </div>
+        </div>
+    </form>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -159,7 +280,7 @@ document.addEventListener("DOMContentLoaded", function () {
     const count = document.getElementById("selected-count");
     const boxes = Array.from(document.querySelectorAll(".project-selection"));
     function updateCount() {
-        count.textContent = boxes.filter((box) => box.checked && !box.disabled).length;
+        if (count) count.textContent = boxes.filter((box) => box.checked && !box.disabled).length;
     }
     document.querySelector("[data-select-visible]")?.addEventListener("click", function () {
         boxes.forEach((box) => { if (!box.disabled) box.checked = true; });

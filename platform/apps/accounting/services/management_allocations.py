@@ -1,7 +1,9 @@
-from copy import deepcopy
 from calendar import monthrange
+from copy import deepcopy
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
+import hashlib
+import json
 
 from django.db import transaction
 from django.db.models import Max
@@ -15,6 +17,8 @@ from .commands import (
     CreateManagementAllocationRevisionResult,
     CreateManagementAllocationVersionCommand,
     GenerateManagementAllocationProposalResult,
+    ManagementAllocationPreviewEntry,
+    ManagementAllocationPreviewResult,
 )
 from .financial_aggregation import ProjectFinancialAggregationService
 from ..models import (
@@ -471,16 +475,63 @@ class ManagementAllocationProposalService:
         self.allocation_version_service = allocation_version_service or ManagementAllocationVersionService
         self.audit_service = audit_service or AuditService
 
+    def preview(self, command):
+        """Calculate the exact proposed allocation without writing draft records."""
+        calculation = self._calculate(command, lock_sources=False)
+        return ManagementAllocationPreviewResult(
+            period=calculation["period_context"],
+            pool=calculation["pool"],
+            version=None,
+            entries=self._preview_entries(calculation),
+            strategy=calculation["strategy"],
+            source_amount=calculation["source_amount"],
+            allocated_amount=calculation["allocated_amount"],
+            unallocated_amount=calculation["unallocated_amount"],
+            total_percentage=calculation["total_percentage"],
+            project_count=len(calculation["projects"]),
+            warnings=calculation["warnings"],
+            blocking_errors=[],
+            created=False,
+            source_type=calculation["source_type"],
+            source_project=calculation["source_project"],
+            source_amount_basis=calculation["source_basis"],
+            source_currency=calculation["source_currency"],
+            metadata={
+                "source_amount_origin": calculation["source_origin"],
+                "source_diagnostics": calculation["source_diagnostics"],
+                "balancing": calculation["balancing"],
+                "fingerprint": calculation["fingerprint"],
+                "approved_versions": calculation["approved_versions"],
+                "draft_versions": calculation["draft_versions"],
+                "source_identifier": calculation["source_identifier"],
+                "source_display_name": calculation["source_display_name"],
+            },
+        )
+
     @transaction.atomic
     def generate(self, command):
-        metadata = deepcopy(command.metadata or {})
-        self._validate_period_input(command.year, command.month)
-        source_type, pool, source_project = self._source(command)
-        organization = pool.organization if pool else source_project.organization
-        if pool and not pool.is_active:
-            raise ValueError("Inactive management cost pools cannot generate allocation proposals.")
-        if not command.project_ids:
-            raise ValueError("Management allocation proposal requires at least one selected project.")
+        calculation = self._calculate(command, lock_sources=True)
+        metadata = calculation["input_metadata"]
+        source_type = calculation["source_type"]
+        pool = calculation["pool"]
+        source_project = calculation["source_project"]
+        organization = calculation["organization"]
+        period_start = calculation["period_start"]
+        period_end = calculation["period_end"]
+        projects = calculation["projects"]
+        strategy = calculation["strategy"]
+        strategy_rule = calculation["strategy_rule"]
+        warnings = calculation["warnings"]
+        source_amount = calculation["source_amount"]
+        source_origin = calculation["source_origin"]
+        source_diagnostics = calculation["source_diagnostics"]
+        source_basis = calculation["source_basis"]
+        source_currency = calculation["source_currency"]
+        entry_payloads = calculation["entry_payloads"]
+        balancing = calculation["balancing"]
+        total_percentage = calculation["total_percentage"]
+        allocated_amount = calculation["allocated_amount"]
+        unallocated_amount = calculation["unallocated_amount"]
 
         period, _created = ManagementAllocationPeriod.objects.select_for_update().get_or_create(
             organization=organization,
@@ -491,77 +542,26 @@ class ManagementAllocationProposalService:
         if period.status == PeriodStatus.ARCHIVED:
             raise ValueError("Archived management allocation periods cannot receive new proposals.")
 
-        projects = self._selected_projects(organization, command.project_ids)
-        if source_project and source_project.id in {project.id for project in projects}:
-            raise ValueError("A source Project cannot also be selected as a target Project.")
-        strategy, strategy_rule = self._resolve_strategy(pool, command.strategy)
-        warnings = []
-        if ManagementAllocationVersion.objects.filter(
-            **ManagementAllocationVersionService._source_filter(
-                period=period,
-                source_type=source_type,
-                pool=pool,
-                source_project=source_project,
-            ),
-            status=VersionStatus.DRAFT,
-        ).exists():
-            warnings.append({"code": "existing_draft_version", "message": "Another draft version already exists."})
-
-        period_start = date(command.year, command.month, 1)
-        period_end = date(command.year, command.month, monthrange(command.year, command.month)[1])
-        source_amount, source_origin, source_diagnostics, source_basis, source_currency = self._source_amount(
-            command,
-            source_type,
-            pool,
-            source_project,
-            period_start,
-            period_end,
-        )
-        if source_amount == ZERO:
-            warnings.append({"code": "zero_source_amount", "message": "Source amount is zero."})
-
-        weights = self._weights_for_strategy(
-            strategy=strategy,
+        version_metadata = self._version_metadata(
             command=command,
+            source_type=source_type,
             pool=pool,
+            source_project=source_project,
             projects=projects,
+            strategy=strategy,
+            source_amount=source_amount,
+            source_origin=source_origin,
+            source_diagnostics=source_diagnostics,
+            source_basis=source_basis,
+            source_currency=source_currency,
             period_start=period_start,
             period_end=period_end,
-            source_amount=source_amount,
-            strategy_rule=strategy_rule,
+            balancing=balancing,
             warnings=warnings,
+            strategy_rule=strategy_rule,
+            metadata=metadata,
+            fingerprint=calculation["fingerprint"],
         )
-        entry_payloads, balancing = self._balanced_entries(projects, weights, source_amount)
-        total_percentage = sum(item["percentage"] for item in entry_payloads)
-        allocated_amount = sum(item["amount"] for item in entry_payloads)
-        unallocated_amount = source_amount - allocated_amount
-
-        version_metadata = {
-            "strategy": strategy,
-            "source_type": source_type,
-            "source_identifier": self._source_identifier(source_type, pool, source_project),
-            "source_display_name": self._source_display_name(source_type, pool, source_project),
-            "source_amount_basis": source_basis,
-            "source_amount_origin": source_origin,
-            "source_amount": str(source_amount),
-            "source_currency": source_currency,
-            "source_period_start": period_start.isoformat(),
-            "source_period_end": period_end.isoformat(),
-            "source_project_id": source_project.id if source_project else None,
-            "source_project_code": source_project.code if source_project else "",
-            "source_project_name": source_project.name if source_project else "",
-            "selected_project_ids": [project.id for project in projects],
-            "selected_project_codes": [project.code for project in projects],
-            "generated_at": timezone.now().isoformat(),
-            "project_manager_id": command.project_manager_id,
-            "calculation_diagnostics": {
-                "source": source_diagnostics,
-                "warnings": deepcopy(warnings),
-                "balancing": balancing,
-                "strategy_rule_id": strategy_rule.id if strategy_rule else None,
-            },
-            "input_metadata": metadata,
-        }
         next_version_number = self._next_version_number(period, source_type, pool=pool, source_project=source_project)
         version = self.allocation_version_service.create_version(
             CreateManagementAllocationVersionCommand(
@@ -598,8 +598,8 @@ class ManagementAllocationProposalService:
             "pool_id": pool.id if pool else None,
             "pool_name": pool.name if pool else "",
             "source_type": source_type,
-            "source_identifier": self._source_identifier(source_type, pool, source_project),
-            "source_display_name": self._source_display_name(source_type, pool, source_project),
+            "source_identifier": calculation["source_identifier"],
+            "source_display_name": calculation["source_display_name"],
             "period": period.period_label,
             "version_number": version.version_number,
             "strategy": strategy,
@@ -610,10 +610,11 @@ class ManagementAllocationProposalService:
             "total_percentage": str(total_percentage),
             "allocated_amount": str(allocated_amount),
             "warnings": deepcopy(warnings),
+            "preview_fingerprint": calculation["fingerprint"],
         }
         self.audit_service.record(
             event_type="management_allocation_proposal_generated",
-            message=f"Management allocation proposal generated for {version.source_display_name} {period.period_label}",
+            message=f"Management allocation proposal generated for {calculation['source_display_name']} {period.period_label}",
             organization=organization,
             actor=command.actor,
             object_type="ManagementAllocationVersion",
@@ -641,8 +642,278 @@ class ManagementAllocationProposalService:
                 "source_amount_origin": source_origin,
                 "source_diagnostics": source_diagnostics,
                 "balancing": balancing,
+                "fingerprint": calculation["fingerprint"],
             },
         )
+
+    def _calculate(self, command, *, lock_sources):
+        metadata = deepcopy(command.metadata or {})
+        self._validate_period_input(command.year, command.month)
+        source_type, pool, source_project = self._source(command, lock=lock_sources)
+        organization = pool.organization if pool else source_project.organization
+        if pool and not pool.is_active:
+            raise ValueError("Inactive management cost pools cannot generate allocation proposals.")
+        if not command.project_ids:
+            raise ValueError("Management allocation proposal requires at least one selected project.")
+
+        period = ManagementAllocationPeriod.objects.filter(
+            organization=organization,
+            year=command.year,
+            month=command.month,
+        ).first()
+        if period and period.status == PeriodStatus.ARCHIVED:
+            raise ValueError("Archived management allocation periods cannot receive new proposals.")
+
+        projects = self._selected_projects(organization, command.project_ids)
+        if source_project and source_project.id in {project.id for project in projects}:
+            raise ValueError("A source Project cannot also be selected as a target Project.")
+        strategy, strategy_rule = self._resolve_strategy(pool, command.strategy)
+        warnings = []
+        draft_versions = []
+        approved_versions = []
+        if period:
+            source_filter = ManagementAllocationVersionService._source_filter(
+                period=period,
+                source_type=source_type,
+                pool=pool,
+                source_project=source_project,
+            )
+            draft_versions = list(ManagementAllocationVersion.objects.filter(**source_filter, status=VersionStatus.DRAFT))
+            approved_versions = list(
+                ManagementAllocationVersion.objects.filter(**source_filter, status=VersionStatus.APPROVED)
+                .order_by("-version_number")
+            )
+            if draft_versions:
+                warnings.append({"code": "existing_draft_version", "message": "Another draft version already exists."})
+            if approved_versions:
+                warnings.append(
+                    {
+                        "code": "existing_approved_version",
+                        "message": f"Approving this draft later will supersede version {approved_versions[0].version_number}.",
+                    }
+                )
+
+        period_start = date(command.year, command.month, 1)
+        period_end = date(command.year, command.month, monthrange(command.year, command.month)[1])
+        source_amount, source_origin, source_diagnostics, source_basis, source_currency = self._source_amount(
+            command,
+            source_type,
+            pool,
+            source_project,
+            period_start,
+            period_end,
+        )
+        if source_amount == ZERO:
+            warnings.append({"code": "zero_source_amount", "message": "Source amount is zero."})
+
+        weights = self._weights_for_strategy(
+            strategy=strategy,
+            command=command,
+            pool=pool,
+            projects=projects,
+            period_start=period_start,
+            period_end=period_end,
+            source_amount=source_amount,
+            strategy_rule=strategy_rule,
+            warnings=warnings,
+        )
+        entry_payloads, balancing = self._balanced_entries(projects, weights, source_amount)
+        total_percentage = sum(item["percentage"] for item in entry_payloads)
+        allocated_amount = sum(item["amount"] for item in entry_payloads)
+        unallocated_amount = source_amount - allocated_amount
+        calculation = {
+            "input_metadata": metadata,
+            "organization": organization,
+            "period": period,
+            "period_context": {
+                "year": command.year,
+                "month": command.month,
+                "period_label": f"{command.year:04d}-{command.month:02d}",
+                "status": period.status if period else "new",
+            },
+            "period_start": period_start,
+            "period_end": period_end,
+            "source_type": source_type,
+            "pool": pool,
+            "source_project": source_project,
+            "source_identifier": self._source_identifier(source_type, pool, source_project),
+            "source_display_name": self._source_display_name(source_type, pool, source_project),
+            "projects": projects,
+            "strategy": strategy,
+            "strategy_rule": strategy_rule,
+            "source_amount": source_amount,
+            "source_origin": source_origin,
+            "source_diagnostics": source_diagnostics,
+            "source_basis": source_basis,
+            "source_currency": source_currency,
+            "entry_payloads": entry_payloads,
+            "allocated_amount": allocated_amount,
+            "unallocated_amount": unallocated_amount,
+            "total_percentage": total_percentage,
+            "balancing": balancing,
+            "warnings": warnings,
+            "draft_versions": draft_versions,
+            "approved_versions": approved_versions,
+            "command_summary": {
+                "year": command.year,
+                "month": command.month,
+                "project_ids": [project.id for project in projects],
+                "source_amount_basis": command.source_amount_basis,
+                "source_currency": command.source_currency,
+                "strategy": command.strategy,
+                "source_amount": str(command.source_amount) if command.source_amount is not None else None,
+                "project_manager_id": command.project_manager_id,
+                "manual_percentages": deepcopy(command.manual_percentages or {}),
+                "manual_amounts": deepcopy(command.manual_amounts or {}),
+            },
+        }
+        calculation["fingerprint"] = self._fingerprint(calculation)
+        return calculation
+
+    def _version_metadata(
+        self,
+        *,
+        command,
+        source_type,
+        pool,
+        source_project,
+        projects,
+        strategy,
+        source_amount,
+        source_origin,
+        source_diagnostics,
+        source_basis,
+        source_currency,
+        period_start,
+        period_end,
+        balancing,
+        warnings,
+        strategy_rule,
+        metadata,
+        fingerprint,
+    ):
+        return {
+            "strategy": strategy,
+            "source_type": source_type,
+            "source_identifier": self._source_identifier(source_type, pool, source_project),
+            "source_display_name": self._source_display_name(source_type, pool, source_project),
+            "source_amount_basis": source_basis,
+            "source_amount_origin": source_origin,
+            "source_amount": str(source_amount),
+            "source_currency": source_currency,
+            "source_period_start": period_start.isoformat(),
+            "source_period_end": period_end.isoformat(),
+            "source_project_id": source_project.id if source_project else None,
+            "source_project_code": source_project.code if source_project else "",
+            "source_project_name": source_project.name if source_project else "",
+            "selected_project_ids": [project.id for project in projects],
+            "selected_project_codes": [project.code for project in projects],
+            "generated_at": timezone.now().isoformat(),
+            "project_manager_id": command.project_manager_id,
+            "preview_fingerprint": fingerprint,
+            "calculation_diagnostics": {
+                "source": source_diagnostics,
+                "warnings": deepcopy(warnings),
+                "balancing": balancing,
+                "strategy_rule_id": strategy_rule.id if strategy_rule else None,
+            },
+            "input_metadata": metadata,
+        }
+
+    def _preview_entries(self, calculation):
+        entries = []
+        period_start = calculation["period_start"]
+        period_end = calculation["period_end"]
+        currency = calculation["source_currency"]
+        for item in calculation["entry_payloads"]:
+            project = item["project"]
+            accounting_result = self.project_financial_aggregation_service.aggregate(
+                AggregateProjectFinancialsCommand(
+                    project=project,
+                    period_start=period_start,
+                    period_end=period_end,
+                    currency=currency or None,
+                    metadata={"source": "management_allocation_preview_recipient"},
+                )
+            )
+            management_snapshot = self._current_management_snapshot(project, accounting_result, period_start)
+            basis_value = ZERO
+            if calculation["strategy"] in {AllocationStrategy.REVENUE, AllocationStrategy.PROJECT_MANAGER}:
+                basis_value = accounting_result.revenue
+            elif calculation["strategy"] == AllocationStrategy.MANUAL_PERCENT:
+                basis_value = item["percentage"]
+            elif calculation["strategy"] == AllocationStrategy.MANUAL_AMOUNT:
+                basis_value = item["amount"]
+            entries.append(
+                ManagementAllocationPreviewEntry(
+                    project=project,
+                    basis_value=basis_value,
+                    percentage=item["percentage"],
+                    allocated_amount=item["amount"],
+                    manual_override=item["manual_override"],
+                    warnings=[],
+                    before_direct_cost=accounting_result.total_cost,
+                    current_allocated_in=management_snapshot["allocated_in"],
+                    current_allocated_out=management_snapshot["allocated_out"],
+                    current_management_total_cost=management_snapshot["management_total_cost"],
+                    projected_management_total_cost=management_snapshot["management_total_cost"] + item["amount"],
+                    metadata={
+                        "notes": item["notes"],
+                        "currency": accounting_result.currency or currency or "",
+                        "accounting_result": str(accounting_result.result),
+                    },
+                )
+            )
+        return entries
+
+    @staticmethod
+    def _current_management_snapshot(project, accounting_result, period_start):
+        approved_in = ManagementAllocationEntry.objects.filter(
+            project=project,
+            version__status=VersionStatus.APPROVED,
+            version__period__organization=project.organization,
+            version__period__year=period_start.year,
+            version__period__month=period_start.month,
+        )
+        approved_out = ManagementAllocationEntry.objects.filter(
+            version__source_project=project,
+            version__status=VersionStatus.APPROVED,
+            version__period__organization=project.organization,
+            version__period__year=period_start.year,
+            version__period__month=period_start.month,
+        )
+        allocated_in = sum((entry.amount for entry in approved_in), ZERO)
+        allocated_out = sum((entry.amount for entry in approved_out), ZERO)
+        management_total_cost = accounting_result.total_cost + allocated_in - allocated_out
+        return {
+            "allocated_in": allocated_in,
+            "allocated_out": allocated_out,
+            "management_total_cost": management_total_cost,
+        }
+
+    @staticmethod
+    def _fingerprint(calculation):
+        payload = {
+            "source_identifier": calculation["source_identifier"],
+            "period_start": calculation["period_start"].isoformat(),
+            "period_end": calculation["period_end"].isoformat(),
+            "strategy": calculation["strategy"],
+            "source_amount": str(calculation["source_amount"]),
+            "source_currency": calculation["source_currency"],
+            "source_basis": calculation["source_basis"],
+            "project_ids": [project.id for project in calculation["projects"]],
+            "entries": [
+                {
+                    "project_id": item["project"].id,
+                    "percentage": str(item["percentage"]),
+                    "amount": str(item["amount"]),
+                    "manual_override": item["manual_override"],
+                }
+                for item in calculation["entry_payloads"]
+            ],
+            "command": calculation["command_summary"],
+        }
+        return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
 
     @staticmethod
     def validate_proposal(version, *, source_amount):
@@ -665,7 +936,7 @@ class ManagementAllocationProposalService:
             raise ValueError("Management allocation proposal lacks source amount traceability metadata.")
 
     @staticmethod
-    def _source(command):
+    def _source(command, *, lock=True):
         source_type = command.source_type or (
             AllocationSourceType.WORKSPACE_PROJECT if command.source_project else AllocationSourceType.COST_POOL
         )
@@ -674,13 +945,19 @@ class ManagementAllocationProposalService:
                 raise ValueError("Cost pool allocation source requires a pool.")
             if command.source_project:
                 raise ValueError("Cost pool allocation source cannot also include a source Project.")
-            return source_type, ManagementCostPool.objects.select_for_update().get(pk=command.pool.pk), None
+            queryset = ManagementCostPool.objects
+            if lock:
+                queryset = queryset.select_for_update()
+            return source_type, queryset.get(pk=command.pool.pk), None
         if source_type == AllocationSourceType.WORKSPACE_PROJECT:
             if not command.source_project:
                 raise ValueError("Workspace Project allocation source requires a source Project.")
             if command.pool:
                 raise ValueError("Workspace Project allocation source cannot also include a cost pool.")
-            return source_type, None, Project.objects.select_for_update().get(pk=command.source_project.pk)
+            queryset = Project.objects
+            if lock:
+                queryset = queryset.select_for_update()
+            return source_type, None, queryset.get(pk=command.source_project.pk)
         raise ValueError("Unsupported management allocation source type.")
 
     @staticmethod

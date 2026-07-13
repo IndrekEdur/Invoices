@@ -482,6 +482,44 @@ class GenerateManagementAllocationProposalResult:
 
 
 @dataclass(frozen=True)
+class ManagementAllocationPreviewEntry:
+    project: object
+    basis_value: object
+    percentage: object
+    allocated_amount: object
+    manual_override: bool
+    warnings: list
+    before_direct_cost: object
+    current_allocated_in: object
+    current_allocated_out: object
+    current_management_total_cost: object
+    projected_management_total_cost: object
+    metadata: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ManagementAllocationPreviewResult:
+    period: object
+    pool: object
+    version: object
+    entries: list
+    strategy: str
+    source_amount: object
+    allocated_amount: object
+    unallocated_amount: object
+    total_percentage: object
+    project_count: int
+    warnings: list
+    blocking_errors: list
+    created: bool
+    source_type: str = "cost_pool"
+    source_project: object = None
+    source_amount_basis: str = ""
+    source_currency: str = ""
+    metadata: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class UpdateManagementAllocationDraftCommand:
     version: object
     entries: list

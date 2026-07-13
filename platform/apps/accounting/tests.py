@@ -5074,6 +5074,86 @@ class ManagementAllocationProposalServiceTests(TestCase):
         self.assertEqual(second_result.version.status, VersionStatus.DRAFT)
         self.assertEqual(ManagementAllocationEntry.objects.filter(version=second_result.version, project=first).count(), 1)
 
+    def test_preview_is_read_only_and_matches_generated_entries(self):
+        organization, pool, first, second, third = self._setup()
+        service = self._service({first.id: Decimal("300"), second.id: Decimal("100")})
+        command = self._command(pool, [first, second], strategy=AllocationStrategy.REVENUE)
+        counts = (
+            ManagementAllocationPeriod.objects.count(),
+            ManagementAllocationVersion.objects.count(),
+            ManagementAllocationEntry.objects.count(),
+            AuditEvent.objects.count(),
+        )
+
+        preview = service.preview(command)
+        repeated_preview = service.preview(command)
+
+        self.assertEqual(
+            counts,
+            (
+                ManagementAllocationPeriod.objects.count(),
+                ManagementAllocationVersion.objects.count(),
+                ManagementAllocationEntry.objects.count(),
+                AuditEvent.objects.count(),
+            ),
+        )
+        self.assertEqual(preview.created, False)
+        self.assertEqual(preview.source_amount, Decimal("100.00"))
+        self.assertEqual(preview.allocated_amount, Decimal("100.00"))
+        self.assertEqual(preview.unallocated_amount, Decimal("0.00"))
+        self.assertEqual(preview.total_percentage, Decimal("100.0000"))
+        self.assertEqual([entry.allocated_amount for entry in preview.entries], [Decimal("75.00"), Decimal("25.00")])
+        self.assertEqual(preview.metadata["fingerprint"], repeated_preview.metadata["fingerprint"])
+
+        generated = service.generate(command)
+
+        self.assertEqual([entry.amount for entry in generated.entries], [entry.allocated_amount for entry in preview.entries])
+        self.assertEqual(generated.metadata["fingerprint"], preview.metadata["fingerprint"])
+        self.assertEqual(ManagementAllocationVersion.objects.count(), 1)
+
+    def test_preview_before_after_values_use_existing_approved_allocations_only(self):
+        organization, pool, first, second, third = self._setup()
+        period = ManagementAllocationPeriod.objects.create(organization=organization, year=2026, month=6)
+        approved = ManagementAllocationVersion.objects.create(
+            period=period,
+            pool=pool,
+            version_number=1,
+            status=VersionStatus.APPROVED,
+            approved_at=timezone.now(),
+            metadata={"source_amount": "10.00", "source_amount_origin": "manual"},
+        )
+        ManagementAllocationEntry.objects.create(
+            version=approved,
+            project=first,
+            percentage=Decimal("100.0000"),
+            amount=Decimal("10.00"),
+        )
+        draft = ManagementAllocationVersion.objects.create(
+            period=period,
+            pool=pool,
+            version_number=2,
+            status=VersionStatus.DRAFT,
+            metadata={"source_amount": "99.00", "source_amount_origin": "manual"},
+        )
+        ManagementAllocationEntry.objects.create(
+            version=draft,
+            project=first,
+            percentage=Decimal("100.0000"),
+            amount=Decimal("99.00"),
+        )
+
+        preview = self._service(costs={first.id: Decimal("5")}).preview(
+            self._command(pool, [first], strategy=AllocationStrategy.EQUAL, source_amount=Decimal("20.00"))
+        )
+        entry = preview.entries[0]
+
+        self.assertEqual(entry.before_direct_cost, Decimal("5"))
+        self.assertEqual(entry.current_allocated_in, Decimal("10.00"))
+        self.assertEqual(entry.current_management_total_cost, Decimal("15.00"))
+        self.assertEqual(entry.allocated_amount, Decimal("20.00"))
+        self.assertEqual(entry.projected_management_total_cost, Decimal("35.00"))
+        self.assertIn("existing_draft_version", [warning["code"] for warning in preview.warnings])
+
     def test_rollback_when_entry_creation_fails_and_no_audit(self):
         organization, pool, first, second, third = self._setup()
 

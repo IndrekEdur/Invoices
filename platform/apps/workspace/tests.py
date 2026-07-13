@@ -4286,6 +4286,71 @@ class ManagementAllocationWorkspaceTests(TestCase):
         self.assertEqual(generate_mock.call_count, 1)
         merit_mock.assert_not_called()
 
+    def test_wizard_navigation_preview_is_read_only_and_final_create_clears_state(self):
+        create_url = reverse("workspace:management_allocation_create")
+
+        first = self.client.post(
+            create_url,
+            {
+                "_wizard_action": "continue",
+                "source_type": AllocationSourceType.COST_POOL,
+                "pool_id": self.pool.id,
+            },
+        )
+        second = self.client.post(
+            create_url,
+            {
+                "_wizard_action": "continue",
+                "month": "2026-06",
+                "source_amount_mode": "manual",
+                "source_amount": "120.00",
+                "source_currency": "EUR",
+                "reason": "Monthly redistribution",
+            },
+        )
+        preview_response = self.client.post(
+            create_url,
+            {
+                "_wizard_action": "preview",
+                "strategy": AllocationStrategy.EQUAL,
+                "project_ids": [self.first_project.id, self.second_project.id],
+                "suggested_project_ids": f"{self.first_project.id},{self.second_project.id}",
+            },
+        )
+
+        self.assertRedirects(first, create_url)
+        self.assertRedirects(second, create_url)
+        self.assertRedirects(preview_response, create_url)
+        self.assertFalse(ManagementAllocationVersion.objects.exists())
+        self.assertFalse(ManagementAllocationEntry.objects.exists())
+        self.assertFalse(AuditEvent.objects.filter(event_type="management_allocation_proposal_generated").exists())
+        preview_page = self.client.get(create_url)
+        self.assertContains(preview_page, "Preview fresh")
+        self.assertContains(preview_page, "60,00 EUR")
+
+        with patch.object(ManagementAllocationProposalService, "generate", wraps=ManagementAllocationProposalService().generate) as generate_mock:
+            final = self.client.post(create_url, {"_wizard_action": "create_draft"})
+
+        version = ManagementAllocationVersion.objects.get()
+        self.assertRedirects(final, reverse("workspace:management_allocation_detail", args=[version.id]))
+        self.assertEqual(generate_mock.call_count, 1)
+        self.assertEqual(list(version.entries.values_list("amount", flat=True)), [Decimal("60.000000"), Decimal("60.000000")])
+        self.assertNotIn("management_allocation_wizard", self.client.session)
+
+    def test_wizard_cannot_skip_required_steps_and_cancel_clears_state(self):
+        create_url = reverse("workspace:management_allocation_create")
+
+        skip = self.client.post(create_url, {"_wizard_action": "preview"})
+        self.assertRedirects(skip, create_url)
+        self.assertFalse(ManagementAllocationVersion.objects.exists())
+        self.assertIn("management_allocation_wizard", self.client.session)
+
+        cancel = self.client.post(create_url, {"_wizard_action": "cancel"})
+
+        self.assertRedirects(cancel, reverse("workspace:management_allocations"))
+        self.assertNotIn("management_allocation_wizard", self.client.session)
+        self.assertFalse(ManagementAllocationVersion.objects.exists())
+
     def test_detail_route_shows_source_entries_totals_warnings_and_history(self):
         version = self._draft_version()
 

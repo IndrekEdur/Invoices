@@ -698,7 +698,43 @@ Controls:
 - no silent currency conversion;
 - no automatic allocation to archived projects without explicit confirmation.
 
-## 19. Security And Permissions
+## 19. Allocation Wizard And Preview
+
+Management allocation creation uses a guided Workspace wizard rather than one dense form. Wizard state is presentation state only: it is scoped to the user's session, contains no secrets, and creates no database records until the final draft confirmation.
+
+Wizard steps:
+
+1. Source.
+2. Period and source amount.
+3. Recipient Projects.
+4. Allocation preview.
+5. Create draft.
+
+`ManagementAllocationProposalService` remains the authoritative proposal engine. The read-only `preview()` operation and the write-side `generate()` operation share the same calculation helper so previewed proposed entries match persisted draft entries when source data is unchanged.
+
+Preview purity rules:
+
+- Preview creates no `ManagementAllocationPeriod`, `ManagementAllocationVersion`, `ManagementAllocationEntry`, or `AuditEvent`.
+- Preview does not mutate GL cache rows, Projects, cost pools, or allocation source records.
+- Preview does not call Merit or any external accounting API.
+- Preview shows source diagnostics, warnings, balancing, proposed recipient amounts, and before/after management cost impact.
+- Draft creation happens only after explicit final confirmation.
+
+Preview freshness is tracked with a deterministic fingerprint derived from source identity, period, source basis, source amount, strategy, recipients, manual values, currency, and proposed entries. Final draft creation rebuilds the proposal command from server-side wizard state and verifies the latest preview fingerprint where practical. If source data or wizard inputs changed, the user must refresh preview before creating a draft.
+
+Existing approved allocation visibility:
+
+- Preview warns when a current approved version exists for the same source/month.
+- Creating a draft does not supersede approved history.
+- Superseding happens only when a later draft is explicitly approved.
+
+Existing draft visibility:
+
+- Preview warns when another draft exists for the same source/month.
+- The platform does not silently resolve duplicate drafts.
+- Users review existing drafts through normal allocation lifecycle screens.
+
+## 20. Security And Permissions
 
 Future permissions:
 
@@ -710,7 +746,7 @@ Future permissions:
 
 Management allocation screens expose company overhead, salaries, administration, and margin impact. They require stronger permissions than normal project detail pages.
 
-## 20. Migration Strategy
+## 21. Migration Strategy
 
 Initial implementation path:
 
@@ -732,7 +768,7 @@ Migration rules:
 - Management reporting should be additive and opt-in at first.
 - Historical allocations start empty; do not infer prior months automatically.
 
-## 21. Future Compatibility
+## 22. Future Compatibility
 
 Architecture must support:
 
@@ -748,7 +784,7 @@ Architecture must support:
 - allocation simulations;
 - allocation snapshots in monthly reports.
 
-## 22. Non-Goals
+## 23. Non-Goals
 
 Do not implement in the initial architecture or first model tasks:
 
@@ -762,7 +798,7 @@ Do not implement in the initial architecture or first model tasks:
 - time tracking integration;
 - external report distribution changes.
 
-## 23. Future Roadmap
+## 24. Future Roadmap
 
 Suggested tasks:
 
@@ -777,7 +813,7 @@ Suggested tasks:
 9. `COST-ALLOC-009` Proposal review and approval UI.
 10. `COST-ALLOC-010` Project financial management result view.
 
-## 24. Engineering Rules
+## 25. Engineering Rules
 
 - GL cache is read-only for management allocation.
 - Approved allocation versions are immutable.
@@ -787,3 +823,4 @@ Suggested tasks:
 - Project participation is always user-confirmed.
 - Audit is required for every important action.
 - Direct and allocated costs must remain visibly separate in reports.
+- Wizard preview must remain read-only and share calculation logic with final proposal generation.

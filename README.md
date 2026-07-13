@@ -70,6 +70,8 @@ Management allocations can now use either a Management Cost Pool or a Workspace 
 
 The Management Allocation create flow preselects Projects with positive revenue in the selected month by default. Preselection is visible, editable, filterable, and never overrides the final explicit recipient `project_ids` submitted by the user.
 
+Management Allocation creation now uses a guided wizard with a read-only live preview before draft creation. Users review source, month, source basis, recipients, strategy, proposed percentages, amounts, balancing, warnings, and before/after management cost impact before creating a draft. Preview creates no period, version, entries, or audit event; draft creation happens only after final confirmation.
+
 Project Financials now separates Accounting and Management views. Accounting Result remains based only on synchronized Merit GL data. Management Result adds approved Management Cost Allocation entries for matching months as an internal reporting layer, while keeping allocated cost, source, version, month, and approval traceability visible. Project-source allocations are reported as allocated-in for recipients and allocated-out for the source project.
 
 GL Account Classification Settings at `/workspace/settings/account-classifications/` lets administrators map imported GL account codes into reporting categories without Django admin or shell commands. Mappings are exact-code, integration-scoped, audited, and affect project financial aggregation immediately without GL re-sync.
