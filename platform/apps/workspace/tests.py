@@ -29,6 +29,7 @@ from apps.accounting.services import (
     CreateAccountingDimensionValueResult,
     ProjectFinancialAggregationService,
     SyncAccountingDimensionsResult,
+    SyncGeneralLedgerResult,
 )
 from apps.core.models import AuditEvent
 from apps.core.services import CreateOrganizationCommand, OrganizationService
@@ -42,6 +43,7 @@ from apps.projects.services import (
     ProjectStatusService,
 )
 from apps.workflow.models import WorkflowDefinition, WorkflowInstance, WorkflowState
+from apps.workspace.forms import calendar_month_bounds
 
 
 def create_organization(name="Workspace Org"):
@@ -1257,6 +1259,263 @@ class OrganizationFinancialDashboardTests(TestCase):
         self.assertContains(response, "page=2")
         self.assertContains(response, "sort=project_code")
         self.assertContains(response, "currency=EUR")
+
+
+class MonthlyGLSyncUITests(TestCase):
+    def _result(self, integration, period_start=timezone.datetime(2026, 6, 1).date(), period_end=timezone.datetime(2026, 6, 30).date()):
+        return SyncGeneralLedgerResult(
+            integration=integration,
+            sync_state=None,
+            sync_run=None,
+            period_start=period_start,
+            period_end=period_end,
+            requested_chunk_count=1,
+            completed_chunk_count=1,
+            discovered_batch_count=142,
+            created_count=28,
+            updated_count=4,
+            unchanged_count=1206,
+            failed_count=0,
+            batches=[],
+            partial=False,
+            synced=True,
+            metadata={},
+        )
+
+    def test_calendar_month_bounds(self):
+        self.assertEqual(calendar_month_bounds("2026-01"), (timezone.datetime(2026, 1, 1).date(), timezone.datetime(2026, 1, 31).date()))
+        self.assertEqual(calendar_month_bounds("2026-04"), (timezone.datetime(2026, 4, 1).date(), timezone.datetime(2026, 4, 30).date()))
+        self.assertEqual(calendar_month_bounds("2026-02"), (timezone.datetime(2026, 2, 1).date(), timezone.datetime(2026, 2, 28).date()))
+        self.assertEqual(calendar_month_bounds("2028-02"), (timezone.datetime(2028, 2, 1).date(), timezone.datetime(2028, 2, 29).date()))
+        self.assertEqual(calendar_month_bounds("2026-12"), (timezone.datetime(2026, 12, 1).date(), timezone.datetime(2026, 12, 31).date()))
+        self.assertEqual(calendar_month_bounds("2035-07"), (timezone.datetime(2035, 7, 1).date(), timezone.datetime(2035, 7, 31).date()))
+        with self.assertRaises(ValueError):
+            calendar_month_bounds("2026/06")
+        with self.assertRaises(ValueError):
+            calendar_month_bounds("bad")
+
+    def test_sync_form_rendered_with_month_and_active_integration(self):
+        organization = create_organization()
+        integration = create_merit_integration(organization)
+
+        response = self.client.get(reverse("workspace:financial_dashboard"), {"month": "2026-06"})
+
+        self.assertContains(response, "Monthly Merit GL Sync")
+        self.assertContains(response, reverse("workspace:financial_dashboard_sync_month"))
+        self.assertContains(response, "csrfmiddlewaretoken")
+        self.assertContains(response, 'value="2026-06"', html=False)
+        self.assertContains(response, integration.display_name)
+
+    def test_multiple_integrations_selector_and_no_integration_message(self):
+        organization = create_organization()
+        first = create_merit_integration(organization)
+        second = create_merit_integration(organization)
+        second.display_name = "Second Merit"
+        second.api_id = "api-id-2"
+        second.save()
+
+        response = self.client.get(reverse("workspace:financial_dashboard"), {"month": "2026-06"})
+        self.assertContains(response, first.display_name)
+        self.assertContains(response, "Second Merit")
+        self.assertContains(response, "Multiple active Merit integrations")
+
+        AccountingIntegration.objects.all().delete()
+        no_integration = self.client.get(reverse("workspace:financial_dashboard"), {"month": "2026-06"})
+        self.assertContains(no_integration, "No active Merit integration is configured")
+        self.assertContains(no_integration, reverse("workspace:settings_accounting_integrations"))
+        self.assertContains(no_integration, "disabled", html=False)
+
+    @patch("apps.workspace.views.GeneralLedgerSyncService.sync")
+    def test_get_does_not_call_service_and_post_calls_gl_sync_service(self, sync_mock):
+        organization = create_organization()
+        integration = create_merit_integration(organization)
+        sync_mock.return_value = self._result(integration)
+
+        get_response = self.client.get(reverse("workspace:financial_dashboard_sync_month"))
+        self.assertEqual(get_response.status_code, 405)
+        sync_mock.assert_not_called()
+
+        response = self.client.post(
+            reverse("workspace:financial_dashboard_sync_month"),
+            {
+                "integration": integration.id,
+                "month": "2026-06",
+                "next": "/workspace/financials/?month=2026-06&currency=EUR&include_overhead=0",
+            },
+            follow=True,
+        )
+
+        self.assertRedirects(response, "/workspace/financials/?month=2026-06&currency=EUR&include_overhead=0")
+        sync_mock.assert_called_once()
+        command = sync_mock.call_args.args[0]
+        self.assertEqual(command.integration, integration)
+        self.assertEqual(command.period_start, timezone.datetime(2026, 6, 1).date())
+        self.assertEqual(command.period_end, timezone.datetime(2026, 6, 30).date())
+        self.assertEqual(command.mode, AccountingSyncRun.Mode.PERIOD_RESYNC)
+        self.assertEqual(command.date_type, "document_date")
+        self.assertTrue(command.with_lines)
+        self.assertTrue(command.with_cost_allocations)
+        self.assertFalse(command.initial_import)
+        self.assertEqual(command.metadata, {"source": "workspace_financial_dashboard", "selected_month": "2026-06"})
+        self.assertContains(response, "Merit GL sync completed for 2026-06")
+        self.assertContains(response, "discovered 142 provider batches")
+        self.assertContains(response, "created 28")
+        self.assertContains(response, "updated 4")
+        self.assertContains(response, "unchanged 1206")
+
+    @patch("apps.workspace.views.MeritAPIClient.get_gl_batches_full")
+    @patch("apps.workspace.views.GeneralLedgerSyncService.sync")
+    def test_no_direct_merit_api_call_invalid_inputs_and_organization_isolation(self, sync_mock, api_mock):
+        organization = create_organization()
+        integration = create_merit_integration(organization)
+        other_org = create_organization("Other sync org")
+        other_integration = create_merit_integration(other_org)
+        inactive = create_merit_integration(organization)
+        inactive.is_active = False
+        inactive.save()
+        non_merit = AccountingIntegration.objects.create(
+            organization=organization,
+            provider=AccountingIntegration.Provider.XERO,
+            display_name="Xero",
+            api_base_url="https://xero.example.test",
+            api_id="xero-id",
+            encrypted_secret_placeholder="xero-secret",
+        )
+
+        cases = [
+            {"integration": integration.id, "month": "bad"},
+            {"integration": other_integration.id, "month": "2026-06"},
+            {"integration": inactive.id, "month": "2026-06"},
+            {"integration": non_merit.id, "month": "2026-06"},
+        ]
+        for payload in cases:
+            response = self.client.post(reverse("workspace:financial_dashboard_sync_month"), payload, follow=True)
+            self.assertContains(response, "Merit GL sync could not start")
+
+        sync_mock.assert_not_called()
+        api_mock.assert_not_called()
+
+    @patch("apps.workspace.views.GeneralLedgerSyncService.sync")
+    def test_running_sync_blocks_post_and_disables_button(self, sync_mock):
+        organization = create_organization()
+        integration = create_merit_integration(organization)
+        other = create_merit_integration(organization)
+        AccountingSyncState.objects.create(
+            organization=organization,
+            integration=integration,
+            source_type=AccountingSyncState.SourceType.GL,
+            sync_status=AccountingSyncState.SyncStatus.RUNNING,
+        )
+        AccountingSyncState.objects.create(
+            organization=organization,
+            integration=other,
+            source_type=AccountingSyncState.SourceType.GL,
+            sync_status=AccountingSyncState.SyncStatus.IDLE,
+        )
+
+        page = self.client.get(reverse("workspace:financial_dashboard"), {"month": "2026-06"})
+        self.assertContains(page, "A Merit GL sync is already running")
+        self.assertContains(page, "disabled", html=False)
+
+        response = self.client.post(
+            reverse("workspace:financial_dashboard_sync_month"),
+            {"integration": integration.id, "month": "2026-06"},
+            follow=True,
+        )
+
+        sync_mock.assert_not_called()
+        self.assertContains(response, "already running")
+
+    @patch("apps.workspace.views.GeneralLedgerSyncService.sync")
+    def test_error_messages_are_safe_for_partial_and_total_failure(self, sync_mock):
+        organization = create_organization()
+        integration = create_merit_integration(organization)
+        AccountingSyncRun.objects.create(
+            organization=organization,
+            integration=integration,
+            source_type=AccountingSyncState.SourceType.GL,
+            status=AccountingSyncRun.Status.PARTIAL,
+            requested_period_start=timezone.datetime(2026, 6, 1).date(),
+            requested_period_end=timezone.datetime(2026, 6, 30).date(),
+        )
+        sync_mock.side_effect = RuntimeError("api-secret signature=secret raw payload")
+
+        partial = self.client.post(
+            reverse("workspace:financial_dashboard_sync_month"),
+            {"integration": integration.id, "month": "2026-06"},
+            follow=True,
+        )
+        self.assertContains(partial, "failed after partial progress")
+        self.assertNotContains(partial, "api-secret")
+        self.assertNotContains(partial, "signature=secret")
+        self.assertNotContains(partial, "raw payload")
+
+        sync_mock.reset_mock()
+        sync_mock.side_effect = RuntimeError("api-secret")
+        total = self.client.post(
+            reverse("workspace:financial_dashboard_sync_month"),
+            {"integration": integration.id, "month": "2026-07"},
+            follow=True,
+        )
+        self.assertContains(total, "failed. No new completion state was recorded")
+        self.assertNotContains(total, "api-secret")
+
+    def test_selected_month_sync_run_panel_scopes_latest_run(self):
+        organization = create_organization()
+        integration = create_merit_integration(organization)
+        other_integration = create_merit_integration(organization)
+        june_start = timezone.datetime(2026, 6, 1).date()
+        june_end = timezone.datetime(2026, 6, 30).date()
+        may_start = timezone.datetime(2026, 5, 1).date()
+        may_end = timezone.datetime(2026, 5, 31).date()
+        AccountingSyncRun.objects.create(
+            organization=organization,
+            integration=integration,
+            source_type=AccountingSyncState.SourceType.GL,
+            status=AccountingSyncRun.Status.COMPLETED,
+            mode=AccountingSyncRun.Mode.PERIOD_RESYNC,
+            requested_period_start=may_start,
+            requested_period_end=may_end,
+            discovered_count=999,
+        )
+        AccountingSyncRun.objects.create(
+            organization=organization,
+            integration=other_integration,
+            source_type=AccountingSyncState.SourceType.GL,
+            status=AccountingSyncRun.Status.FAILED,
+            requested_period_start=june_start,
+            requested_period_end=june_end,
+            safe_error="other integration error",
+        )
+        AccountingSyncRun.objects.create(
+            organization=organization,
+            integration=integration,
+            source_type=AccountingSyncState.SourceType.GL,
+            status=AccountingSyncRun.Status.FAILED,
+            requested_period_start=june_start,
+            requested_period_end=june_end,
+            safe_error="safe selected month error",
+            discovered_count=7,
+            created_count=2,
+            updated_count=3,
+            unchanged_count=4,
+            skipped_count=5,
+            failed_count=6,
+        )
+
+        response = self.client.get(reverse("workspace:financial_dashboard"), {"month": "2026-06"})
+
+        self.assertContains(response, "Selected Month Sync Run")
+        self.assertContains(response, "failed")
+        self.assertContains(response, "safe selected month error")
+        self.assertContains(response, "7")
+        self.assertContains(response, "2 / 3 / 4")
+        self.assertContains(response, "5 / 6")
+        self.assertNotContains(response, "999")
+        self.assertNotContains(response, "other integration error")
+
+        empty = self.client.get(reverse("workspace:financial_dashboard"), {"month": "2026-08"})
+        self.assertContains(empty, "No sync run for selected month yet.")
 
 
 class DashboardMVPTests(TestCase):

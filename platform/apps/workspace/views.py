@@ -1,5 +1,7 @@
 from django.contrib import messages
 from django.shortcuts import get_object_or_404, redirect
+from django.urls import reverse
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views import View
 from django.views.generic import TemplateView
 
@@ -26,7 +28,7 @@ from apps.communications.services import (
     RejectEmailProjectLinkCommand,
     SyncEmailAccountCommand,
 )
-from apps.accounting.models import AccountingAccountClassification, AccountingIntegration
+from apps.accounting.models import AccountingAccountClassification, AccountingIntegration, AccountingSyncState
 from apps.accounting.models import AccountingDimension
 from apps.accounting.connectors import MeritAPIClient
 from apps.accounting.services import (
@@ -34,7 +36,9 @@ from apps.accounting.services import (
     AccountingDimensionValueService,
     AccountingAccountClassificationManagementService,
     CreateAccountingDimensionValueCommand,
+    GeneralLedgerSyncService,
     SaveAccountingAccountClassificationCommand,
+    SyncGeneralLedgerCommand,
     SyncAccountingDimensionsCommand,
 )
 from apps.core.models import Organization
@@ -54,6 +58,7 @@ from .forms import (
     AccountClassificationForm,
     AccountingIntegrationForm,
     EmailAccountForm,
+    MonthlyGLSyncForm,
     ProjectEditForm,
     ProjectStatusChangeForm,
 )
@@ -724,7 +729,96 @@ class FinancialDashboardView(WorkspacePageView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context.update(OrganizationFinancialDashboardContextBuilder.build(self.request.GET))
+        context["monthly_gl_sync_form"] = MonthlyGLSyncForm(
+            organization=context.get("organization"),
+            selected_month=context["filters"]["month"],
+        )
         return context
+
+
+class FinancialDashboardSyncMonthView(View):
+    """Manual one-month GL sync action; GeneralLedgerSyncService remains authoritative."""
+
+    def post(self, request, *args, **kwargs):
+        organization = Organization.objects.order_by("id").first()
+        form = MonthlyGLSyncForm(request.POST, organization=organization, selected_month=request.POST.get("month", ""))
+        redirect_to = self._safe_redirect(request)
+
+        if not form.is_valid():
+            messages.error(request, "Merit GL sync could not start. Check the selected month and integration.")
+            return redirect(redirect_to)
+
+        integration = form.cleaned_data["integration"]
+        sync_state = AccountingSyncState.objects.filter(
+            integration=integration,
+            source_type=AccountingSyncState.SourceType.GL,
+        ).first()
+        if sync_state and sync_state.sync_status == AccountingSyncState.SyncStatus.RUNNING:
+            messages.warning(request, "A Merit GL sync is already running for this integration.")
+            return redirect(redirect_to)
+
+        month = form.cleaned_data["month"]
+        month_start = form.month_start
+        month_end = form.month_end
+        actor = request.user if request.user.is_authenticated else None
+
+        try:
+            result = GeneralLedgerSyncService().sync(
+                SyncGeneralLedgerCommand(
+                    integration=integration,
+                    period_start=month_start,
+                    period_end=month_end,
+                    mode="period_resync",
+                    date_type="document_date",
+                    with_lines=True,
+                    with_cost_allocations=True,
+                    initial_import=False,
+                    actor=actor,
+                    metadata={
+                        "source": "workspace_financial_dashboard",
+                        "selected_month": month,
+                    },
+                )
+            )
+        except Exception:
+            latest_run = self._latest_month_run(integration, month_start, month_end)
+            if latest_run and latest_run.status == "partial":
+                messages.error(
+                    request,
+                    f"Merit GL sync for {month} failed after partial progress. Earlier completed data was preserved.",
+                )
+            else:
+                messages.error(request, f"Merit GL sync for {month} failed. No new completion state was recorded.")
+            return redirect(redirect_to)
+
+        messages.success(
+            request,
+            f"Merit GL sync completed for {month}: "
+            f"discovered {result.discovered_batch_count} provider batches, "
+            f"created {result.created_count}, "
+            f"updated {result.updated_count}, "
+            f"unchanged {result.unchanged_count}, "
+            f"failed {result.failed_count}.",
+        )
+        return redirect(redirect_to)
+
+    @staticmethod
+    def _latest_month_run(integration, month_start, month_end):
+        return integration.sync_runs.filter(
+            source_type=AccountingSyncState.SourceType.GL,
+            requested_period_start=month_start,
+            requested_period_end=month_end,
+        ).order_by("-started_at", "-id").first()
+
+    @staticmethod
+    def _safe_redirect(request):
+        fallback = reverse("workspace:financial_dashboard")
+        target = request.POST.get("next") or fallback
+        if not target.startswith(reverse("workspace:financial_dashboard")):
+            return fallback
+        if not url_has_allowed_host_and_scheme(target, allowed_hosts={request.get_host()}):
+            return fallback
+        return target
 
 
 class DocumentsView(WorkspacePageView):

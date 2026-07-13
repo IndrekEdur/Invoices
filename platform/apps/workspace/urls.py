@@ -24,6 +24,7 @@ from .views import (
     EmailAccountListView,
     EmailAccountTestConnectionView,
     FinancialDashboardView,
+    FinancialDashboardSyncMonthView,
     InboxDetailView,
     InboxSyncView,
     MeritDimensionSyncView,
@@ -77,6 +78,7 @@ urlpatterns = [
     ),
     path("projects/<int:project_id>/", ProjectDetailView.as_view(), name="project_detail"),
     path("financials/", FinancialDashboardView.as_view(), name="financial_dashboard"),
+    path("financials/sync-month/", FinancialDashboardSyncMonthView.as_view(), name="financial_dashboard_sync_month"),
     path("accounting/dimensions/sync/", MeritDimensionSyncView.as_view(), name="merit_dimensions_sync"),
     path(
         "accounting/dimensions/conflicts/",

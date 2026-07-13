@@ -68,6 +68,8 @@ Project Financials now formats monetary values with consistent two-decimal displ
 
 Organization Financial Dashboard at `/workspace/financials/` compares selected-month project revenue, cost, result, margin and data quality from local synchronized GL allocations. Its project comparison chart renders Revenue, Cost and Result bars on one shared monetary scale, while margin remains a separate percentage indicator. It ranks projects by highest revenue by default, keeps completed and archived projects visible when they have financial activity, and avoids silently combining mixed-currency totals.
 
+The Financial Dashboard can manually synchronize one selected calendar month of Merit general ledger data through the existing `GeneralLedgerSyncService`. The sync is organization-wide, runs synchronously for the selected month, and leaves multi-month historical backfill, background execution, scheduled GL sync, and progress polling for later implementation.
+
 Read-only project financial summary example:
 
 ```powershell

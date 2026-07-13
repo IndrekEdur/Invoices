@@ -12,9 +12,9 @@ Current engineering phase: Engineering Standards.
 
 Current implementation phase: Platform Core.
 
-Current implementation: Project Revenue, Cost and Result Comparison Chart.
+Current implementation: Monthly GL Sync UI.
 
-Planned financial follow-ups: FIN-008 Financial Alert Rules Engine, financial report drafts, scheduled report distribution, and invoice/payment reconciliation.
+Planned financial follow-ups: multi-month historical GL backfill UI, background financial sync execution, scheduled GL synchronization, sync progress UI, FIN-008 Financial Alert Rules Engine, financial report drafts, scheduled report distribution, and invoice/payment reconciliation.
 
 Planned follow-up: MERIT-014 should define explicit Merit dimension close/reopen behavior after Workspace project completion or archival. Current status changes are local, audited Workspace actions only.
 

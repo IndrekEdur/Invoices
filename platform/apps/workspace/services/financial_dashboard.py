@@ -457,12 +457,15 @@ class OrganizationFinancialDashboardContextBuilder:
         integration = None
         state = None
         latest_run = None
+        selected_month_run = None
+        active_integrations = AccountingIntegration.objects.none()
         if organization:
-            integration = AccountingIntegration.objects.filter(
+            active_integrations = AccountingIntegration.objects.filter(
                 organization=organization,
                 provider=AccountingIntegration.Provider.MERIT,
                 is_active=True,
-            ).order_by("id").first()
+            ).order_by("display_name", "id")
+            integration = active_integrations.first()
         if integration:
             state = AccountingSyncState.objects.filter(
                 integration=integration,
@@ -472,12 +475,25 @@ class OrganizationFinancialDashboardContextBuilder:
                 integration=integration,
                 source_type=AccountingSyncState.SourceType.GL,
             ).order_by("-started_at", "-id").first()
+            selected_month_run = AccountingSyncRun.objects.filter(
+                organization=organization,
+                integration=integration,
+                source_type=AccountingSyncState.SourceType.GL,
+                requested_period_start=filters["period_start"],
+                requested_period_end=filters["period_end"],
+            ).order_by("-started_at", "-id").first()
+        is_running = bool(state and state.sync_status == AccountingSyncState.SyncStatus.RUNNING)
         return {
             "integration": integration,
+            "active_integrations": active_integrations,
+            "integration_count": active_integrations.count(),
             "state": state,
             "latest_run": latest_run,
+            "selected_month_run": selected_month_run,
             "selected_month": filters["month"],
             "status": state.sync_status if state else "never_synced",
+            "is_running": is_running,
+            "can_sync": bool(integration) and not is_running,
             "last_successful_sync_at": state.last_successful_sync_at if state else None,
             "last_error": state.last_error if state else "",
         }

@@ -79,6 +79,38 @@
         {% endif %}
     </section>
 
+    <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        {% include "workspace/partials/components/section_header.html" with title="Monthly Merit GL Sync" body="Synchronize one selected calendar month for the whole organization. This is not limited to one project." %}
+        <form method="post" action="{% url 'workspace:financial_dashboard_sync_month' %}" class="mt-4 grid gap-4 lg:grid-cols-[1fr_12rem_auto] lg:items-end">
+            {% csrf_token %}
+            <input type="hidden" name="next" value="{{ request.get_full_path }}">
+            <div>
+                <label class="text-xs font-semibold uppercase tracking-wide text-slate-500" for="{{ monthly_gl_sync_form.integration.id_for_label }}">Selected integration</label>
+                {{ monthly_gl_sync_form.integration }}
+                {% if sync_context.integration_count > 1 %}<p class="mt-1 text-xs text-slate-500">Multiple active Merit integrations are available; choose the one to sync.</p>{% endif %}
+            </div>
+            <div>
+                <label class="text-xs font-semibold uppercase tracking-wide text-slate-500" for="{{ monthly_gl_sync_form.month.id_for_label }}">Selected month</label>
+                {{ monthly_gl_sync_form.month }}
+            </div>
+            <button type="submit" {% if not sync_context.can_sync %}disabled{% endif %} class="rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300">Sync Merit GL for selected month</button>
+        </form>
+        <div class="mt-4 grid gap-3 lg:grid-cols-2">
+            <div class="rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
+                One-month sync is synchronous and bounded by the existing GL service chunking rules. Multi-month historical backfill will be added later.
+            </div>
+            {% if not sync_context.integration %}
+                <div class="rounded-xl border border-yellow-200 bg-yellow-50 p-4 text-sm text-yellow-900">
+                    No active Merit integration is configured. <a class="font-semibold underline" href="{% url 'workspace:settings_accounting_integrations' %}">Open Accounting Integration Settings</a>.
+                </div>
+            {% elif sync_context.is_running %}
+                <div class="rounded-xl border border-yellow-200 bg-yellow-50 p-4 text-sm text-yellow-900">
+                    A Merit GL sync is already running for this integration.
+                </div>
+            {% endif %}
+        </div>
+    </section>
+
     <section class="grid gap-5 sm:grid-cols-2 xl:grid-cols-5">
         {% for card in summary_cards %}
             <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -216,6 +248,23 @@
                 </dl>
                 {% if sync_context.last_error %}<div class="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">{{ sync_context.last_error }}</div>{% endif %}
                 <a href="{% url 'workspace:settings_accounting_integrations' %}" class="mt-5 inline-flex rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700">Accounting Integration Settings</a>
+            </div>
+            {% include "workspace/partials/components/section_header.html" with title="Selected Month Sync Run" body="Latest GL sync run for the dashboard month and selected Merit integration." %}
+            <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                {% if sync_context.selected_month_run %}
+                    <dl class="space-y-3 text-sm">
+                        <div><dt class="text-slate-500">Status</dt><dd>{% include "workspace/partials/components/status_badge.html" with status=sync_context.selected_month_run.status label=sync_context.selected_month_run.status %}</dd></div>
+                        <div><dt class="text-slate-500">Mode</dt><dd class="font-semibold text-slate-950">{{ sync_context.selected_month_run.mode }}</dd></div>
+                        <div><dt class="text-slate-500">Started</dt><dd class="font-semibold text-slate-950">{{ sync_context.selected_month_run.started_at|date:"Y-m-d H:i" }}</dd></div>
+                        <div><dt class="text-slate-500">Completed</dt><dd class="font-semibold text-slate-950">{{ sync_context.selected_month_run.completed_at|date:"Y-m-d H:i"|default:"-" }}</dd></div>
+                        <div><dt class="text-slate-500">Discovered</dt><dd class="font-semibold text-slate-950">{{ sync_context.selected_month_run.discovered_count }}</dd></div>
+                        <div><dt class="text-slate-500">Created / updated / unchanged</dt><dd class="font-semibold text-slate-950">{{ sync_context.selected_month_run.created_count }} / {{ sync_context.selected_month_run.updated_count }} / {{ sync_context.selected_month_run.unchanged_count }}</dd></div>
+                        <div><dt class="text-slate-500">Skipped / failed</dt><dd class="font-semibold text-slate-950">{{ sync_context.selected_month_run.skipped_count }} / {{ sync_context.selected_month_run.failed_count }}</dd></div>
+                    </dl>
+                    {% if sync_context.selected_month_run.safe_error %}<div class="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">{{ sync_context.selected_month_run.safe_error }}</div>{% endif %}
+                {% else %}
+                    {% include "workspace/partials/components/empty_state.html" with title="No sync run for selected month yet." body="Use Monthly Merit GL Sync to import this calendar month." %}
+                {% endif %}
             </div>
         </aside>
     </section>

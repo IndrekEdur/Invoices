@@ -1,4 +1,5 @@
 from django import forms
+from datetime import date, timedelta
 
 from apps.accounting.models import AccountingAccountClassification, AccountingIntegration
 from apps.communications.models import EmailAccount
@@ -12,6 +13,66 @@ FOCUS_FIELD_CLASS = (
     "outline-none transition focus:border-slate-500 focus:ring-4 focus:ring-slate-200"
 )
 CHECKBOX_CLASS = "h-4 w-4 rounded border-slate-300 text-slate-950"
+
+
+def calendar_month_bounds(month_value):
+    """Return inclusive first/last dates for a YYYY-MM calendar month."""
+    try:
+        year_text, month_text = str(month_value or "").strip().split("-", 1)
+        year = int(year_text)
+        month = int(month_text)
+        month_start = date(year, month, 1)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Month must use YYYY-MM format.") from exc
+
+    if month_start.month == 12:
+        month_end = date(month_start.year, 12, 31)
+    else:
+        month_end = date(month_start.year, month_start.month + 1, 1) - timedelta(days=1)
+    return month_start, month_end
+
+
+class MonthlyGLSyncForm(forms.Form):
+    integration = forms.ModelChoiceField(
+        queryset=AccountingIntegration.objects.none(),
+        widget=forms.Select(attrs={"class": FIELD_CLASS}),
+    )
+    month = forms.CharField(
+        widget=forms.TextInput(attrs={"class": FIELD_CLASS, "type": "month"}),
+    )
+
+    def __init__(self, *args, organization=None, selected_month="", **kwargs):
+        self.organization = organization
+        super().__init__(*args, **kwargs)
+        queryset = AccountingIntegration.objects.none()
+        if organization:
+            queryset = AccountingIntegration.objects.filter(
+                organization=organization,
+                provider=AccountingIntegration.Provider.MERIT,
+                is_active=True,
+            ).order_by("display_name", "id")
+        self.fields["integration"].queryset = queryset
+        self.fields["month"].initial = selected_month
+        if queryset.count() == 1 and not self.data:
+            self.fields["integration"].initial = queryset.first()
+
+    def clean_month(self):
+        month = (self.cleaned_data["month"] or "").strip()
+        try:
+            self.month_start, self.month_end = calendar_month_bounds(month)
+        except ValueError as exc:
+            raise forms.ValidationError(str(exc)) from exc
+        return month
+
+    def clean_integration(self):
+        integration = self.cleaned_data["integration"]
+        if not self.organization or integration.organization_id != self.organization.id:
+            raise forms.ValidationError("Choose an integration for the current organization.")
+        if integration.provider != AccountingIntegration.Provider.MERIT:
+            raise forms.ValidationError("Monthly GL sync currently supports only Merit integrations.")
+        if not integration.is_active:
+            raise forms.ValidationError("Choose an active Merit integration.")
+        return integration
 
 
 class EmailAccountForm(forms.ModelForm):
