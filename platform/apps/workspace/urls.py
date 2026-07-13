@@ -29,6 +29,8 @@ from .views import (
     InboxView,
     ProjectCreateView,
     ProjectDetailView,
+    ProjectFinancialAllocationsView,
+    ProjectFinancialsView,
     ProjectLinkConfirmView,
     ProjectLinkCorrectView,
     ProjectLinkRejectView,
@@ -56,6 +58,12 @@ urlpatterns = [
     path("project-links/<int:link_id>/correct/", ProjectLinkCorrectView.as_view(), name="project_link_correct"),
     path("projects/", ProjectsView.as_view(), name="projects"),
     path("projects/create/", ProjectCreateView.as_view(), name="project_create"),
+    path("projects/<int:project_id>/financials/", ProjectFinancialsView.as_view(), name="project_financials"),
+    path(
+        "projects/<int:project_id>/financials/allocations/",
+        ProjectFinancialAllocationsView.as_view(),
+        name="project_financial_allocations",
+    ),
     path("projects/<int:project_id>/", ProjectDetailView.as_view(), name="project_detail"),
     path("accounting/dimensions/sync/", MeritDimensionSyncView.as_view(), name="merit_dimensions_sync"),
     path(

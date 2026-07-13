@@ -49,6 +49,7 @@ from .services import (
     EmailAccountSettingsContextBuilder,
     InboxContextBuilder,
     ProjectLinkReviewContextBuilder,
+    ProjectFinancialContextBuilder,
     ProjectsContextBuilder,
     SettingsContextBuilder,
 )
@@ -548,6 +549,38 @@ class ProjectDetailView(WorkspacePageView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context.update(ProjectsContextBuilder.build_detail(project_id=self.kwargs["project_id"]))
+        return context
+
+
+class ProjectFinancialsView(WorkspacePageView):
+    template_name = "workspace/project_financials.html"
+    page_title = "Project Financials"
+    section = "projects"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(
+            ProjectFinancialContextBuilder.build(
+                project_id=self.kwargs["project_id"],
+                params=self.request.GET,
+            )
+        )
+        return context
+
+
+class ProjectFinancialAllocationsView(WorkspacePageView):
+    template_name = "workspace/project_financial_allocations.html"
+    page_title = "Project Financial Allocations"
+    section = "projects"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(
+            ProjectFinancialContextBuilder.build_allocations(
+                project_id=self.kwargs["project_id"],
+                params=self.request.GET,
+            )
+        )
         return context
 
 

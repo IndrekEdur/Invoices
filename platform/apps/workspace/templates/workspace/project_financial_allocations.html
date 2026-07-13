@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}{{ project.code }} Financial Allocations | Operations Workspace Platform{% endblock %}
+{% block actions %}
+<a href="{% url 'workspace:project_financials' project.id %}?start={{ period.start|date:'Y-m-d' }}&end={{ period.end|date:'Y-m-d' }}&currency={{ currency_filter }}&period=custom" class="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 shadow-sm transition hover:bg-slate-50">Back to Financials</a>
+{% endblock %}
+{% block content %}
+<div class="space-y-8">
+    {% include "workspace/partials/components/page_header.html" with eyebrow="Project Financials" title="Allocation Drill-down" body="Read-only source allocation rows for the selected project and period. Raw Merit payloads are not shown." %}
+
+    <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <form method="get" class="grid gap-4 lg:grid-cols-6">
+            <div><label class="text-xs font-semibold uppercase tracking-wide text-slate-500">Start</label><input type="date" name="start" value="{{ period.start|date:'Y-m-d' }}" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm"></div>
+            <div><label class="text-xs font-semibold uppercase tracking-wide text-slate-500">End</label><input type="date" name="end" value="{{ period.end|date:'Y-m-d' }}" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm"></div>
+            <div><label class="text-xs font-semibold uppercase tracking-wide text-slate-500">Currency</label><input type="text" name="currency" value="{{ currency_filter }}" placeholder="EUR" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm"></div>
+            <div><label class="text-xs font-semibold uppercase tracking-wide text-slate-500">Account</label><input type="text" name="account_code" value="{{ account_code_filter }}" placeholder="4000" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm"></div>
+            <div><label class="text-xs font-semibold uppercase tracking-wide text-slate-500">Month</label><input type="text" name="month" value="{{ month_filter }}" placeholder="2026-06" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm"></div>
+            <div><label class="text-xs font-semibold uppercase tracking-wide text-slate-500">Category</label><select name="category" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm"><option value="">All</option>{% for value,label in category_choices %}<option value="{{ value }}" {% if category_filter == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
+            <div class="lg:col-span-6"><button type="submit" class="rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white">Apply filters</button></div>
+        </form>
+    </section>
+
+    {% if period.errors %}
+        <div class="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+            {% for error in period.errors %}<div>{{ error }}</div>{% endfor %}
+        </div>
+    {% endif %}
+
+    <section class="space-y-4">
+        {% include "workspace/partials/components/section_header.html" with title="Allocation Rows" body="Exact project FK is required; dimension-code-only matches are not included." %}
+        {% if allocation_rows %}
+            <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-slate-200 text-sm">
+                        <thead class="bg-slate-50"><tr><th class="px-4 py-3 text-left">Batch date</th><th class="px-4 py-3 text-left">Document</th><th class="px-4 py-3 text-left">Account</th><th class="px-4 py-3 text-left">Memo</th><th class="px-4 py-3 text-left">Category</th><th class="px-4 py-3 text-left">Source amount</th><th class="px-4 py-3 text-left">Sign</th><th class="px-4 py-3 text-left">Normalized</th><th class="px-4 py-3 text-left">Dimension</th><th class="px-4 py-3 text-left">Currency</th><th class="px-4 py-3 text-left">Batch external ID</th></tr></thead>
+                        <tbody class="divide-y divide-slate-100">
+                            {% for row in allocation_rows %}
+                                <tr class="hover:bg-blue-50/60">
+                                    <td class="px-4 py-3">{{ row.allocation.entry.batch.batch_date|date:"Y-m-d"|default:"-" }}</td>
+                                    <td class="px-4 py-3">{{ row.allocation.entry.batch.document|default:row.allocation.entry.batch.number|default:"-" }}</td>
+                                    <td class="px-4 py-3"><div class="font-semibold">{{ row.allocation.entry.account_code }}</div><div class="text-xs text-slate-500">{{ row.allocation.entry.account_name }}</div></td>
+                                    <td class="px-4 py-3">{{ row.allocation.entry.memo|default:"-" }}</td>
+                                    <td class="px-4 py-3">{% include "workspace/partials/components/badge.html" with tone="info" label=row.category %}</td>
+                                    <td class="px-4 py-3">{{ row.source_amount_display }}</td>
+                                    <td class="px-4 py-3">{{ row.reporting_sign }}</td>
+                                    <td class="px-4 py-3 font-semibold">{{ row.normalized_amount_display }}</td>
+                                    <td class="px-4 py-3"><div>{{ row.allocation.dimension_code }}</div><div class="text-xs text-slate-500">{{ row.allocation.dimension_name }}</div></td>
+                                    <td class="px-4 py-3">{{ row.allocation.entry.batch.currency_code|default:"-" }}</td>
+                                    <td class="px-4 py-3">{{ row.allocation.entry.batch.external_id }}</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="flex items-center justify-between text-sm text-slate-600">
+                <div>Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</div>
+                <div class="flex gap-2">
+                    {% if page_obj.has_previous %}<a class="rounded-xl border border-slate-300 bg-white px-3 py-2 font-semibold" href="?page={{ page_obj.previous_page_number }}">Previous</a>{% endif %}
+                    {% if page_obj.has_next %}<a class="rounded-xl border border-slate-300 bg-white px-3 py-2 font-semibold" href="?page={{ page_obj.next_page_number }}">Next</a>{% endif %}
+                </div>
+            </div>
+        {% else %}
+            {% include "workspace/partials/components/empty_state.html" with title="No allocation rows found" body="No exact project-linked allocation rows match the selected filters." %}
+        {% endif %}
+    </section>
+</div>
+{% endblock %}

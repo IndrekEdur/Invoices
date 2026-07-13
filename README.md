@@ -60,6 +60,8 @@ The accounting app includes exact-code account classification configuration and 
 
 GL Account Classification Settings at `/workspace/settings/account-classifications/` lets administrators map imported GL account codes into reporting categories without Django admin or shell commands. Mappings are exact-code, integration-scoped, audited, and affect project financial aggregation immediately without GL re-sync.
 
+Project Financial Overview UI at `/workspace/projects/<id>/financials/` shows monthly and period-based revenue, cost, result, margin, data-quality warnings, unclassified account impact, sync status, and read-only allocation drill-downs from local synchronized GL allocations. Invoice/payment reporting, alerts, snapshots, and report distribution are not implemented yet.
+
 Read-only project financial summary example:
 
 ```powershell

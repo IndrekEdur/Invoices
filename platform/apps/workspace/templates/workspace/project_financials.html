@@ -1,0 +1,205 @@
+{% extends "base.html" %}
+{% block title %}{{ project.code }} Financials | Operations Workspace Platform{% endblock %}
+{% block actions %}
+<a href="{% url 'workspace:project_detail' project.id %}" class="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 shadow-sm transition hover:bg-slate-50">Project Overview</a>
+{% endblock %}
+{% block content %}
+<div class="space-y-8">
+    {% include "workspace/partials/components/page_header.html" with eyebrow="Project Financials" title=project.name body="Read-only financial overview from synchronized GL allocation rows. No Merit API calls are made while rendering this page." %}
+
+    <nav class="flex flex-wrap gap-2 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm" aria-label="Project workspace sections">
+        <a href="{% url 'workspace:project_detail' project.id %}" class="rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Overview</a>
+        <a href="{% url 'workspace:project_financials' project.id %}" class="rounded-xl bg-slate-950 px-3 py-2 text-sm font-semibold text-white">Financials</a>
+        <a href="{% url 'workspace:project_financial_allocations' project.id %}?start={{ period.start|date:'Y-m-d' }}&end={{ period.end|date:'Y-m-d' }}&currency={{ currency_filter }}" class="rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Allocation Drill-down</a>
+    </nav>
+
+    <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div class="flex flex-wrap items-start justify-between gap-4">
+            <div>
+                <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">{{ project.code }} · {{ project.status }}</div>
+                <h2 class="mt-2 text-xl font-semibold text-slate-950">{{ period.start|date:"Y-m-d" }} to {{ period.end|date:"Y-m-d" }}</h2>
+                <p class="mt-2 text-sm text-slate-600">Currency: {{ financial_result.currency|default:currency_filter|default:"not selected" }}</p>
+            </div>
+            {% include "workspace/partials/components/status_badge.html" with status=financial_result.data_quality_status label=financial_result.data_quality_status %}
+        </div>
+        {% if form_errors %}
+            <div class="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+                {% for error in form_errors %}<div>{{ error }}</div>{% endfor %}
+            </div>
+        {% endif %}
+    </section>
+
+    <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <form method="get" class="grid gap-4 lg:grid-cols-5">
+            <div>
+                <label class="text-xs font-semibold uppercase tracking-wide text-slate-500">Period</label>
+                <select name="period" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm">
+                    {% for value,label in period_presets %}
+                        <option value="{{ value }}" {% if period.preset == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="text-xs font-semibold uppercase tracking-wide text-slate-500">Start</label>
+                <input type="date" name="start" value="{{ period.start|date:'Y-m-d' }}" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm">
+            </div>
+            <div>
+                <label class="text-xs font-semibold uppercase tracking-wide text-slate-500">End</label>
+                <input type="date" name="end" value="{{ period.end|date:'Y-m-d' }}" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm">
+            </div>
+            <div>
+                <label class="text-xs font-semibold uppercase tracking-wide text-slate-500">Currency</label>
+                <input type="text" name="currency" value="{{ currency_filter }}" placeholder="EUR" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm">
+            </div>
+            <div class="flex items-end gap-3">
+                <label class="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm font-semibold text-slate-700">
+                    <input type="checkbox" name="include_overhead" value="1" {% if include_overhead %}checked{% endif %} class="h-4 w-4 rounded border-slate-300">
+                    Overhead
+                </label>
+                <button type="submit" class="rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white">Apply</button>
+            </div>
+        </form>
+    </section>
+
+    <section class="grid gap-5 sm:grid-cols-2 xl:grid-cols-6">
+        {% for card in summary_cards %}
+            <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">{{ card.label }}</div>
+                <div class="mt-3 text-2xl font-semibold {% if card.status == 'danger' %}text-red-700{% elif card.status == 'success' %}text-green-700{% else %}text-slate-950{% endif %}">
+                    {{ card.display_value }}
+                </div>
+                <div class="mt-4">{% include "workspace/partials/components/status_badge.html" with status=card.status label=card.status %}</div>
+            </article>
+        {% endfor %}
+    </section>
+
+    {% if financial_result.allocation_count == 0 %}
+        <section>
+            {% include "workspace/partials/components/empty_state.html" with title="No linked financial transactions found for this project and period." body="Possible explanations: GL data has not been synced, project code does not match allocation dimension, allocations are not linked to this Project, or the selected period has no data." %}
+            <div class="mt-4 flex flex-wrap gap-3">
+                <a href="{% url 'workspace:settings_accounting_integrations' %}" class="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700">Accounting settings</a>
+                <a href="{% url 'workspace:projects' %}" class="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700">Project list</a>
+                <a href="{% url 'workspace:settings_account_classifications' %}" class="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700">GL account classifications</a>
+            </div>
+        </section>
+    {% endif %}
+
+    <section class="grid gap-8 xl:grid-cols-2">
+        <div class="space-y-4">
+            {% include "workspace/partials/components/section_header.html" with title="Operational Cost Breakdown" body="Operational result uses only categories included by the accounting aggregation service." %}
+            <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <table class="min-w-full divide-y divide-slate-200 text-sm">
+                    <thead class="bg-slate-50"><tr><th class="px-4 py-3 text-left">Category</th><th class="px-4 py-3 text-left">Amount</th><th class="px-4 py-3 text-left">Allocations</th><th class="px-4 py-3 text-left">Accounts</th></tr></thead>
+                    <tbody class="divide-y divide-slate-100">
+                        {% for row in cost_breakdown %}
+                            <tr><td class="px-4 py-3 font-semibold">{{ row.category }}</td><td class="px-4 py-3">{{ row.amount_display }}</td><td class="px-4 py-3">{{ row.allocation_count }}</td><td class="px-4 py-3">{{ row.source_account_codes|join:", "|default:"-" }}</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="space-y-4">
+            {% include "workspace/partials/components/section_header.html" with title="Non-operational and Excluded" body="These categories are visible for traceability but remain separate from operational result." %}
+            <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <table class="min-w-full divide-y divide-slate-200 text-sm">
+                    <thead class="bg-slate-50"><tr><th class="px-4 py-3 text-left">Category</th><th class="px-4 py-3 text-left">Amount</th><th class="px-4 py-3 text-left">Allocations</th><th class="px-4 py-3 text-left">Accounts</th></tr></thead>
+                    <tbody class="divide-y divide-slate-100">
+                        {% for row in other_breakdown %}
+                            <tr><td class="px-4 py-3 font-semibold">{{ row.category }}</td><td class="px-4 py-3">{{ row.amount_display }}</td><td class="px-4 py-3">{{ row.allocation_count }}</td><td class="px-4 py-3">{{ row.source_account_codes|join:", "|default:"-" }}</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <section class="space-y-4">
+        {% include "workspace/partials/components/section_header.html" with title="Monthly Trend" body="Compact server-rendered bars for revenue, total cost and result. The table below remains the source-readable view." %}
+        <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div class="space-y-4">
+                {% for row in trend_rows %}
+                    <div class="grid gap-2 md:grid-cols-[100px_1fr]">
+                        <div class="text-sm font-semibold text-slate-700">{{ row.month.period_start|date:"Y-m" }}</div>
+                        <div class="space-y-1">
+                            <div class="h-2 rounded bg-blue-100"><div class="h-2 rounded bg-blue-500" style="width: {{ row.revenue_width }}%"></div></div>
+                            <div class="h-2 rounded bg-slate-100"><div class="h-2 rounded bg-slate-500" style="width: {{ row.cost_width }}%"></div></div>
+                            <div class="h-2 rounded {% if row.result_status == 'danger' %}bg-red-100{% else %}bg-green-100{% endif %}"><div class="h-2 rounded {% if row.result_status == 'danger' %}bg-red-500{% else %}bg-green-500{% endif %}" style="width: {{ row.result_width }}%"></div></div>
+                        </div>
+                    </div>
+                {% empty %}
+                    <p class="text-sm text-slate-600">No monthly trend data for this period.</p>
+                {% endfor %}
+            </div>
+        </div>
+    </section>
+
+    <section class="space-y-4">
+        {% include "workspace/partials/components/section_header.html" with title="Monthly Financials" body="Newest month first." %}
+        <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-200 text-sm">
+                    <thead class="bg-slate-50"><tr><th class="px-4 py-3 text-left">Month</th><th class="px-4 py-3 text-left">Revenue</th><th class="px-4 py-3 text-left">Material</th><th class="px-4 py-3 text-left">Subcontractor</th><th class="px-4 py-3 text-left">Labor</th><th class="px-4 py-3 text-left">Other</th><th class="px-4 py-3 text-left">Overhead</th><th class="px-4 py-3 text-left">Cost</th><th class="px-4 py-3 text-left">Result</th><th class="px-4 py-3 text-left">Margin</th><th class="px-4 py-3 text-left">Unclassified</th><th class="px-4 py-3 text-left">Status</th></tr></thead>
+                    <tbody class="divide-y divide-slate-100">
+                        {% for month in months_newest_first %}
+                            <tr class="hover:bg-blue-50/60"><td class="px-4 py-3 font-semibold">{{ month.period_start|date:"Y-m" }}</td><td class="px-4 py-3">{{ month.revenue }}</td><td class="px-4 py-3">{{ month.material_cost }}</td><td class="px-4 py-3">{{ month.subcontractor_cost }}</td><td class="px-4 py-3">{{ month.labor_cost }}</td><td class="px-4 py-3">{{ month.equipment_cost|add:month.transport_cost|add:month.other_direct_cost }}</td><td class="px-4 py-3">{{ month.overhead }}</td><td class="px-4 py-3">{{ month.total_cost }}</td><td class="px-4 py-3 {% if month.result < 0 %}text-red-700 font-semibold{% endif %}">{{ month.result }}</td><td class="px-4 py-3">{{ month.margin|default:"-" }}</td><td class="px-4 py-3">{{ month.unclassified_amount }}</td><td class="px-4 py-3">{% if month.unclassified_amount %}{% include "workspace/partials/components/status_badge.html" with status="warning" label="unclassified" %}{% else %}{% include "workspace/partials/components/status_badge.html" with status="success" label="complete" %}{% endif %}</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <section class="grid gap-8 xl:grid-cols-2">
+        <div class="space-y-4">
+            {% include "workspace/partials/components/section_header.html" with title="Data Quality" body="Explainable warnings from aggregation and selected filters." %}
+            <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div class="mb-4">{% include "workspace/partials/components/status_badge.html" with status=financial_result.data_quality_status label=financial_result.data_quality_status %}</div>
+                {% if warnings %}
+                    <div class="space-y-2">
+                        {% for warning in warnings %}
+                            <div class="rounded-xl border border-orange-200 bg-orange-50 px-4 py-3 text-sm font-medium text-orange-900">{{ warning }}</div>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    <p class="text-sm text-slate-600">No data-quality warnings for this period.</p>
+                {% endif %}
+                <a href="{% url 'workspace:settings_account_classifications' %}" class="mt-5 inline-flex rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700">Configure account classification</a>
+            </div>
+        </div>
+        <div class="space-y-4">
+            {% include "workspace/partials/components/section_header.html" with title="Source Traceability and Sync" body="Counts and GL sync state from local accounting cache." %}
+            <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <dl class="grid gap-3 text-sm md:grid-cols-2">
+                    <div><dt class="text-slate-500">Batches</dt><dd class="font-semibold text-slate-950">{{ financial_result.source_batch_count }}</dd></div>
+                    <div><dt class="text-slate-500">Entries</dt><dd class="font-semibold text-slate-950">{{ financial_result.source_entry_count }}</dd></div>
+                    <div><dt class="text-slate-500">Allocations</dt><dd class="font-semibold text-slate-950">{{ financial_result.allocation_count }}</dd></div>
+                    <div><dt class="text-slate-500">Sync run IDs</dt><dd class="font-semibold text-slate-950">{{ financial_result.source_sync_run_ids|join:", "|default:"-" }}</dd></div>
+                    <div><dt class="text-slate-500">Sync status</dt><dd>{% include "workspace/partials/components/status_badge.html" with status=sync_context.status label=sync_context.status %}</dd></div>
+                    <div><dt class="text-slate-500">Last successful sync</dt><dd class="font-semibold text-slate-950">{{ sync_context.last_successful_sync_at|date:"Y-m-d H:i"|default:"Never" }}</dd></div>
+                </dl>
+                {% if sync_context.last_error %}
+                    <div class="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">{{ sync_context.last_error }}</div>
+                {% endif %}
+            </div>
+        </div>
+    </section>
+
+    <section class="space-y-4">
+        {% include "workspace/partials/components/section_header.html" with title="Unclassified Account Impact" body="Accounts below are excluded from trusted project result until classified." %}
+        {% if unclassified_accounts %}
+            <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <table class="min-w-full divide-y divide-slate-200 text-sm">
+                    <thead class="bg-slate-50"><tr><th class="px-4 py-3 text-left">Account</th><th class="px-4 py-3 text-left">Name</th><th class="px-4 py-3 text-left">Allocations</th><th class="px-4 py-3 text-left">Source amount</th><th class="px-4 py-3 text-left">Months</th></tr></thead>
+                    <tbody class="divide-y divide-slate-100">
+                        {% for row in unclassified_accounts %}
+                            <tr><td class="px-4 py-3 font-semibold">{{ row.account_code }}</td><td class="px-4 py-3">{{ row.account_name|default:"-" }}</td><td class="px-4 py-3">{{ row.allocation_count }}</td><td class="px-4 py-3">{{ row.amount_display }}</td><td class="px-4 py-3">{{ row.months|join:", " }}</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            {% include "workspace/partials/components/empty_state.html" with title="No unclassified project allocations" body="All linked allocations in this period are classified or there is no data." %}
+        {% endif %}
+    </section>
+</div>
+{% endblock %}

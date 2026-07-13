@@ -20,8 +20,15 @@ from apps.accounting.models import (
     AccountingGLBatch,
     AccountingGLEntry,
     AccountingIntegration,
+    AccountingSyncRun,
+    AccountingSyncState,
 )
-from apps.accounting.services import CreateAccountingDimensionValueResult, SyncAccountingDimensionsResult
+from apps.accounting.connectors import MeritAPIClient
+from apps.accounting.services import (
+    CreateAccountingDimensionValueResult,
+    ProjectFinancialAggregationService,
+    SyncAccountingDimensionsResult,
+)
 from apps.core.models import AuditEvent
 from apps.core.services import CreateOrganizationCommand, OrganizationService
 from apps.documents.models import Document
@@ -394,6 +401,226 @@ class GLAccountClassificationSettingsTests(TestCase):
         )
 
         self.assertFalse(AccountingAccountClassification.objects.exists())
+
+
+class ProjectFinancialOverviewTests(TestCase):
+    def _classified_project(self):
+        organization = create_organization()
+        project = create_project(organization, code="26124", name="Kanarbiku")
+        integration = create_merit_integration(organization)
+        AccountingAccountClassification.objects.create(
+            organization=organization,
+            integration=integration,
+            account_code="3000",
+            account_name="Revenue",
+            category=AccountingAccountClassification.Category.REVENUE,
+            reporting_sign="-1",
+        )
+        AccountingAccountClassification.objects.create(
+            organization=organization,
+            integration=integration,
+            account_code="4002",
+            account_name="Materials",
+            category=AccountingAccountClassification.Category.MATERIAL_COST,
+            reporting_sign="1",
+        )
+        self._allocation(project, integration, "3000", "Revenue", "-1000.000000", "2026-06-01", "revenue")
+        self._allocation(project, integration, "4002", "Materials", "250.000000", "2026-06-15", "materials")
+        return organization, integration, project
+
+    def _allocation(self, project, integration, account_code, account_name, amount, batch_date, suffix, currency="EUR", project_link=True):
+        batch = AccountingGLBatch.objects.create(
+            organization=project.organization,
+            integration=integration,
+            external_id=f"batch-{account_code}-{suffix}",
+            batch_date=timezone.datetime.fromisoformat(batch_date).date(),
+            currency_code=currency,
+            document=f"Document {suffix}",
+            number=f"N-{suffix}",
+        )
+        entry = AccountingGLEntry.objects.create(
+            organization=project.organization,
+            integration=integration,
+            batch=batch,
+            external_id=f"entry-{account_code}-{suffix}",
+            account_code=account_code,
+            account_name=account_name,
+            memo=f"Memo {suffix}",
+            debit_amount="0.000000",
+            credit_amount="0.000000",
+        )
+        return AccountingGLAllocation.objects.create(
+            organization=project.organization,
+            integration=integration,
+            entry=entry,
+            external_id=f"alloc-{account_code}-{suffix}",
+            dimension_code=project.code,
+            dimension_name=project.name,
+            amount=amount,
+            project=project if project_link else None,
+        )
+
+    def test_financials_route_returns_200_header_default_period_and_no_api_call(self):
+        _organization, _integration, project = self._classified_project()
+        counts = (
+            AccountingGLBatch.objects.count(),
+            AccountingGLEntry.objects.count(),
+            AccountingGLAllocation.objects.count(),
+        )
+
+        with patch.object(ProjectFinancialAggregationService, "aggregate", wraps=ProjectFinancialAggregationService().aggregate) as aggregate_mock:
+            with patch.object(MeritAPIClient, "request") as request_mock:
+                response = self.client.get(reverse("workspace:project_financials", args=[project.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Project Financials")
+        self.assertContains(response, "Kanarbiku")
+        self.assertContains(response, "2026-01-01")
+        self.assertContains(response, "Revenue")
+        aggregate_mock.assert_called_once()
+        request_mock.assert_not_called()
+        self.assertEqual(
+            counts,
+            (
+                AccountingGLBatch.objects.count(),
+                AccountingGLEntry.objects.count(),
+                AccountingGLAllocation.objects.count(),
+            ),
+        )
+
+    def test_custom_period_currency_and_overhead_are_passed_to_aggregation(self):
+        _organization, _integration, project = self._classified_project()
+
+        with patch.object(ProjectFinancialAggregationService, "aggregate", wraps=ProjectFinancialAggregationService().aggregate) as aggregate_mock:
+            response = self.client.get(
+                reverse("workspace:project_financials", args=[project.id]),
+                {
+                    "period": "custom",
+                    "start": "2026-06-01",
+                    "end": "2026-06-30",
+                    "currency": "EUR",
+                    "include_overhead": "0",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        command = aggregate_mock.call_args.args[0]
+        self.assertEqual(command.currency, "EUR")
+        self.assertFalse(command.include_overhead)
+        self.assertContains(response, "currency_filter_active:EUR")
+        self.assertContains(response, "overhead_excluded")
+
+    def test_invalid_and_reversed_period_are_safe(self):
+        _organization, _integration, project = self._classified_project()
+
+        invalid = self.client.get(
+            reverse("workspace:project_financials", args=[project.id]),
+            {"period": "custom", "start": "bad", "end": "2026-06-30"},
+        )
+        reversed_response = self.client.get(
+            reverse("workspace:project_financials", args=[project.id]),
+            {"period": "custom", "start": "2026-07-01", "end": "2026-06-30"},
+        )
+
+        self.assertEqual(invalid.status_code, 200)
+        self.assertContains(invalid, "Invalid start date")
+        self.assertEqual(reversed_response.status_code, 200)
+        self.assertContains(reversed_response, "Period end cannot be before period start")
+
+    def test_summary_monthly_data_quality_and_unclassified_sections(self):
+        organization, integration, project = self._classified_project()
+        self._allocation(project, integration, "9999", "Unknown", "80.000000", "2026-06-20", "unknown")
+        other_project = create_project(organization, code="99999", name="Other")
+        self._allocation(other_project, integration, "9999", "Unknown", "999.000000", "2026-06-20", "other")
+
+        response = self.client.get(
+            reverse("workspace:project_financials", args=[project.id]),
+            {"period": "custom", "start": "2026-06-01", "end": "2026-06-30"},
+        )
+
+        self.assertContains(response, "1000.000000")
+        self.assertContains(response, "250.000000")
+        self.assertContains(response, "750.000000")
+        self.assertContains(response, "75.00%")
+        self.assertContains(response, "unclassified_amount_present")
+        self.assertContains(response, "9999")
+        self.assertContains(response, "Unknown")
+        self.assertContains(response, "80.000000")
+        self.assertNotContains(response, "999.000000")
+        self.assertContains(response, "2026-06")
+
+    def test_no_data_state_and_mixed_currency_warning(self):
+        _organization, integration, project = self._classified_project()
+        empty_project = create_project(project.organization, code="26125", name="Empty")
+
+        empty_response = self.client.get(reverse("workspace:project_financials", args=[empty_project.id]))
+        self.assertContains(empty_response, "no_data")
+        self.assertContains(empty_response, "No linked financial transactions found")
+
+        self._allocation(project, integration, "4002", "Materials", "100.000000", "2026-07-01", "usd", currency="USD")
+        mixed = self.client.get(
+            reverse("workspace:project_financials", args=[project.id]),
+            {"period": "custom", "start": "2026-06-01", "end": "2026-07-31"},
+        )
+        self.assertContains(mixed, "mixed_currency")
+
+    def test_sync_state_success_and_failed_safe_error_are_shown(self):
+        organization, integration, project = self._classified_project()
+        state = AccountingSyncState.objects.create(
+            organization=organization,
+            integration=integration,
+            source_type=AccountingSyncState.SourceType.GL,
+            sync_status=AccountingSyncState.SyncStatus.IDLE,
+            last_successful_sync_at=timezone.now(),
+        )
+        AccountingSyncRun.objects.create(
+            organization=organization,
+            integration=integration,
+            sync_state=state,
+            source_type=AccountingSyncState.SourceType.GL,
+            status=AccountingSyncRun.Status.COMPLETED,
+        )
+
+        success = self.client.get(reverse("workspace:project_financials", args=[project.id]))
+        self.assertContains(success, "successful")
+        self.assertContains(success, "Last successful sync")
+
+        secret = integration.encrypted_secret_placeholder
+        state.sync_status = AccountingSyncState.SyncStatus.FAILED
+        state.last_error = "Safe sync error"
+        state.save()
+        failed = self.client.get(reverse("workspace:project_financials", args=[project.id]))
+        self.assertContains(failed, "failed")
+        self.assertContains(failed, "Safe sync error")
+        self.assertNotContains(failed, secret)
+
+    def test_project_detail_contains_financials_link(self):
+        _organization, _integration, project = self._classified_project()
+
+        response = self.client.get(reverse("workspace:project_detail", args=[project.id]))
+
+        self.assertContains(response, "Financials")
+        self.assertContains(response, reverse("workspace:project_financials", args=[project.id]))
+
+    def test_allocation_drilldown_filters_and_normalized_amount(self):
+        _organization, _integration, project = self._classified_project()
+
+        response = self.client.get(
+            reverse("workspace:project_financial_allocations", args=[project.id]),
+            {
+                "start": "2026-06-01",
+                "end": "2026-06-30",
+                "category": AccountingAccountClassification.Category.REVENUE,
+                "month": "2026-06",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Allocation Drill-down")
+        self.assertContains(response, "3000")
+        self.assertContains(response, "-1000.000000")
+        self.assertContains(response, "1000.000000")
+        self.assertNotContains(response, "4002")
 
 
 class DashboardMVPTests(TestCase):
