@@ -77,28 +77,71 @@
     </div>
 
     <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-        <div class="border-b border-slate-200 p-4">
-            <h2 class="text-lg font-semibold">Explicit Project selection</h2>
-            <p class="mt-1 text-sm text-slate-500">Manual percentage and amount inputs are used only for the matching manual strategies.</p>
+        <div class="space-y-4 border-b border-slate-200 p-4">
+            <div class="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                    <h2 class="text-lg font-semibold">Explicit Project selection</h2>
+                    <p class="mt-1 text-sm text-slate-500">Preselection is only a suggestion. Review and change the selected Projects before generating the proposal.</p>
+                </div>
+                <div class="rounded-full bg-slate-100 px-3 py-1 text-sm font-semibold text-slate-700"><span id="selected-count">{{ selected_count }}</span> selected</div>
+            </div>
+            <div class="grid gap-3 md:grid-cols-6">
+                <label class="text-sm font-medium text-slate-700">Recipient preselection
+                    <select name="recipient_preselection" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2">
+                        {% for value,label in recipient_preselection_choices %}<option value="{{ value }}" {% if project_filters.recipient_preselection == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+                    </select>
+                </label>
+                <label class="text-sm font-medium text-slate-700">Search
+                    <input type="search" name="project_q" value="{{ project_filters.project_query }}" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2" placeholder="ID, code or name">
+                </label>
+                <label class="text-sm font-medium text-slate-700">Status
+                    <select name="project_status" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2">
+                        <option value="">All statuses</option>
+                        {% for value,label in project_status_choices %}<option value="{{ value }}" {% if project_filters.project_status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+                    </select>
+                </label>
+                <label class="text-sm font-medium text-slate-700">Filter
+                    <select name="project_filter" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2">
+                        {% for value,label in project_filter_choices %}<option value="{{ value }}" {% if project_filters.project_filter == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+                    </select>
+                </label>
+                <label class="text-sm font-medium text-slate-700">Sort
+                    <select name="sort" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2">
+                        {% for value,label in project_sort_choices %}<option value="{{ value }}" {% if project_filters.sort == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+                    </select>
+                </label>
+                <div class="flex items-end">
+                    <button type="submit" formmethod="get" class="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Apply preselection</button>
+                </div>
+            </div>
+            <div class="flex flex-wrap gap-2">
+                <button type="button" data-select-visible class="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Select all visible</button>
+                <button type="button" data-clear-selection class="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Clear selection</button>
+            </div>
+            {% if no_preselection_message %}
+            <div class="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">{{ no_preselection_message }}</div>
+            {% endif %}
+            <input type="hidden" name="suggested_project_ids" value="{{ suggested_project_ids_csv }}">
         </div>
         <table class="min-w-full divide-y divide-slate-200 text-sm">
             <thead class="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
-                <tr><th class="px-4 py-3">Select</th><th class="px-4 py-3">Project</th><th class="px-4 py-3">Status</th><th class="px-4 py-3">Revenue</th><th class="px-4 py-3">Direct cost</th><th class="px-4 py-3">Managers</th><th class="px-4 py-3">Manual %</th><th class="px-4 py-3">Manual amount</th></tr>
+                <tr><th class="px-4 py-3">Select</th><th class="px-4 py-3">Project</th><th class="px-4 py-3">Status</th><th class="px-4 py-3">Revenue</th><th class="px-4 py-3">Direct cost</th><th class="px-4 py-3">Data</th><th class="px-4 py-3">Managers</th><th class="px-4 py-3">Manual %</th><th class="px-4 py-3">Manual amount</th></tr>
             </thead>
             <tbody class="divide-y divide-slate-100">
                 {% for row in projects %}
                 <tr>
-                    <td class="px-4 py-3"><input type="checkbox" name="project_ids" value="{{ row.project.id }}" class="h-4 w-4 rounded border-slate-300" {% if row.is_source_project %}disabled{% endif %}></td>
-                    <td class="px-4 py-3"><div class="font-semibold">{{ row.project.code }}</div><div class="text-slate-500">{{ row.project.name }}</div><div class="text-xs text-slate-400">ID {{ row.project.id }}{% if row.is_source_project %} · source Project cannot be target{% endif %}</div></td>
+                    <td class="px-4 py-3"><input type="checkbox" name="project_ids" value="{{ row.project.id }}" class="project-selection h-4 w-4 rounded border-slate-300" {% if row.selected %}checked{% endif %} {% if row.is_source_project %}disabled{% endif %}></td>
+                    <td class="px-4 py-3"><div class="font-semibold">{{ row.project.code }}</div><div class="text-slate-500">{{ row.project.name }}</div><div class="text-xs text-slate-400">ID {{ row.project.id }}{% if row.selection_reason %} - {{ row.selection_reason }}{% endif %}</div>{% if row.selected %}<div class="mt-1 text-xs font-semibold text-green-700">Selected</div>{% endif %}</td>
                     <td class="px-4 py-3">{{ row.project.status }}</td>
                     <td class="px-4 py-3">{{ row.revenue_display }}</td>
                     <td class="px-4 py-3">{{ row.cost_display }}</td>
+                    <td class="px-4 py-3"><span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">{{ row.data_quality_badge }}</span></td>
                     <td class="px-4 py-3">{% for manager in row.managers %}<div>{{ manager.name }}</div>{% empty %}<span class="text-slate-400">-</span>{% endfor %}</td>
                     <td class="px-4 py-3"><input type="number" step="0.0001" name="manual_percentage_{{ row.project.id }}" class="w-28 rounded-lg border border-slate-300 px-2 py-1"></td>
                     <td class="px-4 py-3"><input type="number" step="0.01" name="manual_amount_{{ row.project.id }}" class="w-32 rounded-lg border border-slate-300 px-2 py-1"></td>
                 </tr>
                 {% empty %}
-                <tr><td class="px-4 py-8 text-center text-slate-500" colspan="8">No Projects available. Create Projects before generating allocations.</td></tr>
+                <tr><td class="px-4 py-8 text-center text-slate-500" colspan="9">No Projects available for the current filters.</td></tr>
                 {% endfor %}
             </tbody>
         </table>
@@ -108,4 +151,26 @@
         <button type="submit" class="rounded-xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white hover:bg-slate-800">Generate draft proposal</button>
     </div>
 </form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    const count = document.getElementById("selected-count");
+    const boxes = Array.from(document.querySelectorAll(".project-selection"));
+    function updateCount() {
+        count.textContent = boxes.filter((box) => box.checked && !box.disabled).length;
+    }
+    document.querySelector("[data-select-visible]")?.addEventListener("click", function () {
+        boxes.forEach((box) => { if (!box.disabled) box.checked = true; });
+        updateCount();
+    });
+    document.querySelector("[data-clear-selection]")?.addEventListener("click", function () {
+        boxes.forEach((box) => { if (!box.disabled) box.checked = false; });
+        updateCount();
+    });
+    boxes.forEach((box) => box.addEventListener("change", updateCount));
+    updateCount();
+});
+</script>
 {% endblock %}

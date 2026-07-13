@@ -22,6 +22,35 @@ from .formatting import format_money, format_percent
 class ManagementAllocationContextBuilder:
     """Read-only context for Workspace management allocation screens."""
 
+    PRESELECTION_NONE = "none"
+    PRESELECTION_POSITIVE_REVENUE = "positive_revenue"
+    PRESELECTION_ANY_REVENUE = "any_revenue"
+    PRESELECTION_FINANCIAL_ACTIVITY = "financial_activity"
+    PRESELECTION_ACTIVE_PROJECTS = "active_projects"
+
+    PRESELECTION_CHOICES = (
+        (PRESELECTION_NONE, "None"),
+        (PRESELECTION_POSITIVE_REVENUE, "Positive revenue"),
+        (PRESELECTION_ANY_REVENUE, "Any revenue"),
+        (PRESELECTION_FINANCIAL_ACTIVITY, "Financial activity"),
+        (PRESELECTION_ACTIVE_PROJECTS, "Active Projects"),
+    )
+
+    PROJECT_FILTER_CHOICES = (
+        ("", "All Projects"),
+        ("has_revenue", "Has revenue"),
+        ("has_cost", "Has direct cost"),
+        ("financial_activity", "Has financial activity"),
+    )
+
+    SORT_CHOICES = (
+        ("revenue", "Revenue"),
+        ("code", "Project code"),
+        ("name", "Name"),
+        ("status", "Status"),
+        ("cost", "Direct cost"),
+    )
+
     @staticmethod
     def get_default_organization():
         return Organization.objects.order_by("id").first()
@@ -74,7 +103,21 @@ class ManagementAllocationContextBuilder:
         }
 
     @classmethod
-    def build_create(cls, *, month="", source_type="", source_project_id="", source_currency=""):
+    def build_create(
+        cls,
+        *,
+        month="",
+        source_type="",
+        source_project_id="",
+        source_currency="",
+        recipient_preselection="",
+        selected_project_ids=None,
+        project_query="",
+        project_status="",
+        project_filter="",
+        sort="",
+        preserve_selection=False,
+    ):
         organization = cls.get_default_organization()
         selected_month = month or date.today().strftime("%Y-%m")
         year, month_number = cls._parse_month(selected_month)
@@ -93,18 +136,63 @@ class ManagementAllocationContextBuilder:
         source_project = None
         if selected_source_type == AllocationSourceType.WORKSPACE_PROJECT and source_project_id:
             source_project = Project.objects.filter(organization=organization, id=source_project_id).first()
-        project_rows = cls._project_rows(projects, year, month_number, source_project=source_project)
+        criterion = cls._valid_preselection(recipient_preselection)
+        selected_ids = cls._normalize_ids(selected_project_ids or [])
+        project_rows = cls._project_rows(
+            projects,
+            year,
+            month_number,
+            source_project=source_project,
+            criterion=criterion,
+            selected_project_ids=selected_ids,
+            preserve_selection=preserve_selection,
+        )
+        suggested_ids = [row["project"].id for row in project_rows if row["suggested"]]
+        if not preserve_selection:
+            selected_ids = suggested_ids
+        visible_rows = cls._filter_project_rows(
+            project_rows,
+            query=project_query,
+            status=project_status,
+            project_filter=project_filter,
+        )
+        visible_rows = cls._sort_project_rows(visible_rows, sort)
+        selected_count = sum(1 for row in project_rows if row["selected"])
+        no_preselection_message = ""
+        if (
+            criterion == cls.PRESELECTION_POSITIVE_REVENUE
+            and not suggested_ids
+            and not preserve_selection
+        ):
+            no_preselection_message = "No Projects with positive revenue were found for the selected month."
         return {
             "organization": organization,
             "pools": ManagementCostPool.objects.filter(organization=organization, is_active=True).order_by("display_order", "name") if organization else [],
             "source_type_choices": AllocationSourceType.choices,
             "source_amount_basis_choices": AllocationSourceAmountBasis.choices,
+            "recipient_preselection_choices": cls.PRESELECTION_CHOICES,
+            "project_filter_choices": cls.PROJECT_FILTER_CHOICES,
+            "project_sort_choices": cls.SORT_CHOICES,
+            "project_status_choices": Project.Status.choices,
             "source_projects": projects,
             "selected_source_type": selected_source_type,
             "selected_source_project": source_project,
             "source_currency": source_currency,
             "source_preview": cls._source_preview(source_project, year, month_number, source_currency) if source_project else None,
-            "projects": project_rows,
+            "projects": visible_rows,
+            "all_project_rows": project_rows,
+            "selected_project_ids": selected_ids,
+            "suggested_project_ids": suggested_ids,
+            "suggested_project_ids_csv": ",".join(str(project_id) for project_id in suggested_ids),
+            "selected_count": selected_count,
+            "no_preselection_message": no_preselection_message,
+            "project_filters": {
+                "recipient_preselection": criterion,
+                "project_query": project_query,
+                "project_status": project_status,
+                "project_filter": project_filter,
+                "sort": cls._valid_sort(sort),
+            },
             "project_managers": managers,
             "strategy_choices": AllocationStrategy.choices,
             "selected_month": selected_month,
@@ -151,15 +239,34 @@ class ManagementAllocationContextBuilder:
         }
 
     @classmethod
-    def _project_rows(cls, projects, year, month, source_project=None):
+    def _project_rows(
+        cls,
+        projects,
+        year,
+        month,
+        source_project=None,
+        criterion=PRESELECTION_POSITIVE_REVENUE,
+        selected_project_ids=None,
+        preserve_selection=False,
+    ):
+        selected_project_ids = set(selected_project_ids or [])
         if not year or not month:
             return [
                 {
                     "project": project,
                     "revenue": Decimal("0"),
+                    "revenue_display": format_money(Decimal("0"), "EUR"),
                     "cost": Decimal("0"),
+                    "cost_display": format_money(Decimal("0"), "EUR"),
+                    "allocation_count": 0,
+                    "unclassified_amount": Decimal("0"),
+                    "data_quality_status": "unknown",
+                    "data_quality_badge": "unknown",
                     "managers": [],
                     "is_source_project": bool(source_project and project.id == source_project.id),
+                    "suggested": False,
+                    "selected": False,
+                    "selection_reason": "",
                 }
                 for project in projects
             ]
@@ -171,6 +278,12 @@ class ManagementAllocationContextBuilder:
             result = aggregation_service.aggregate(
                 AggregateProjectFinancialsCommand(project=project, period_start=period_start, period_end=period_end)
             )
+            is_source_project = bool(source_project and project.id == source_project.id)
+            suggested = cls._matches_preselection(project, result, criterion) and not is_source_project
+            selected = (project.id in selected_project_ids) if preserve_selection else suggested
+            if is_source_project:
+                selected = False
+                suggested = False
             rows.append(
                 {
                     "project": project,
@@ -178,11 +291,115 @@ class ManagementAllocationContextBuilder:
                     "revenue_display": format_money(result.revenue, result.currency or "EUR"),
                     "cost": result.total_cost,
                     "cost_display": format_money(result.total_cost, result.currency or "EUR"),
+                    "allocation_count": result.allocation_count,
+                    "unclassified_amount": result.unclassified_amount,
+                    "data_quality_status": result.data_quality_status,
+                    "data_quality_badge": cls._data_quality_badge(result),
                     "managers": list(project.parties.filter(role=ProjectParty.Role.PROJECT_MANAGER, is_active=True)),
-                    "is_source_project": bool(source_project and project.id == source_project.id),
+                    "is_source_project": is_source_project,
+                    "suggested": suggested,
+                    "selected": selected,
+                    "selection_reason": cls._selection_reason(criterion, suggested, is_source_project),
                 }
             )
-        return rows
+        return cls._sort_project_rows(rows, "")
+
+    @classmethod
+    def _matches_preselection(cls, project, result, criterion):
+        if criterion == cls.PRESELECTION_NONE:
+            return False
+        if criterion == cls.PRESELECTION_POSITIVE_REVENUE:
+            return result.revenue > Decimal("0")
+        if criterion == cls.PRESELECTION_ANY_REVENUE:
+            return result.revenue != Decimal("0")
+        if criterion == cls.PRESELECTION_FINANCIAL_ACTIVITY:
+            return (
+                result.revenue != Decimal("0")
+                or result.total_cost != Decimal("0")
+                or result.allocation_count > 0
+                or result.unclassified_amount != Decimal("0")
+            )
+        if criterion == cls.PRESELECTION_ACTIVE_PROJECTS:
+            return project.status == Project.Status.ACTIVE
+        return False
+
+    @classmethod
+    def _filter_project_rows(cls, rows, *, query="", status="", project_filter=""):
+        query = (query or "").strip().lower()
+        filtered = []
+        for row in rows:
+            project = row["project"]
+            if query and query not in str(project.id).lower() and query not in project.code.lower() and query not in project.name.lower():
+                continue
+            if status and project.status != status:
+                continue
+            if project_filter == "has_revenue" and row["revenue"] == Decimal("0"):
+                continue
+            if project_filter == "has_cost" and row["cost"] == Decimal("0"):
+                continue
+            if project_filter == "financial_activity" and not cls._has_financial_activity(row):
+                continue
+            filtered.append(row)
+        return filtered
+
+    @staticmethod
+    def _has_financial_activity(row):
+        return (
+            row["revenue"] != Decimal("0")
+            or row["cost"] != Decimal("0")
+            or row["allocation_count"] > 0
+            or row["unclassified_amount"] != Decimal("0")
+        )
+
+    @classmethod
+    def _sort_project_rows(cls, rows, sort):
+        sort = cls._valid_sort(sort)
+        if sort == "code":
+            return sorted(rows, key=lambda row: (row["project"].code, row["project"].id))
+        if sort == "name":
+            return sorted(rows, key=lambda row: (row["project"].name.lower(), row["project"].code, row["project"].id))
+        if sort == "status":
+            return sorted(rows, key=lambda row: (row["project"].status, row["project"].code, row["project"].id))
+        if sort == "cost":
+            return sorted(rows, key=lambda row: (row["cost"], row["project"].code), reverse=True)
+        return sorted(rows, key=lambda row: (row["revenue"], row["project"].code), reverse=True)
+
+    @classmethod
+    def _valid_preselection(cls, criterion):
+        values = {value for value, _label in cls.PRESELECTION_CHOICES}
+        return criterion if criterion in values else cls.PRESELECTION_POSITIVE_REVENUE
+
+    @classmethod
+    def _valid_sort(cls, sort):
+        values = {value for value, _label in cls.SORT_CHOICES}
+        return sort if sort in values else "revenue"
+
+    @staticmethod
+    def _normalize_ids(project_ids):
+        normalized = []
+        for project_id in project_ids:
+            try:
+                normalized.append(int(project_id))
+            except (TypeError, ValueError):
+                continue
+        return list(dict.fromkeys(normalized))
+
+    @staticmethod
+    def _data_quality_badge(result):
+        if result.data_quality_status != "ok":
+            return result.data_quality_status
+        if result.unclassified_amount != Decimal("0"):
+            return "unclassified"
+        return "ok"
+
+    @classmethod
+    def _selection_reason(cls, criterion, suggested, is_source_project):
+        if is_source_project:
+            return "Source Project cannot receive its own redistributed cost."
+        if not suggested:
+            return ""
+        labels = dict(cls.PRESELECTION_CHOICES)
+        return f"Suggested by {labels.get(criterion, criterion)}."
 
     @staticmethod
     def _source_preview(source_project, year, month, source_currency=""):

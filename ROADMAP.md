@@ -12,7 +12,7 @@ Current engineering phase: Engineering Standards.
 
 Current implementation phase: Platform Core.
 
-Current implementation: Allocation Source Support.
+Current implementation: Recipient Project Preselection Criteria.
 
 Planned financial follow-ups: multi-month historical GL backfill UI, background financial sync execution, scheduled GL synchronization, sync progress UI, COST-ALLOC-005 Allocation Revision/Audit Enhancements, management allocation reporting, automated monthly proposal jobs, FIN-008 Financial Alert Rules Engine, financial report drafts, scheduled report distribution, and invoice/payment reconciliation.
 

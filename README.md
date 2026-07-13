@@ -68,6 +68,8 @@ The Workspace Management Allocations UI at `/workspace/management-allocations/` 
 
 Management allocations can now use either a Management Cost Pool or a Workspace Project as the allocation source. Workspace Project sources use direct project cost from `ProjectFinancialAggregationService`, prevent the source project from being selected as a recipient, and keep all source diagnostics in version metadata without writing to Merit.
 
+The Management Allocation create flow preselects Projects with positive revenue in the selected month by default. Preselection is visible, editable, filterable, and never overrides the final explicit recipient `project_ids` submitted by the user.
+
 Project Financials now separates Accounting and Management views. Accounting Result remains based only on synchronized Merit GL data. Management Result adds approved Management Cost Allocation entries for matching months as an internal reporting layer, while keeping allocated cost, source, version, month, and approval traceability visible. Project-source allocations are reported as allocated-in for recipients and allocated-out for the source project.
 
 GL Account Classification Settings at `/workspace/settings/account-classifications/` lets administrators map imported GL account codes into reporting categories without Django admin or shell commands. Mappings are exact-code, integration-scoped, audited, and affect project financial aggregation immediately without GL re-sync.

@@ -298,14 +298,7 @@ class ManagementAllocationCreateView(WorkspacePageView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context.update(
-            ManagementAllocationContextBuilder.build_create(
-                month=self.request.GET.get("month", ""),
-                source_type=self.request.GET.get("source_type", ""),
-                source_project_id=self.request.GET.get("source_project_id", ""),
-                source_currency=self.request.GET.get("source_currency", ""),
-            )
-        )
+        context.update(self._build_create_context(self.request.GET))
         return context
 
     def post(self, request, *args, **kwargs):
@@ -313,22 +306,24 @@ class ManagementAllocationCreateView(WorkspacePageView):
         pool = None
         source_project = None
         if source_type == AllocationSourceType.COST_POOL:
-            pool = ManagementCostPool.objects.filter(id=request.POST.get("pool_id"), is_active=True).first()
+            pool_id = request.POST.get("pool_id")
+            pool = ManagementCostPool.objects.filter(id=pool_id, is_active=True).first() if pool_id else None
         elif source_type == AllocationSourceType.WORKSPACE_PROJECT:
-            source_project = Project.objects.filter(id=request.POST.get("source_project_id")).first()
+            source_project_id = request.POST.get("source_project_id")
+            source_project = Project.objects.filter(id=source_project_id).first() if source_project_id else None
         else:
             messages.error(request, "Choose a valid management allocation source type.")
-            return self.render_to_response(self.get_context_data())
+            return self.render_to_response(self._post_error_context(request))
         if source_type == AllocationSourceType.COST_POOL and not pool:
             messages.error(request, "Choose an active management cost pool.")
-            return self.render_to_response(self.get_context_data())
+            return self.render_to_response(self._post_error_context(request))
         if source_type == AllocationSourceType.WORKSPACE_PROJECT and not source_project:
             messages.error(request, "Choose a source Project.")
-            return self.render_to_response(self.get_context_data())
+            return self.render_to_response(self._post_error_context(request))
         project_ids = request.POST.getlist("project_ids")
         if not project_ids:
             messages.error(request, "Choose at least one participating Project explicitly.")
-            return self.render_to_response(self.get_context_data())
+            return self.render_to_response(self._post_error_context(request))
         try:
             year, month = self._parse_month(request.POST.get("month"))
             result = ManagementAllocationProposalService().generate(
@@ -348,12 +343,21 @@ class ManagementAllocationCreateView(WorkspacePageView):
                     manual_amounts=self._manual_values(request, "manual_amount_"),
                     reason=request.POST.get("reason", "").strip(),
                     actor=request.user if request.user.is_authenticated else None,
-                    metadata={"source": "workspace_management_allocation_create"},
+                    metadata={
+                        "source": "workspace_management_allocation_create",
+                        "recipient_preselection_criterion": request.POST.get("recipient_preselection", ""),
+                        "suggested_project_ids": self._ids_from_csv(request.POST.get("suggested_project_ids", "")),
+                        "final_selected_project_ids": [int(project_id) for project_id in project_ids],
+                        "user_changes_count": self._user_changes_count(
+                            self._ids_from_csv(request.POST.get("suggested_project_ids", "")),
+                            [int(project_id) for project_id in project_ids],
+                        ),
+                    },
                 )
             )
         except Exception as exc:
             messages.error(request, f"Management allocation proposal could not be generated: {exc}")
-            return self.render_to_response(self.get_context_data())
+            return self.render_to_response(self._post_error_context(request))
 
         messages.success(request, f"Draft allocation proposal v{result.version.version_number} generated.")
         return redirect("workspace:management_allocation_detail", version_id=result.version.id)
@@ -362,6 +366,33 @@ class ManagementAllocationCreateView(WorkspacePageView):
     def _parse_month(value):
         year_text, month_text = str(value or "").split("-", 1)
         return int(year_text), int(month_text)
+
+    def _post_error_context(self, request):
+        context = self.get_context_data()
+        context.update(
+            self._build_create_context(
+                request.POST,
+                selected_project_ids=request.POST.getlist("project_ids"),
+                preserve_selection=True,
+            )
+        )
+        return context
+
+    @staticmethod
+    def _build_create_context(data, selected_project_ids=None, preserve_selection=False):
+        return ManagementAllocationContextBuilder.build_create(
+            month=data.get("month", ""),
+            source_type=data.get("source_type", ""),
+            source_project_id=data.get("source_project_id", ""),
+            source_currency=data.get("source_currency", ""),
+            recipient_preselection=data.get("recipient_preselection", ""),
+            selected_project_ids=selected_project_ids,
+            project_query=data.get("project_q", ""),
+            project_status=data.get("project_status", ""),
+            project_filter=data.get("project_filter", ""),
+            sort=data.get("sort", ""),
+            preserve_selection=preserve_selection,
+        )
 
     @staticmethod
     def _source_amount(request):
@@ -377,6 +408,24 @@ class ManagementAllocationCreateView(WorkspacePageView):
                 values[int(key.replace(prefix, ""))] = value
         return values or None
 
+    @staticmethod
+    def _ids_from_csv(value):
+        ids = []
+        for item in str(value or "").split(","):
+            if not item:
+                continue
+            try:
+                ids.append(int(item))
+            except ValueError:
+                continue
+        return ids
+
+    @staticmethod
+    def _user_changes_count(suggested_ids, selected_ids):
+        suggested = set(suggested_ids)
+        selected = set(selected_ids)
+        return len(suggested - selected) + len(selected - suggested)
+
 
 class ManagementAllocationSourcePreviewView(WorkspacePageView):
     template_name = "workspace/management_allocation_source_preview.html"
@@ -391,6 +440,11 @@ class ManagementAllocationSourcePreviewView(WorkspacePageView):
                 source_type=self.request.GET.get("source_type", AllocationSourceType.WORKSPACE_PROJECT),
                 source_project_id=self.request.GET.get("source_project_id", ""),
                 source_currency=self.request.GET.get("source_currency", ""),
+                recipient_preselection=self.request.GET.get("recipient_preselection", ""),
+                project_query=self.request.GET.get("project_q", ""),
+                project_status=self.request.GET.get("project_status", ""),
+                project_filter=self.request.GET.get("project_filter", ""),
+                sort=self.request.GET.get("sort", ""),
             )
         )
         return context

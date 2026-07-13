@@ -3931,6 +3931,7 @@ class EmailReplyDraftUITests(TestCase):
 class ManagementAllocationWorkspaceTests(TestCase):
     def setUp(self):
         self.organization = create_organization()
+        self.integration = create_merit_integration(self.organization)
         self.pool = ManagementCostPool.objects.create(
             organization=self.organization,
             name="Office",
@@ -3938,6 +3939,51 @@ class ManagementAllocationWorkspaceTests(TestCase):
         )
         self.first_project = create_project(self.organization, code="26124", name="First Project")
         self.second_project = create_project(self.organization, code="26125", name="Second Project")
+        self.third_project = create_project(self.organization, code="26126", name="Third Project")
+
+    def _classification(self, account_code, category, reporting_sign):
+        return AccountingAccountClassification.objects.create(
+            organization=self.organization,
+            integration=self.integration,
+            account_code=account_code,
+            account_name=f"Account {account_code}",
+            category=category,
+            reporting_sign=Decimal(str(reporting_sign)),
+        )
+
+    def _financial_allocation(self, project, account_code, amount, *, batch_date="2026-06-15", suffix="1"):
+        batch = AccountingGLBatch.objects.create(
+            organization=self.organization,
+            integration=self.integration,
+            external_id=f"mgmt-preselect-batch-{project.code}-{account_code}-{suffix}",
+            batch_date=timezone.datetime.fromisoformat(batch_date).date(),
+            currency_code="EUR",
+        )
+        entry = AccountingGLEntry.objects.create(
+            organization=self.organization,
+            integration=self.integration,
+            batch=batch,
+            external_id=f"mgmt-preselect-entry-{project.code}-{account_code}-{suffix}",
+            account_code=account_code,
+            account_name=f"Account {account_code}",
+        )
+        return AccountingGLAllocation.objects.create(
+            organization=self.organization,
+            integration=self.integration,
+            entry=entry,
+            external_id=f"mgmt-preselect-allocation-{project.code}-{account_code}-{suffix}",
+            dimension_code=project.code,
+            dimension_name=project.name,
+            amount=Decimal(str(amount)),
+            project=project,
+        )
+
+    def _setup_financial_activity(self):
+        self._classification("3000", AccountingAccountClassification.Category.REVENUE, "-1")
+        self._classification("5000", AccountingAccountClassification.Category.MATERIAL_COST, "1")
+        self._financial_allocation(self.first_project, "3000", "-300.000000", suffix="first-rev")
+        self._financial_allocation(self.second_project, "3000", "50.000000", suffix="second-negative-rev")
+        self._financial_allocation(self.third_project, "5000", "80.000000", suffix="third-cost")
 
     def _draft_version(self):
         period = ManagementAllocationPeriod.objects.create(organization=self.organization, year=2026, month=6)
@@ -4003,6 +4049,163 @@ class ManagementAllocationWorkspaceTests(TestCase):
         self.assertEqual(post_response.status_code, 200)
         self.assertContains(post_response, "Choose at least one participating Project explicitly")
 
+    def test_positive_revenue_project_selected_by_default_and_no_match_message(self):
+        self._setup_financial_activity()
+
+        response = self.client.get(reverse("workspace:management_allocation_create"), {"month": "2026-06"})
+        empty_month = self.client.get(reverse("workspace:management_allocation_create"), {"month": "2026-07"})
+
+        rows = {row["project"].code: row for row in response.context["projects"]}
+        self.assertTrue(rows[self.first_project.code]["selected"])
+        self.assertFalse(rows[self.second_project.code]["selected"])
+        self.assertFalse(rows[self.third_project.code]["selected"])
+        self.assertContains(empty_month, "No Projects with positive revenue were found for the selected month.")
+
+    def test_recipient_preselection_criteria(self):
+        self._setup_financial_activity()
+        self.first_project.status = Project.Status.COMPLETED
+        self.first_project.save(update_fields=["status"])
+        self.second_project.status = Project.Status.ARCHIVED
+        self.second_project.save(update_fields=["status"])
+
+        none = self.client.get(
+            reverse("workspace:management_allocation_create"),
+            {"month": "2026-06", "recipient_preselection": "none"},
+        )
+        any_revenue = self.client.get(
+            reverse("workspace:management_allocation_create"),
+            {"month": "2026-06", "recipient_preselection": "any_revenue"},
+        )
+        financial_activity = self.client.get(
+            reverse("workspace:management_allocation_create"),
+            {"month": "2026-06", "recipient_preselection": "financial_activity"},
+        )
+        active_projects = self.client.get(
+            reverse("workspace:management_allocation_create"),
+            {"month": "2026-06", "recipient_preselection": "active_projects"},
+        )
+
+        self.assertFalse(any(row["selected"] for row in none.context["projects"]))
+        self.assertEqual(
+            {row["project"].code for row in any_revenue.context["projects"] if row["selected"]},
+            {self.first_project.code, self.second_project.code},
+        )
+        self.assertEqual(
+            {row["project"].code for row in financial_activity.context["projects"] if row["selected"]},
+            {self.first_project.code, self.second_project.code, self.third_project.code},
+        )
+        self.assertEqual(
+            {row["project"].code for row in active_projects.context["projects"] if row["selected"]},
+            {self.third_project.code},
+        )
+
+    def test_source_project_excluded_from_preselection(self):
+        self._setup_financial_activity()
+
+        response = self.client.get(
+            reverse("workspace:management_allocation_create"),
+            {
+                "month": "2026-06",
+                "source_type": AllocationSourceType.WORKSPACE_PROJECT,
+                "source_project_id": self.first_project.id,
+            },
+        )
+
+        source_row = next(row for row in response.context["projects"] if row["project"] == self.first_project)
+        self.assertFalse(source_row["selected"])
+        self.assertTrue(source_row["is_source_project"])
+        self.assertContains(response, "Source Project cannot receive its own redistributed cost.")
+
+    def test_invalid_post_preserves_manual_project_selection(self):
+        self._setup_financial_activity()
+
+        response = self.client.post(
+            reverse("workspace:management_allocation_create"),
+            {
+                "pool_id": "",
+                "month": "2026-06",
+                "strategy": AllocationStrategy.EQUAL,
+                "recipient_preselection": "positive_revenue",
+                "project_ids": [self.second_project.id],
+            },
+        )
+
+        rows = {row["project"].code: row for row in response.context["projects"]}
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(rows[self.first_project.code]["selected"])
+        self.assertTrue(rows[self.second_project.code]["selected"])
+        self.assertFalse(rows[self.third_project.code]["selected"])
+
+    def test_filters_sorting_get_read_only_and_no_merit_api(self):
+        self._setup_financial_activity()
+        counts = (
+            ManagementAllocationVersion.objects.count(),
+            ManagementAllocationEntry.objects.count(),
+            Project.objects.count(),
+            AccountingGLAllocation.objects.count(),
+        )
+
+        with patch.object(MeritAPIClient, "request") as request_mock:
+            response = self.client.get(
+                reverse("workspace:management_allocation_create"),
+                {
+                    "month": "2026-06",
+                    "project_filter": "financial_activity",
+                    "project_q": "Third",
+                    "sort": "bad",
+                },
+            )
+
+        request_mock.assert_not_called()
+        self.assertEqual(counts, (
+            ManagementAllocationVersion.objects.count(),
+            ManagementAllocationEntry.objects.count(),
+            Project.objects.count(),
+            AccountingGLAllocation.objects.count(),
+        ))
+        self.assertEqual([row["project"].code for row in response.context["projects"]], [self.third_project.code])
+
+    def test_default_sort_revenue_descending_and_status_filter(self):
+        self._setup_financial_activity()
+        self.third_project.status = Project.Status.PLANNED
+        self.third_project.save(update_fields=["status"])
+
+        default_response = self.client.get(reverse("workspace:management_allocation_create"), {"month": "2026-06"})
+        status_response = self.client.get(
+            reverse("workspace:management_allocation_create"),
+            {"month": "2026-06", "project_status": Project.Status.PLANNED},
+        )
+
+        self.assertEqual(
+            [row["project"].code for row in default_response.context["projects"]],
+            [self.first_project.code, self.third_project.code, self.second_project.code],
+        )
+        self.assertEqual([row["project"].code for row in status_response.context["projects"]], [self.third_project.code])
+
+    def test_explicit_submitted_project_ids_remain_authoritative(self):
+        self._setup_financial_activity()
+
+        response = self.client.post(
+            reverse("workspace:management_allocation_create"),
+            {
+                "pool_id": self.pool.id,
+                "month": "2026-06",
+                "strategy": AllocationStrategy.EQUAL,
+                "source_amount_mode": "manual",
+                "source_amount": "100.00",
+                "recipient_preselection": "positive_revenue",
+                "suggested_project_ids": str(self.first_project.id),
+                "project_ids": [self.second_project.id],
+            },
+        )
+
+        version = ManagementAllocationVersion.objects.get()
+        self.assertRedirects(response, reverse("workspace:management_allocation_detail", args=[version.id]))
+        self.assertEqual(list(version.entries.values_list("project_id", flat=True)), [self.second_project.id])
+        self.assertEqual(version.metadata["input_metadata"]["recipient_preselection_criterion"], "positive_revenue")
+        self.assertEqual(version.metadata["input_metadata"]["suggested_project_ids"], [self.first_project.id])
+        self.assertEqual(version.metadata["input_metadata"]["final_selected_project_ids"], [self.second_project.id])
+
     def test_valid_equal_proposal_generated_and_redirects_to_review(self):
         response = self.client.post(
             reverse("workspace:management_allocation_create"),
@@ -4045,7 +4248,7 @@ class ManagementAllocationWorkspaceTests(TestCase):
         self.assertContains(response, "Allocation source preview")
         self.assertContains(response, self.first_project.code)
         self.assertContains(create_response, "Workspace Project source")
-        self.assertContains(create_response, "source Project cannot be target")
+        self.assertContains(create_response, "Source Project cannot receive its own redistributed cost.")
 
     def test_workspace_project_source_create_rejects_source_as_target(self):
         response = self.client.post(
