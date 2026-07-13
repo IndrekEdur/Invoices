@@ -44,6 +44,10 @@ class AccountClassificationService:
     def preload(cls, organization, integrations):
         return cls._mapping_cache(organization, integrations)
 
+    @classmethod
+    def lookup_from_cache(cls, cache, integration, account_code):
+        return cls._lookup_from_cache(cache, integration, account_code)
+
     @staticmethod
     def unclassified(account_code=""):
         return {

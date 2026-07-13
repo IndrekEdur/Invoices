@@ -12,7 +12,7 @@ Current engineering phase: Engineering Standards.
 
 Current implementation phase: Platform Core.
 
-Current implementation: Project Financial Aggregation Service.
+Current implementation: GL Account Classification Setup UI.
 
 Current implementation focus: End-to-End Email Processing.
 

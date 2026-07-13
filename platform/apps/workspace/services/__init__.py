@@ -6,6 +6,7 @@ from .settings import (
     AccountingDimensionConflictContextBuilder,
     AccountingIntegrationSettingsContextBuilder,
     EmailAccountSettingsContextBuilder,
+    GLAccountClassificationContextBuilder,
     SettingsContextBuilder,
 )
 
@@ -17,5 +18,6 @@ __all__ = [
     "AccountingDimensionConflictContextBuilder",
     "AccountingIntegrationSettingsContextBuilder",
     "EmailAccountSettingsContextBuilder",
+    "GLAccountClassificationContextBuilder",
     "SettingsContextBuilder",
 ]

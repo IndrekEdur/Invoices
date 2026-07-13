@@ -58,6 +58,8 @@ The accounting app includes a GL transaction synchronization service and `sync_g
 
 The accounting app includes exact-code account classification configuration and a read-only project financial aggregation service. Project totals are calculated from local GL allocation rows, unclassified amounts stay visible and excluded from trusted result totals, and no financial UI or alert rules exist yet.
 
+GL Account Classification Settings at `/workspace/settings/account-classifications/` lets administrators map imported GL account codes into reporting categories without Django admin or shell commands. Mappings are exact-code, integration-scoped, audited, and affect project financial aggregation immediately without GL re-sync.
+
 Read-only project financial summary example:
 
 ```powershell

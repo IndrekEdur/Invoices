@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}GL Account Classifications | Operations Workspace Platform{% endblock %}
+{% block content %}
+<div class="space-y-8">
+    {% include "workspace/partials/components/page_header.html" with eyebrow="Settings" title="GL Account Classification" body="Map imported general ledger account codes into project financial reporting categories. Imported GL data remains read-only." %}
+
+    <section class="grid gap-5 sm:grid-cols-2 xl:grid-cols-6">
+        <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Imported accounts</div><div class="mt-3 text-3xl font-semibold text-slate-950">{{ summary.imported_accounts }}</div></article>
+        <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Classified</div><div class="mt-3 text-3xl font-semibold text-slate-950">{{ summary.classified_accounts }}</div></article>
+        <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Unclassified</div><div class="mt-3 text-3xl font-semibold text-slate-950">{{ summary.unclassified_accounts }}</div></article>
+        <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">With allocations</div><div class="mt-3 text-3xl font-semibold text-slate-950">{{ summary.accounts_with_project_allocations }}</div></article>
+        <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Unclassified alloc.</div><div class="mt-3 text-2xl font-semibold text-slate-950">{{ summary.unclassified_project_allocation_amount|stringformat:".6f" }}</div></article>
+        <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Excluded</div><div class="mt-3 text-3xl font-semibold text-slate-950">{{ summary.excluded_accounts }}</div></article>
+    </section>
+
+    <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <form method="get" class="grid gap-4 lg:grid-cols-4">
+            <div>
+                <label class="text-xs font-semibold uppercase tracking-wide text-slate-500">Integration</label>
+                <select name="integration_id" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm">
+                    {% for integration in integrations %}
+                        <option value="{{ integration.id }}" {% if selected_integration.id == integration.id %}selected{% endif %}>{{ integration.display_name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="text-xs font-semibold uppercase tracking-wide text-slate-500">Filter</label>
+                <select name="filter" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm">
+                    {% for value,label in filter_options %}
+                        <option value="{{ value }}" {% if filter_value == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="text-xs font-semibold uppercase tracking-wide text-slate-500">Sort</label>
+                <select name="sort" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm">
+                    {% for option in sort_options %}
+                        <option value="{{ option }}" {% if sort == option %}selected{% endif %}>{{ option }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="text-xs font-semibold uppercase tracking-wide text-slate-500">Search</label>
+                <div class="mt-2 flex gap-2">
+                    <input type="search" name="q" value="{{ query }}" placeholder="Account code or name" class="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm">
+                    <button type="submit" class="rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white">Apply</button>
+                </div>
+            </div>
+        </form>
+    </section>
+
+    <section class="space-y-4">
+        {% include "workspace/partials/components/section_header.html" with title="Imported GL Accounts" body="Totals are built from the normalized local GL cache. Mixed currencies are shown as diagnostics and are not converted." %}
+        {% if accounts %}
+            <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-slate-200 text-sm">
+                        <thead class="bg-slate-50">
+                            <tr>
+                                <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Account</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Entries</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Debit</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Credit</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Project alloc.</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Category</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Sign</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Result</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Status</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-100">
+                            {% for account in accounts %}
+                                <tr class="odd:bg-white even:bg-slate-50/50 transition hover:bg-blue-50/60">
+                                    <td class="px-4 py-3">
+                                        <div class="font-semibold text-slate-950">{{ account.account_code }}</div>
+                                        <div class="text-xs text-slate-500">{{ account.account_name|default:"Unnamed account" }}</div>
+                                        {% if account.currencies|length > 1 %}
+                                            <div class="mt-1 text-xs font-semibold text-orange-700">Mixed currencies: {{ account.currencies|join:", " }}</div>
+                                        {% endif %}
+                                    </td>
+                                    <td class="px-4 py-3 text-slate-700">{{ account.entry_count }}</td>
+                                    <td class="px-4 py-3 text-slate-700">{{ account.debit_total|stringformat:".6f" }}</td>
+                                    <td class="px-4 py-3 text-slate-700">{{ account.credit_total|stringformat:".6f" }}</td>
+                                    <td class="px-4 py-3 text-slate-700">{{ account.project_allocation_count }} / {{ account.project_allocation_total|stringformat:".6f" }}</td>
+                                    <td class="px-4 py-3">{% include "workspace/partials/components/badge.html" with tone="info" label=account.category %}<div class="mt-1 text-xs text-slate-500">{{ account.source }}</div></td>
+                                    <td class="px-4 py-3 text-slate-700">{{ account.reporting_sign }}</td>
+                                    <td class="px-4 py-3">{% if account.include_in_project_result %}{% include "workspace/partials/components/status_badge.html" with status="success" label="included" %}{% else %}{% include "workspace/partials/components/status_badge.html" with status="neutral" label="excluded" %}{% endif %}</td>
+                                    <td class="px-4 py-3">{% include "workspace/partials/components/status_badge.html" with status=account.status label=account.status %}</td>
+                                    <td class="px-4 py-3">
+                                        <div class="flex flex-wrap gap-2">
+                                            <a href="{% url 'workspace:settings_account_classification_detail' account.account_code %}?integration_id={{ selected_integration.id }}" class="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700">View</a>
+                                            <a href="{% url 'workspace:settings_account_classification_edit' account.account_code %}?integration_id={{ selected_integration.id }}" class="rounded-xl bg-slate-950 px-3 py-2 text-xs font-semibold text-white">Edit</a>
+                                        </div>
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        {% else %}
+            {% include "workspace/partials/components/empty_state.html" with title="No imported GL accounts found" body="Sync general ledger data first, then return here to map account codes." %}
+        {% endif %}
+    </section>
+</div>
+{% endblock %}

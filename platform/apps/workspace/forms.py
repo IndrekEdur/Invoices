@@ -1,6 +1,6 @@
 from django import forms
 
-from apps.accounting.models import AccountingIntegration
+from apps.accounting.models import AccountingAccountClassification, AccountingIntegration
 from apps.communications.models import EmailAccount
 
 
@@ -135,3 +135,41 @@ class AccountingIntegrationForm(forms.ModelForm):
             instance.save()
             self.save_m2m()
         return instance
+
+
+class AccountClassificationForm(forms.Form):
+    category = forms.ChoiceField(
+        choices=AccountingAccountClassification.Category.choices,
+        widget=forms.Select(attrs={"class": FIELD_CLASS}),
+    )
+    reporting_sign = forms.ChoiceField(
+        choices=[("1", "1 - keep source sign"), ("-1", "-1 - reverse source sign")],
+        widget=forms.Select(attrs={"class": FIELD_CLASS}),
+        help_text="Revenue accounts stored as credit/negative allocations may require -1 so report revenue appears positive.",
+    )
+    include_in_project_result = forms.BooleanField(
+        required=False,
+        initial=True,
+        widget=forms.CheckboxInput(attrs={"class": CHECKBOX_CLASS}),
+    )
+    is_active = forms.BooleanField(
+        required=False,
+        initial=True,
+        widget=forms.CheckboxInput(attrs={"class": CHECKBOX_CLASS}),
+    )
+    notes = forms.CharField(
+        required=False,
+        widget=forms.Textarea(attrs={"class": FIELD_CLASS, "rows": 4}),
+    )
+
+    def __init__(self, *args, classification=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if classification:
+            self.fields["category"].initial = classification.category
+            self.fields["reporting_sign"].initial = str(classification.reporting_sign)
+            self.fields["include_in_project_result"].initial = classification.include_in_project_result
+            self.fields["is_active"].initial = classification.is_active
+            self.fields["notes"].initial = classification.notes
+        else:
+            self.fields["category"].initial = AccountingAccountClassification.Category.UNCLASSIFIED
+            self.fields["reporting_sign"].initial = "1"

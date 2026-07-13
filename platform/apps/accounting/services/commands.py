@@ -87,6 +87,21 @@ class DimensionConflictResolutionResult:
 
 
 @dataclass(frozen=True)
+class SaveAccountingAccountClassificationCommand:
+    organization: object
+    integration: object
+    account_code: str
+    account_name: str
+    category: str
+    reporting_sign: object
+    include_in_project_result: bool
+    is_active: bool
+    notes: str = ""
+    actor: object = None
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
 class GetOrCreateAccountingSyncStateCommand:
     integration: object
     source_type: str

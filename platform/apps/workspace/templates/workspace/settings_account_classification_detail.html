@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}GL Account Detail | Operations Workspace Platform{% endblock %}
+{% block actions %}
+{% if account %}
+<a href="{% url 'workspace:settings_account_classification_edit' account.account_code %}?integration_id={{ selected_integration.id }}" class="inline-flex items-center justify-center rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800">Edit Classification</a>
+{% endif %}
+{% endblock %}
+{% block content %}
+<div class="space-y-8">
+    {% if account %}
+        {% include "workspace/partials/components/page_header.html" with eyebrow="Financial Account Mapping" title=account.account_code body=account.account_name %}
+        <section class="grid gap-6 xl:grid-cols-3">
+            <article class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm xl:col-span-2">
+                <div class="flex flex-wrap items-start justify-between gap-4">
+                    <div>
+                        <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Current classification</div>
+                        <h2 class="mt-2 text-xl font-semibold text-slate-950">{{ account.category }}</h2>
+                        <p class="mt-2 text-sm text-slate-600">{{ account.source }}</p>
+                    </div>
+                    {% include "workspace/partials/components/status_badge.html" with status=account.status label=account.status %}
+                </div>
+                <dl class="mt-6 grid gap-4 text-sm md:grid-cols-2">
+                    <div><dt class="text-slate-500">Integration</dt><dd class="mt-1 font-medium text-slate-950">{{ selected_integration.display_name }}</dd></div>
+                    <div><dt class="text-slate-500">Reporting sign</dt><dd class="mt-1 font-medium text-slate-950">{{ account.reporting_sign }}</dd></div>
+                    <div><dt class="text-slate-500">Included in project result</dt><dd class="mt-1 font-medium text-slate-950">{{ account.include_in_project_result|yesno:"Yes,No" }}</dd></div>
+                    <div><dt class="text-slate-500">Active mapping</dt><dd class="mt-1 font-medium text-slate-950">{{ account.is_active|yesno:"Yes,No" }}</dd></div>
+                    <div><dt class="text-slate-500">First activity</dt><dd class="mt-1 font-medium text-slate-950">{{ account.first_batch_date|date:"Y-m-d"|default:"-" }}</dd></div>
+                    <div><dt class="text-slate-500">Last activity</dt><dd class="mt-1 font-medium text-slate-950">{{ account.last_batch_date|date:"Y-m-d"|default:"-" }}</dd></div>
+                    <div><dt class="text-slate-500">Entry count</dt><dd class="mt-1 font-medium text-slate-950">{{ account.entry_count }}</dd></div>
+                    <div><dt class="text-slate-500">Project allocation count</dt><dd class="mt-1 font-medium text-slate-950">{{ account.project_allocation_count }}</dd></div>
+                    <div><dt class="text-slate-500">Debit total</dt><dd class="mt-1 font-medium text-slate-950">{{ account.debit_total }}</dd></div>
+                    <div><dt class="text-slate-500">Credit total</dt><dd class="mt-1 font-medium text-slate-950">{{ account.credit_total }}</dd></div>
+                    <div><dt class="text-slate-500">Project allocation total</dt><dd class="mt-1 font-medium text-slate-950">{{ account.project_allocation_total }}</dd></div>
+                    <div><dt class="text-slate-500">Currencies</dt><dd class="mt-1 font-medium text-slate-950">{{ account.currencies|join:", "|default:"-" }}</dd></div>
+                </dl>
+                {% if account.direct_mapping.notes %}
+                    <div class="mt-6 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">{{ account.direct_mapping.notes }}</div>
+                {% endif %}
+            </article>
+
+            <aside class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Reporting sign</div>
+                <h2 class="mt-2 text-lg font-semibold text-slate-950">No automatic guessing</h2>
+                <p class="mt-3 text-sm leading-6 text-slate-600">Use 1 to keep source sign and -1 to reverse it. Revenue accounts stored as credit or negative allocations may need -1 so reporting revenue appears positive.</p>
+            </aside>
+        </section>
+
+        <section class="grid gap-8 xl:grid-cols-2">
+            <div class="space-y-4">
+                {% include "workspace/partials/components/section_header.html" with title="Recent GL Entries" body="Limited samples from normalized GL cache. Raw Merit payloads are not shown here." %}
+                {% if recent_entries %}
+                    <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                        <table class="min-w-full divide-y divide-slate-200 text-sm">
+                            <thead class="bg-slate-50"><tr><th class="px-4 py-3 text-left">Date</th><th class="px-4 py-3 text-left">Memo</th><th class="px-4 py-3 text-left">Debit</th><th class="px-4 py-3 text-left">Credit</th></tr></thead>
+                            <tbody class="divide-y divide-slate-100">
+                                {% for entry in recent_entries %}
+                                    <tr><td class="px-4 py-3">{{ entry.batch.batch_date|date:"Y-m-d"|default:"-" }}</td><td class="px-4 py-3">{{ entry.memo|default:"-" }}</td><td class="px-4 py-3">{{ entry.debit_amount }}</td><td class="px-4 py-3">{{ entry.credit_amount }}</td></tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% else %}
+                    {% include "workspace/partials/components/empty_state.html" with title="No recent entries" body="No normalized GL entries were found for this account." %}
+                {% endif %}
+            </div>
+            <div class="space-y-4">
+                {% include "workspace/partials/components/section_header.html" with title="Project Allocation Samples" body="Samples show exact project links created during GL cache persistence." %}
+                {% if allocation_samples %}
+                    <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                        <table class="min-w-full divide-y divide-slate-200 text-sm">
+                            <thead class="bg-slate-50"><tr><th class="px-4 py-3 text-left">Date</th><th class="px-4 py-3 text-left">Project</th><th class="px-4 py-3 text-left">Dimension</th><th class="px-4 py-3 text-left">Amount</th></tr></thead>
+                            <tbody class="divide-y divide-slate-100">
+                                {% for allocation in allocation_samples %}
+                                    <tr><td class="px-4 py-3">{{ allocation.entry.batch.batch_date|date:"Y-m-d"|default:"-" }}</td><td class="px-4 py-3">{% if allocation.project %}{{ allocation.project.code }} {{ allocation.project.name }}{% else %}-{% endif %}</td><td class="px-4 py-3">{{ allocation.dimension_code }}</td><td class="px-4 py-3">{{ allocation.amount }}</td></tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% else %}
+                    {% include "workspace/partials/components/empty_state.html" with title="No project allocations" body="No project allocation samples were found for this account." %}
+                {% endif %}
+            </div>
+        </section>
+    {% else %}
+        {% include "workspace/partials/components/empty_state.html" with title="Imported GL account not found" body="Choose an account from the classification list for the selected integration." %}
+    {% endif %}
+</div>
+{% endblock %}

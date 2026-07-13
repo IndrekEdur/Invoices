@@ -13,7 +13,14 @@ from apps.communications.models import (
     EmailProjectLink,
     EmailQuestion,
 )
-from apps.accounting.models import AccountingDimension, AccountingIntegration
+from apps.accounting.models import (
+    AccountingAccountClassification,
+    AccountingDimension,
+    AccountingGLAllocation,
+    AccountingGLBatch,
+    AccountingGLEntry,
+    AccountingIntegration,
+)
 from apps.accounting.services import CreateAccountingDimensionValueResult, SyncAccountingDimensionsResult
 from apps.core.models import AuditEvent
 from apps.core.services import CreateOrganizationCommand, OrganizationService
@@ -76,6 +83,38 @@ def create_merit_integration(organization, metadata=None):
     )
 
 
+def create_gl_account(organization, integration=None, account_code="4000", account_name="Materials", project=None):
+    integration = integration or create_merit_integration(organization)
+    batch = AccountingGLBatch.objects.create(
+        organization=organization,
+        integration=integration,
+        external_id=f"batch-{account_code}",
+        batch_date=timezone.datetime(2026, 6, 1).date(),
+        currency_code="EUR",
+    )
+    entry = AccountingGLEntry.objects.create(
+        organization=organization,
+        integration=integration,
+        batch=batch,
+        external_id=f"entry-{account_code}",
+        account_code=account_code,
+        account_name=account_name,
+        debit_amount="100.000000",
+        credit_amount="25.000000",
+        memo=f"{account_name} memo",
+    )
+    allocation = AccountingGLAllocation.objects.create(
+        organization=organization,
+        integration=integration,
+        entry=entry,
+        external_id=f"alloc-{account_code}",
+        dimension_code=project.code if project else "26124",
+        amount="75.000000",
+        project=project,
+    )
+    return integration, batch, entry, allocation
+
+
 class WorkspaceRouteTests(TestCase):
     routes = [
         ("workspace:home", "/workspace/"),
@@ -89,6 +128,7 @@ class WorkspaceRouteTests(TestCase):
         ("workspace:settings", "/workspace/settings/"),
         ("workspace:design_system", "/workspace/design-system/"),
         ("workspace:accounting_dimension_conflicts", "/workspace/accounting/dimensions/conflicts/"),
+        ("workspace:settings_account_classifications", "/workspace/settings/account-classifications/"),
     ]
 
     def test_every_workspace_route_returns_http_200(self):
@@ -150,6 +190,210 @@ class WorkspaceRouteTests(TestCase):
 
         self.assertContains(response, "Design System")
         self.assertContains(response, reverse("workspace:design_system"))
+
+
+class GLAccountClassificationSettingsTests(TestCase):
+    def test_account_classification_list_shows_imported_account_statistics(self):
+        organization = create_organization()
+        project = create_project(organization)
+        integration, _batch, _entry, _allocation = create_gl_account(
+            organization,
+            account_code="4002",
+            account_name="Materials",
+            project=project,
+        )
+
+        response = self.client.get(
+            reverse("workspace:settings_account_classifications"),
+            {"integration_id": integration.id},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "4002")
+        self.assertContains(response, "Materials")
+        self.assertContains(response, "100.000000")
+        self.assertContains(response, "25.000000")
+        self.assertContains(response, "75.000000")
+        self.assertContains(response, "unclassified")
+
+    def test_account_classification_list_resolves_integration_mapping_search_filter_and_sort(self):
+        organization = create_organization()
+        project = create_project(organization)
+        integration, _batch, _entry, _allocation = create_gl_account(
+            organization,
+            account_code="3000",
+            account_name="Revenue",
+            project=project,
+        )
+        AccountingAccountClassification.objects.create(
+            organization=organization,
+            integration=integration,
+            account_code="3000",
+            account_name="Revenue",
+            category=AccountingAccountClassification.Category.REVENUE,
+            reporting_sign="-1",
+        )
+
+        response = self.client.get(
+            reverse("workspace:settings_account_classifications"),
+            {"integration_id": integration.id, "q": "rev", "filter": "revenue", "sort": "category"},
+        )
+
+        self.assertContains(response, "3000")
+        self.assertContains(response, "revenue")
+        self.assertContains(response, "integration-specific")
+        self.assertContains(response, "-1")
+
+    def test_account_classification_list_is_organization_scoped(self):
+        organization = create_organization("Visible Org")
+        other = create_organization("Other Org")
+        project = create_project(organization)
+        integration, _batch, _entry, _allocation = create_gl_account(
+            organization,
+            account_code="4000",
+            project=project,
+        )
+        other_integration = create_merit_integration(other)
+        create_gl_account(other, integration=other_integration, account_code="9999")
+
+        response = self.client.get(
+            reverse("workspace:settings_account_classifications"),
+            {"integration_id": integration.id},
+        )
+
+        self.assertContains(response, "4000")
+        self.assertNotContains(response, "9999")
+
+    def test_account_classification_detail_shows_entries_and_allocations(self):
+        organization = create_organization()
+        project = create_project(organization)
+        integration, _batch, _entry, _allocation = create_gl_account(
+            organization,
+            account_code="5000",
+            account_name="Subcontractors",
+            project=project,
+        )
+
+        response = self.client.get(
+            reverse("workspace:settings_account_classification_detail", args=["5000"]),
+            {"integration_id": integration.id},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Subcontractors")
+        self.assertContains(response, "Recent GL Entries")
+        self.assertContains(response, "Project Allocation Samples")
+        self.assertContains(response, project.code)
+
+    def test_account_classification_detail_missing_account_is_safe(self):
+        organization = create_organization()
+        integration = create_merit_integration(organization)
+
+        response = self.client.get(
+            reverse("workspace:settings_account_classification_detail", args=["4040"]),
+            {"integration_id": integration.id},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Imported GL account not found")
+
+    def test_edit_page_and_post_create_classification_with_audit(self):
+        organization = create_organization()
+        project = create_project(organization)
+        integration, _batch, _entry, _allocation = create_gl_account(
+            organization,
+            account_code="6000",
+            account_name="Labor",
+            project=project,
+        )
+
+        response = self.client.get(
+            reverse("workspace:settings_account_classification_edit", args=["6000"]),
+            {"integration_id": integration.id},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Save Classification")
+
+        response = self.client.post(
+            reverse("workspace:settings_account_classification_edit", args=["6000"]),
+            {
+                "integration_id": integration.id,
+                "category": AccountingAccountClassification.Category.LABOR_COST,
+                "reporting_sign": "1",
+                "include_in_project_result": "on",
+                "is_active": "on",
+                "notes": "Labor mapping",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        classification = AccountingAccountClassification.objects.get(account_code="6000")
+        self.assertEqual(classification.category, AccountingAccountClassification.Category.LABOR_COST)
+        self.assertEqual(classification.notes, "Labor mapping")
+        self.assertTrue(AuditEvent.objects.filter(event_type="accounting_account_classification_saved").exists())
+
+    def test_post_updates_classification_and_does_not_change_gl_source_records(self):
+        organization = create_organization()
+        project = create_project(organization)
+        integration, _batch, entry, allocation = create_gl_account(
+            organization,
+            account_code="7000",
+            account_name="Transport",
+            project=project,
+        )
+        AccountingAccountClassification.objects.create(
+            organization=organization,
+            integration=integration,
+            account_code="7000",
+            category=AccountingAccountClassification.Category.UNCLASSIFIED,
+        )
+
+        self.client.post(
+            reverse("workspace:settings_account_classification_edit", args=["7000"]),
+            {
+                "integration_id": integration.id,
+                "category": AccountingAccountClassification.Category.TRANSPORT_COST,
+                "reporting_sign": "1",
+                "include_in_project_result": "on",
+                "is_active": "on",
+            },
+        )
+
+        self.assertEqual(AccountingAccountClassification.objects.count(), 1)
+        entry.refresh_from_db()
+        allocation.refresh_from_db()
+        self.assertEqual(entry.account_code, "7000")
+        self.assertEqual(allocation.amount, 75)
+        self.assertEqual(Project.objects.count(), 1)
+
+    def test_invalid_category_and_reporting_sign_are_rejected(self):
+        organization = create_organization()
+        integration, _batch, _entry, _allocation = create_gl_account(organization, account_code="8000")
+
+        response = self.client.post(
+            reverse("workspace:settings_account_classification_edit", args=["8000"]),
+            {
+                "integration_id": integration.id,
+                "category": "not_real",
+                "reporting_sign": "2",
+                "include_in_project_result": "on",
+                "is_active": "on",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(AccountingAccountClassification.objects.exists())
+
+    def test_get_requests_do_not_create_classifications(self):
+        organization = create_organization()
+        integration, _batch, _entry, _allocation = create_gl_account(organization, account_code="8100")
+
+        self.client.get(
+            reverse("workspace:settings_account_classification_edit", args=["8100"]),
+            {"integration_id": integration.id},
+        )
+
+        self.assertFalse(AccountingAccountClassification.objects.exists())
 
 
 class DashboardMVPTests(TestCase):

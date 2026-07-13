@@ -26,21 +26,24 @@ from apps.communications.services import (
     RejectEmailProjectLinkCommand,
     SyncEmailAccountCommand,
 )
-from apps.accounting.models import AccountingIntegration
+from apps.accounting.models import AccountingAccountClassification, AccountingIntegration
 from apps.accounting.connectors import MeritAPIClient
 from apps.accounting.services import (
     AccountingDimensionSyncService,
     AccountingDimensionValueService,
+    AccountingAccountClassificationManagementService,
     CreateAccountingDimensionValueCommand,
+    SaveAccountingAccountClassificationCommand,
     SyncAccountingDimensionsCommand,
 )
 from apps.core.models import Organization
 from apps.projects.models import Project
 from apps.projects.services import CreateProjectWithSuggestedCodeCommand, ProjectCreationService
 
-from .forms import AccountingIntegrationForm, EmailAccountForm
+from .forms import AccountClassificationForm, AccountingIntegrationForm, EmailAccountForm
 from .services import (
     AccountingDimensionConflictContextBuilder,
+    GLAccountClassificationContextBuilder,
     AccountingIntegrationSettingsContextBuilder,
     DashboardContextBuilder,
     EmailAccountSettingsContextBuilder,
@@ -597,6 +600,115 @@ class SettingsSectionView(WorkspacePageView):
         context = super().get_context_data(**kwargs)
         context["settings_section"] = self.kwargs["section_slug"]
         return context
+
+
+class AccountClassificationSettingsMixin:
+    section = "settings"
+
+    def _actor(self):
+        return self.request.user if self.request.user.is_authenticated else None
+
+    def _integration_id(self):
+        return self.request.POST.get("integration_id") or self.request.GET.get("integration_id")
+
+    def _detail_url(self, account_code):
+        url = redirect("workspace:settings_account_classification_detail", account_code=account_code)
+        return url
+
+
+class AccountClassificationListView(AccountClassificationSettingsMixin, WorkspacePageView):
+    template_name = "workspace/settings_account_classifications.html"
+    page_title = "GL Account Classification"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(
+            GLAccountClassificationContextBuilder.build_list(
+                filter_value=self.request.GET.get("filter", "all"),
+                query=self.request.GET.get("q", ""),
+                sort=self.request.GET.get("sort", "account_code"),
+                integration_id=self.request.GET.get("integration_id"),
+            )
+        )
+        return context
+
+
+class AccountClassificationDetailView(AccountClassificationSettingsMixin, WorkspacePageView):
+    template_name = "workspace/settings_account_classification_detail.html"
+    page_title = "GL Account Detail"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(
+            GLAccountClassificationContextBuilder.build_detail(
+                account_code=self.kwargs["account_code"],
+                integration_id=self.request.GET.get("integration_id"),
+            )
+        )
+        return context
+
+
+class AccountClassificationEditView(AccountClassificationSettingsMixin, WorkspacePageView):
+    template_name = "workspace/settings_account_classification_form.html"
+    page_title = "Edit GL Account Classification"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(
+            GLAccountClassificationContextBuilder.build_detail(
+                account_code=self.kwargs["account_code"],
+                integration_id=self._integration_id(),
+            )
+        )
+        account = context.get("account")
+        classification = account["direct_mapping"] if account else None
+        context["form"] = kwargs.get("form") or AccountClassificationForm(classification=classification)
+        return context
+
+    def post(self, request, account_code, *args, **kwargs):
+        context = GLAccountClassificationContextBuilder.build_detail(
+            account_code=account_code,
+            integration_id=self._integration_id(),
+        )
+        account = context.get("account")
+        integration = context.get("selected_integration")
+        organization = context.get("organization")
+        if not account or not integration or not organization:
+            messages.error(request, "Imported GL account was not found for the selected integration.")
+            return redirect("workspace:settings_account_classifications")
+
+        form = AccountClassificationForm(request.POST, classification=account["direct_mapping"])
+        if not form.is_valid():
+            messages.error(request, "Account classification could not be saved. Check the highlighted fields.")
+            render_context = self.get_context_data(form=form)
+            return self.render_to_response(render_context)
+
+        try:
+            AccountingAccountClassificationManagementService.save(
+                SaveAccountingAccountClassificationCommand(
+                    organization=organization,
+                    integration=integration,
+                    account_code=account["account_code"],
+                    account_name=account["account_name"],
+                    category=form.cleaned_data["category"],
+                    reporting_sign=form.cleaned_data["reporting_sign"],
+                    include_in_project_result=form.cleaned_data["include_in_project_result"],
+                    is_active=form.cleaned_data["is_active"],
+                    notes=form.cleaned_data["notes"],
+                    actor=self._actor(),
+                    metadata={"source": "workspace_account_classification_settings"},
+                )
+            )
+        except Exception:
+            messages.error(request, "Account classification save failed.")
+            render_context = self.get_context_data(form=form)
+            return self.render_to_response(render_context)
+
+        messages.success(request, f"Classification saved for account {account['account_code']}.")
+        return redirect(
+            f"{request.POST.get('next') or request.path.replace('/edit/', '/')}"
+            f"?integration_id={integration.id}"
+        )
 
 
 class EmailAccountSettingsMixin:

@@ -43,6 +43,7 @@ from apps.accounting.models import (
 from apps.accounting.secrets import SecretMissingError, SecretProvider
 from apps.accounting.services import (
     AccountClassificationService,
+    AccountingAccountClassificationManagementService,
     AggregateProjectFinancialsCommand,
     AccountingDimensionConflictResolutionService,
     AccountingDimensionValueService,
@@ -61,6 +62,7 @@ from apps.accounting.services import (
     ProjectCodeAllocationService,
     ProjectFinancialAggregationService,
     ResolveDimensionConflictCommand,
+    SaveAccountingAccountClassificationCommand,
     SuggestNextProjectCodeCommand,
     StartAccountingSyncRunCommand,
     SyncAccountingDimensionsCommand,
@@ -861,6 +863,119 @@ class AccountingAccountClassificationTests(TestCase):
         AccountClassificationService.get_classification(integration.organization, integration, "4000")
 
         self.assertEqual(AccountingAccountClassification.objects.count(), count)
+
+
+class AccountingAccountClassificationManagementServiceTests(TestCase):
+    def _entry(self, integration, account_code="4000", account_name="Materials"):
+        batch = AccountingGLBatch.objects.create(
+            organization=integration.organization,
+            integration=integration,
+            external_id=f"batch-{account_code}",
+            batch_date=date(2026, 6, 1),
+            currency_code="EUR",
+        )
+        return AccountingGLEntry.objects.create(
+            organization=integration.organization,
+            integration=integration,
+            batch=batch,
+            external_id=f"entry-{account_code}",
+            account_code=account_code,
+            account_name=account_name,
+            debit_amount=Decimal("100.000000"),
+        )
+
+    def _command(self, integration, **kwargs):
+        defaults = {
+            "organization": integration.organization,
+            "integration": integration,
+            "account_code": "4000",
+            "account_name": "Materials",
+            "category": AccountingAccountClassification.Category.MATERIAL_COST,
+            "reporting_sign": "1",
+            "include_in_project_result": True,
+            "is_active": True,
+            "notes": "Configured in settings",
+        }
+        defaults.update(kwargs)
+        return SaveAccountingAccountClassificationCommand(**defaults)
+
+    def test_save_creates_classification_and_audit_without_mutating_metadata(self):
+        integration = create_merit_integration()
+        self._entry(integration)
+        metadata = {"source": "test"}
+
+        classification = AccountingAccountClassificationManagementService.save(
+            self._command(integration, metadata=metadata)
+        )
+
+        self.assertEqual(classification.category, AccountingAccountClassification.Category.MATERIAL_COST)
+        self.assertEqual(metadata, {"source": "test"})
+        self.assertTrue(AuditEvent.objects.filter(event_type="accounting_account_classification_saved").exists())
+
+    def test_save_updates_existing_without_duplicate(self):
+        integration = create_merit_integration()
+        self._entry(integration)
+        AccountingAccountClassificationManagementService.save(self._command(integration))
+
+        updated = AccountingAccountClassificationManagementService.save(
+            self._command(
+                integration,
+                category=AccountingAccountClassification.Category.EXCLUDED,
+                reporting_sign="-1",
+                include_in_project_result=False,
+            )
+        )
+
+        self.assertEqual(AccountingAccountClassification.objects.count(), 1)
+        self.assertEqual(updated.category, AccountingAccountClassification.Category.EXCLUDED)
+        self.assertEqual(updated.reporting_sign, Decimal("-1"))
+        self.assertFalse(updated.include_in_project_result)
+
+    def test_save_rejects_missing_imported_account_and_bad_sign(self):
+        integration = create_merit_integration()
+
+        with self.assertRaises(ValueError):
+            AccountingAccountClassificationManagementService.save(self._command(integration))
+
+        self._entry(integration)
+        with self.assertRaises(Exception):
+            AccountingAccountClassificationManagementService.save(self._command(integration, reporting_sign="2"))
+
+    def test_save_rejects_cross_organization_integration(self):
+        integration = create_merit_integration()
+        other = create_organization("Other Mapping Org")
+
+        with self.assertRaises(ValueError):
+            AccountingAccountClassificationManagementService.save(self._command(integration, organization=other))
+
+    def test_saved_mapping_changes_project_aggregation_without_resync(self):
+        integration = create_merit_integration()
+        project = Project.objects.create(organization=integration.organization, code="26124", name="Kanarbiku")
+        entry = self._entry(integration, account_code="5000", account_name="Materials")
+        AccountingGLAllocation.objects.create(
+            organization=integration.organization,
+            integration=integration,
+            entry=entry,
+            external_id="alloc-5000",
+            dimension_code=project.code,
+            amount=Decimal("100.000000"),
+            project=project,
+        )
+
+        before = ProjectFinancialAggregationService().aggregate(
+            AggregateProjectFinancialsCommand(project=project, period_start=date(2026, 6, 1), period_end=date(2026, 6, 30))
+        )
+        AccountingAccountClassificationManagementService.save(
+            self._command(integration, account_code="5000", account_name="Materials")
+        )
+        after = ProjectFinancialAggregationService().aggregate(
+            AggregateProjectFinancialsCommand(project=project, period_start=date(2026, 6, 1), period_end=date(2026, 6, 30))
+        )
+
+        self.assertEqual(before.unclassified_amount, Decimal("100.000000"))
+        self.assertEqual(before.total_cost, Decimal("0"))
+        self.assertEqual(after.unclassified_amount, Decimal("0"))
+        self.assertEqual(after.total_cost, Decimal("100.000000"))
 
 
 class ProjectFinancialAggregationServiceTests(TestCase):

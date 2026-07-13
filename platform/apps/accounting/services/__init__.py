@@ -14,6 +14,7 @@ from .commands import (
     ProjectFinancialCategoryTotal,
     ProjectFinancialMonth,
     ResolveDimensionConflictCommand,
+    SaveAccountingAccountClassificationCommand,
     SuggestNextProjectCodeCommand,
     StartAccountingSyncRunCommand,
     SyncAccountingDimensionsCommand,
@@ -26,6 +27,7 @@ from .commands import (
     UpsertGLEntryCommand,
     VerifyGeneralLedgerCommand,
 )
+from .classifications import AccountingAccountClassificationManagementService
 from .financial_aggregation import AccountClassificationService, ProjectFinancialAggregationService
 from .dimension_conflicts import AccountingDimensionConflictResolutionService
 from .dimension_values import AccountingDimensionValueService
@@ -38,6 +40,7 @@ from .sync_state import AccountingSyncStateService
 
 __all__ = [
     "AccountingDimensionValueService",
+    "AccountingAccountClassificationManagementService",
     "AccountingDimensionSyncService",
     "AccountingDimensionConflictResolutionService",
     "AccountingSyncStateService",
@@ -62,6 +65,7 @@ __all__ = [
     "ProjectFinancialCategoryTotal",
     "ProjectFinancialMonth",
     "ResolveDimensionConflictCommand",
+    "SaveAccountingAccountClassificationCommand",
     "SuggestNextProjectCodeCommand",
     "StartAccountingSyncRunCommand",
     "SyncAccountingDimensionsCommand",
