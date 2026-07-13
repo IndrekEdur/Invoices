@@ -411,12 +411,13 @@ class GLAccountClassificationContextBuilder:
                     "source": cls._source_label(classification["classification"]),
                     "status": cls._status(category, classification["classification"], direct_mapping),
                     "currencies": currencies.get(account_code, []),
+                    "currency_diagnostic": cls._currency_diagnostic(currencies.get(account_code, [])),
                 }
             )
         return rows
 
-    @staticmethod
-    def _currency_rows(organization, integration, account_codes):
+    @classmethod
+    def _currency_rows(cls, organization, integration, account_codes):
         rows = []
         for account_code in account_codes:
             currencies = (
@@ -428,8 +429,31 @@ class GLAccountClassificationContextBuilder:
                 .values_list("batch__currency_code", flat=True)
                 .distinct()
             )
-            rows.append({"account_code": account_code, "currencies": "|".join(sorted(currency for currency in currencies if currency))})
+            rows.append(
+                {
+                    "account_code": account_code,
+                    "currencies": "|".join(cls._normalize_currencies(currencies)),
+                }
+            )
         return rows
+
+    @staticmethod
+    def _normalize_currencies(currencies):
+        return sorted(
+            {
+                str(currency).strip().upper()
+                for currency in currencies
+                if currency is not None and str(currency).strip()
+            }
+        )
+
+    @staticmethod
+    def _currency_diagnostic(currencies):
+        if not currencies:
+            return {"label": "Currency unknown", "status": "neutral", "is_mixed": False}
+        if len(currencies) == 1:
+            return {"label": f"Currency: {currencies[0]}", "status": "info", "is_mixed": False}
+        return {"label": f"Mixed currencies: {', '.join(currencies)}", "status": "needs_review", "is_mixed": True}
 
     @staticmethod
     def _source_label(classification):

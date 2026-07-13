@@ -205,6 +205,25 @@ class WorkspaceRouteTests(TestCase):
 
 
 class GLAccountClassificationSettingsTests(TestCase):
+    def _gl_entry(self, organization, integration, account_code="4100", account_name="Materials", currency="EUR", suffix="a"):
+        batch = AccountingGLBatch.objects.create(
+            organization=organization,
+            integration=integration,
+            external_id=f"currency-batch-{account_code}-{suffix}",
+            batch_date=timezone.datetime(2026, 6, 1).date(),
+            currency_code=currency,
+        )
+        return AccountingGLEntry.objects.create(
+            organization=organization,
+            integration=integration,
+            batch=batch,
+            external_id=f"currency-entry-{account_code}-{suffix}",
+            account_code=account_code,
+            account_name=account_name,
+            debit_amount="10.000000",
+            credit_amount="0.000000",
+        )
+
     def test_account_classification_list_shows_imported_account_statistics(self):
         organization = create_organization()
         project = create_project(organization)
@@ -406,6 +425,104 @@ class GLAccountClassificationSettingsTests(TestCase):
         )
 
         self.assertFalse(AccountingAccountClassification.objects.exists())
+
+    def test_currency_diagnostic_single_eur_entry(self):
+        organization = create_organization()
+        integration = create_merit_integration(organization)
+        self._gl_entry(organization, integration, account_code="4110", currency="EUR", suffix="one")
+
+        response = self.client.get(
+            reverse("workspace:settings_account_classifications"),
+            {"integration_id": integration.id},
+        )
+
+        self.assertContains(response, "Currency: EUR")
+        self.assertNotContains(response, "Mixed currencies: EUR")
+
+    def test_currency_diagnostic_many_eur_entries_deduplicated(self):
+        organization = create_organization()
+        integration = create_merit_integration(organization)
+        self._gl_entry(organization, integration, account_code="4111", currency="EUR", suffix="one")
+        self._gl_entry(organization, integration, account_code="4111", currency=" eur ", suffix="two")
+        self._gl_entry(organization, integration, account_code="4111", currency="eur", suffix="three")
+
+        response = self.client.get(
+            reverse("workspace:settings_account_classifications"),
+            {"integration_id": integration.id},
+        )
+
+        self.assertContains(response, "Currency: EUR")
+        self.assertNotContains(response, "Mixed currencies: EUR, EUR")
+
+    def test_currency_diagnostic_mixed_sorted_and_deduplicated(self):
+        organization = create_organization()
+        integration = create_merit_integration(organization)
+        self._gl_entry(organization, integration, account_code="4112", currency="usd", suffix="one")
+        self._gl_entry(organization, integration, account_code="4112", currency=" EUR ", suffix="two")
+        self._gl_entry(organization, integration, account_code="4112", currency="USD", suffix="three")
+
+        response = self.client.get(
+            reverse("workspace:settings_account_classifications"),
+            {"integration_id": integration.id},
+        )
+
+        self.assertContains(response, "Mixed currencies: EUR, USD")
+        self.assertNotContains(response, "Mixed currencies: USD, EUR")
+
+    def test_currency_diagnostic_blank_values_ignored(self):
+        organization = create_organization()
+        integration = create_merit_integration(organization)
+        self._gl_entry(organization, integration, account_code="4113", currency="", suffix="blank")
+        self._gl_entry(organization, integration, account_code="4113", currency=" EUR ", suffix="eur")
+
+        response = self.client.get(
+            reverse("workspace:settings_account_classifications"),
+            {"integration_id": integration.id},
+        )
+
+        self.assertContains(response, "Currency: EUR")
+        self.assertNotContains(response, "Mixed currencies:")
+
+    def test_currency_unknown_when_all_values_blank(self):
+        organization = create_organization()
+        integration = create_merit_integration(organization)
+        self._gl_entry(organization, integration, account_code="4114", currency="", suffix="blank")
+
+        response = self.client.get(
+            reverse("workspace:settings_account_classifications"),
+            {"integration_id": integration.id},
+        )
+
+        self.assertContains(response, "Currency unknown")
+
+    def test_currency_diagnostic_get_does_not_write_database(self):
+        organization = create_organization()
+        integration = create_merit_integration(organization)
+        self._gl_entry(organization, integration, account_code="4115", currency="EUR", suffix="one")
+        counts = (
+            AccountingGLBatch.objects.count(),
+            AccountingGLEntry.objects.count(),
+            AccountingGLAllocation.objects.count(),
+            AccountingAccountClassification.objects.count(),
+            AuditEvent.objects.count(),
+        )
+
+        response = self.client.get(
+            reverse("workspace:settings_account_classifications"),
+            {"integration_id": integration.id},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            counts,
+            (
+                AccountingGLBatch.objects.count(),
+                AccountingGLEntry.objects.count(),
+                AccountingGLAllocation.objects.count(),
+                AccountingAccountClassification.objects.count(),
+                AuditEvent.objects.count(),
+            ),
+        )
 
 
 class ProjectFinancialOverviewTests(TestCase):
