@@ -242,9 +242,9 @@ class GLAccountClassificationSettingsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "4002")
         self.assertContains(response, "Materials")
-        self.assertContains(response, "100.000000")
-        self.assertContains(response, "25.000000")
-        self.assertContains(response, "75.000000")
+        self.assertContains(response, "100,00")
+        self.assertContains(response, "25,00")
+        self.assertContains(response, "75,00")
         self.assertContains(response, "unclassified")
 
     def test_account_classification_list_resolves_integration_mapping_search_filter_and_sort(self):
@@ -660,15 +660,15 @@ class ProjectFinancialOverviewTests(TestCase):
             {"period": "custom", "start": "2026-06-01", "end": "2026-06-30"},
         )
 
-        self.assertContains(response, "1000.000000")
-        self.assertContains(response, "250.000000")
-        self.assertContains(response, "750.000000")
-        self.assertContains(response, "75.00%")
+        self.assertContains(response, "1 000,00")
+        self.assertContains(response, "250,00")
+        self.assertContains(response, "750,00")
+        self.assertContains(response, "75,00%")
         self.assertContains(response, "unclassified_amount_present")
         self.assertContains(response, "9999")
         self.assertContains(response, "Unknown")
-        self.assertContains(response, "80.000000")
-        self.assertNotContains(response, "999.000000")
+        self.assertContains(response, "80,00")
+        self.assertNotContains(response, "999,00")
         self.assertContains(response, "2026-06")
 
     def test_monthly_vertical_chart_renders_for_one_month(self):
@@ -685,9 +685,10 @@ class ProjectFinancialOverviewTests(TestCase):
         self.assertContains(response, "Revenue")
         self.assertContains(response, "Cost")
         self.assertContains(response, "Result")
-        self.assertContains(response, "Revenue - 1000.000000 EUR")
-        self.assertContains(response, "Cost - 250.000000 EUR")
-        self.assertContains(response, "Result - 750.000000 EUR")
+        self.assertContains(response, "Revenue - 1 000,00 EUR")
+        self.assertContains(response, "Cost - 250,00 EUR")
+        self.assertContains(response, "Result - 750,00 EUR")
+        self.assertContains(response, "financial-chart__gridline")
 
     def test_monthly_vertical_chart_renders_multiple_months_chronologically(self):
         _organization, integration, project = self._classified_project()
@@ -714,7 +715,7 @@ class ProjectFinancialOverviewTests(TestCase):
             {"period": "custom", "start": "2026-06-01", "end": "2026-06-30"},
         )
 
-        self.assertContains(response, "Scale max: 1000.000000 EUR")
+        self.assertContains(response, "Scale max: 1 000,00 EUR")
         self.assertContains(response, 'style="height: 100.00%"', html=False)
         self.assertContains(response, 'style="height: 25.00%"', html=False)
         self.assertContains(response, 'style="height: 75.00%"', html=False)
@@ -739,8 +740,8 @@ class ProjectFinancialOverviewTests(TestCase):
         )
 
         self.assertContains(response, "financial-chart__bar--result-negative")
-        self.assertContains(response, "Result - -500.000000 EUR")
-        self.assertContains(response, 'style="top: 50%"', html=False)
+        self.assertContains(response, "Result - -500,00 EUR")
+        self.assertContains(response, 'style="height: 83.33%"', html=False)
 
     def test_monthly_vertical_chart_zero_values_have_accessible_labels(self):
         _organization, integration, project = self._classified_project()
@@ -751,9 +752,9 @@ class ProjectFinancialOverviewTests(TestCase):
             {"period": "custom", "start": "2026-06-01", "end": "2026-07-31"},
         )
 
-        self.assertContains(response, "Revenue - 0.000000 EUR")
-        self.assertContains(response, "Cost - 0.000000 EUR")
-        self.assertContains(response, "Result - 0.000000 EUR")
+        self.assertContains(response, "Revenue - 0,00 EUR")
+        self.assertContains(response, "Cost - 0,00 EUR")
+        self.assertContains(response, "Result - 0,00 EUR")
 
     def test_monthly_vertical_chart_all_zero_or_empty_state(self):
         organization = create_organization()
@@ -785,6 +786,46 @@ class ProjectFinancialOverviewTests(TestCase):
 
         self.assertContains(response, "Monthly Financials")
         self.assertContains(response, "<th class=\"px-4 py-3 text-left\">Month</th>", html=False)
+        self.assertContains(response, "1 000,00")
+        self.assertContains(response, "750,00")
+
+    def test_financial_money_formatting_uses_estonian_two_decimal_display(self):
+        _organization, integration, project = self._classified_project()
+        self._allocation(project, integration, "9998", "Negative adjustment", "-20.115000", "2026-06-20", "negative-adjustment")
+
+        response = self.client.get(
+            reverse("workspace:project_financials", args=[project.id]),
+            {"period": "custom", "start": "2026-06-01", "end": "2026-06-30"},
+        )
+
+        self.assertContains(response, "1 000,00")
+        self.assertContains(response, "-20,12")
+        self.assertContains(response, "0,00")
+        self.assertNotContains(response, "1000.000000")
+
+    def test_financial_chart_gridlines_include_zero_and_readable_ticks(self):
+        _organization, integration, project = self._classified_project()
+        self._allocation(project, integration, "3000", "Revenue", "-19132.880000", "2026-06-10", "large-revenue")
+
+        response = self.client.get(
+            reverse("workspace:project_financials", args=[project.id]),
+            {"period": "custom", "start": "2026-06-01", "end": "2026-06-30"},
+        )
+
+        self.assertContains(response, "20 000")
+        self.assertContains(response, "15 000")
+        self.assertContains(response, "10 000")
+        self.assertContains(response, "5 000")
+        self.assertContains(response, ">0<", html=False)
+        self.assertContains(response, "border-t-2 border-slate-500")
+
+    def test_workspace_sidebar_renders_sticky_full_height_navigation(self):
+        response = self.client.get(reverse("workspace:project_financials", args=[self._classified_project()[2].id]))
+
+        self.assertContains(response, "lg:sticky lg:top-0")
+        self.assertContains(response, "h-screen")
+        self.assertContains(response, "overflow-y-auto")
+        self.assertContains(response, "flex min-w-0 flex-1 flex-col")
 
     def test_monthly_vertical_chart_get_does_not_call_api_or_write_database(self):
         _organization, _integration, project = self._classified_project()
@@ -882,8 +923,8 @@ class ProjectFinancialOverviewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Allocation Drill-down")
         self.assertContains(response, "3000")
-        self.assertContains(response, "-1000.000000")
-        self.assertContains(response, "1000.000000")
+        self.assertContains(response, "-1 000,00")
+        self.assertContains(response, "1 000,00")
         self.assertNotContains(response, "4002")
 
 
@@ -2401,7 +2442,7 @@ class ProjectListManagementUITests(TestCase):
             {"period": "custom", "start": "2026-06-01", "end": "2026-06-30"},
         )
         self.assertEqual(financials.status_code, 200)
-        self.assertContains(financials, "75.000000")
+        self.assertContains(financials, "75,00")
 
     def test_projects_list_changes_to_linked_after_dimension_import(self):
         organization = create_organization()

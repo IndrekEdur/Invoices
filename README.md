@@ -64,6 +64,8 @@ Project Financial Overview UI at `/workspace/projects/<id>/financials/` shows mo
 
 Project Financial Overview includes a server-rendered vertical monthly revenue/cost/result chart. The chart uses already aggregated monthly values, keeps the numeric monthly table below it, and does not call Merit while rendering.
 
+Project Financials now formats monetary values with consistent two-decimal display, includes labeled Y-axis gridlines on the monthly chart, and keeps the Workspace sidebar visible while long desktop pages scroll.
+
 Read-only project financial summary example:
 
 ```powershell

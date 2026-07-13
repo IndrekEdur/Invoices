@@ -15,6 +15,7 @@ from apps.communications.models import EmailAccount
 from apps.core.models import AuditEvent, Organization
 from apps.documents.models import Document
 from apps.projects.models import Project
+from apps.workspace.services.formatting import format_money
 
 
 class SettingsContextBuilder:
@@ -400,6 +401,9 @@ class GLAccountClassificationContextBuilder:
                     "credit_total": account["credit_total"] or Decimal("0"),
                     "project_allocation_count": allocation.get("project_allocation_count", 0),
                     "project_allocation_total": allocation.get("project_allocation_total") or Decimal("0"),
+                    "debit_total_display": format_money(account["debit_total"] or Decimal("0")),
+                    "credit_total_display": format_money(account["credit_total"] or Decimal("0")),
+                    "project_allocation_total_display": format_money(allocation.get("project_allocation_total") or Decimal("0")),
                     "first_batch_date": account["first_batch_date"],
                     "last_batch_date": account["last_batch_date"],
                     "category": category,
@@ -527,6 +531,12 @@ class GLAccountClassificationContextBuilder:
             "unclassified_project_allocation_amount": sum(
                 (row["project_allocation_total"] for row in rows if row["status"] == "unclassified"),
                 Decimal("0"),
+            ),
+            "unclassified_project_allocation_amount_display": format_money(
+                sum(
+                    (row["project_allocation_total"] for row in rows if row["status"] == "unclassified"),
+                    Decimal("0"),
+                )
             ),
             "excluded_accounts": sum(1 for row in rows if row["status"] == "excluded"),
         }

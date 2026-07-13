@@ -7,10 +7,13 @@
 <div class="space-y-8">
     {% include "workspace/partials/components/page_header.html" with eyebrow="Project Financials" title=project.name body="Read-only financial overview from synchronized GL allocation rows. No Merit API calls are made while rendering this page." %}
 
-    <nav class="flex flex-wrap gap-2 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm" aria-label="Project workspace sections">
+    <nav class="sticky top-24 z-10 flex flex-wrap gap-2 rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-sm backdrop-blur" aria-label="Project workspace sections">
         <a href="{% url 'workspace:project_detail' project.id %}" class="rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Overview</a>
         <a href="{% url 'workspace:project_financials' project.id %}" class="rounded-xl bg-slate-950 px-3 py-2 text-sm font-semibold text-white">Financials</a>
         <a href="{% url 'workspace:project_financial_allocations' project.id %}?start={{ period.start|date:'Y-m-d' }}&end={{ period.end|date:'Y-m-d' }}&currency={{ currency_filter }}" class="rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Allocation Drill-down</a>
+        <a href="#financial-summary" class="rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Summary</a>
+        <a href="#monthly-trend" class="rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Monthly Trend</a>
+        <a href="#data-quality" class="rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Data Quality</a>
     </nav>
 
     <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -61,7 +64,7 @@
         </form>
     </section>
 
-    <section class="grid gap-5 sm:grid-cols-2 xl:grid-cols-6">
+    <section id="financial-summary" class="scroll-mt-36 grid gap-5 sm:grid-cols-2 xl:grid-cols-6">
         {% for card in summary_cards %}
             <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
                 <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">{{ card.label }}</div>
@@ -113,7 +116,7 @@
         </div>
     </section>
 
-    <section class="space-y-4">
+    <section id="monthly-trend" class="scroll-mt-36 space-y-4">
         {% include "workspace/partials/components/section_header.html" with title="Monthly Trend" body="Vertical monthly comparison of revenue, total cost and result. The table below remains the exact numeric source." %}
         <div class="financial-chart rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             {% if warnings %}
@@ -133,12 +136,19 @@
                     <div class="text-xs font-medium text-slate-500">Scale max: {{ monthly_chart.max_absolute_display }}</div>
                 </div>
                 <div class="overflow-x-auto">
-                    <div class="financial-chart__plot relative min-h-80 min-w-max border-l border-b border-slate-200 px-4 pt-4">
-                        <div class="financial-chart__zero-line absolute left-0 right-0 border-t border-slate-400" style="top: {{ monthly_chart.zero_line_percent }}%"></div>
-                        <div class="relative z-10 flex min-h-72 items-stretch gap-6">
+                    <div class="financial-chart__plot relative min-h-80 min-w-max pl-20 pr-4 pt-4">
+                        <div class="absolute bottom-8 left-20 right-4 top-4 border-l border-b border-slate-200">
+                            {% for tick in monthly_chart.ticks %}
+                                <div class="financial-chart__gridline absolute left-0 right-0 {% if tick.is_zero %}border-t-2 border-slate-500{% else %}border-t border-slate-200{% endif %}" style="top: {{ tick.position_percent }}%">
+                                    <span class="absolute -left-20 -top-2 w-16 text-right text-xs font-medium text-slate-500">{{ tick.label }}</span>
+                                </div>
+                            {% endfor %}
+                        </div>
+                        <div class="financial-chart__zero-line absolute left-20 right-4 border-t-2 border-slate-500" style="top: calc(1rem + (18rem * {{ monthly_chart.zero_line_percent }} / 100))"></div>
+                        <div class="relative z-10 ml-4 flex min-h-72 items-stretch gap-6">
                             {% for chart_month in monthly_chart.months %}
                                 <div class="financial-chart__month flex min-w-28 flex-col items-center justify-end gap-3" aria-label="{{ chart_month.label }} financial bars">
-                                    <div class="grid h-64 w-full grid-cols-3 gap-2">
+                                    <div class="grid h-72 w-full grid-cols-3 gap-2 pb-8">
                                         <div class="financial-chart__bar-slot flex flex-col">
                                             <div class="flex items-end justify-center" style="height: {{ monthly_chart.positive_area_percent }}%">
                                                 {% if not chart_month.revenue.is_negative %}
@@ -196,7 +206,7 @@
                     <thead class="bg-slate-50"><tr><th class="px-4 py-3 text-left">Month</th><th class="px-4 py-3 text-left">Revenue</th><th class="px-4 py-3 text-left">Material</th><th class="px-4 py-3 text-left">Subcontractor</th><th class="px-4 py-3 text-left">Labor</th><th class="px-4 py-3 text-left">Other</th><th class="px-4 py-3 text-left">Overhead</th><th class="px-4 py-3 text-left">Cost</th><th class="px-4 py-3 text-left">Result</th><th class="px-4 py-3 text-left">Margin</th><th class="px-4 py-3 text-left">Unclassified</th><th class="px-4 py-3 text-left">Status</th></tr></thead>
                     <tbody class="divide-y divide-slate-100">
                         {% for month in months_newest_first %}
-                            <tr class="hover:bg-blue-50/60"><td class="px-4 py-3 font-semibold">{{ month.period_start|date:"Y-m" }}</td><td class="px-4 py-3">{{ month.revenue }}</td><td class="px-4 py-3">{{ month.material_cost }}</td><td class="px-4 py-3">{{ month.subcontractor_cost }}</td><td class="px-4 py-3">{{ month.labor_cost }}</td><td class="px-4 py-3">{{ month.equipment_cost|add:month.transport_cost|add:month.other_direct_cost }}</td><td class="px-4 py-3">{{ month.overhead }}</td><td class="px-4 py-3">{{ month.total_cost }}</td><td class="px-4 py-3 {% if month.result < 0 %}text-red-700 font-semibold{% endif %}">{{ month.result }}</td><td class="px-4 py-3">{{ month.margin|default:"-" }}</td><td class="px-4 py-3">{{ month.unclassified_amount }}</td><td class="px-4 py-3">{% if month.unclassified_amount %}{% include "workspace/partials/components/status_badge.html" with status="warning" label="unclassified" %}{% else %}{% include "workspace/partials/components/status_badge.html" with status="success" label="complete" %}{% endif %}</td></tr>
+                            <tr class="hover:bg-blue-50/60"><td class="px-4 py-3 font-semibold">{{ month.period_start|date:"Y-m" }}</td><td class="px-4 py-3">{{ month.revenue_display }}</td><td class="px-4 py-3">{{ month.material_cost_display }}</td><td class="px-4 py-3">{{ month.subcontractor_cost_display }}</td><td class="px-4 py-3">{{ month.labor_cost_display }}</td><td class="px-4 py-3">{{ month.other_cost_display }}</td><td class="px-4 py-3">{{ month.overhead_display }}</td><td class="px-4 py-3">{{ month.total_cost_display }}</td><td class="px-4 py-3 {% if month.month.result < 0 %}text-red-700 font-semibold{% endif %}">{{ month.result_display }}</td><td class="px-4 py-3">{{ month.margin_display }}</td><td class="px-4 py-3">{{ month.unclassified_amount_display }}</td><td class="px-4 py-3">{% if month.has_unclassified %}{% include "workspace/partials/components/status_badge.html" with status="warning" label="unclassified" %}{% else %}{% include "workspace/partials/components/status_badge.html" with status="success" label="complete" %}{% endif %}</td></tr>
                         {% endfor %}
                     </tbody>
                 </table>
@@ -204,7 +214,7 @@
         </div>
     </section>
 
-    <section class="grid gap-8 xl:grid-cols-2">
+    <section id="data-quality" class="scroll-mt-36 grid gap-8 xl:grid-cols-2">
         <div class="space-y-4">
             {% include "workspace/partials/components/section_header.html" with title="Data Quality" body="Explainable warnings from aggregation and selected filters." %}
             <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">

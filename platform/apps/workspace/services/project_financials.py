@@ -1,5 +1,5 @@
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import Decimal, ROUND_CEILING
 
 from django.core.paginator import Paginator
 from django.utils import timezone
@@ -17,6 +17,7 @@ from apps.accounting.services import (
     ProjectFinancialAggregationService,
 )
 from apps.projects.models import Project
+from apps.workspace.services.formatting import format_axis_number, format_money, format_percent
 
 
 ZERO = Decimal("0")
@@ -225,7 +226,28 @@ class ProjectFinancialContextBuilder:
 
     @staticmethod
     def _month_rows(result):
-        return list(reversed(result.months))
+        rows = []
+        for month in reversed(result.months):
+            other_cost = month.equipment_cost + month.transport_cost + month.other_direct_cost
+            rows.append(
+                {
+                    "month": month,
+                    "period_start": month.period_start,
+                    "revenue_display": ProjectFinancialContextBuilder._money(month.revenue),
+                    "material_cost_display": ProjectFinancialContextBuilder._money(month.material_cost),
+                    "subcontractor_cost_display": ProjectFinancialContextBuilder._money(month.subcontractor_cost),
+                    "labor_cost_display": ProjectFinancialContextBuilder._money(month.labor_cost),
+                    "other_cost_display": ProjectFinancialContextBuilder._money(other_cost),
+                    "overhead_display": ProjectFinancialContextBuilder._money(month.overhead),
+                    "total_cost_display": ProjectFinancialContextBuilder._money(month.total_cost),
+                    "result_display": ProjectFinancialContextBuilder._money(month.result),
+                    "margin_display": ProjectFinancialContextBuilder._percent(month.margin),
+                    "unclassified_amount_display": ProjectFinancialContextBuilder._money(month.unclassified_amount),
+                    "has_unclassified": bool(month.unclassified_amount),
+                    "result_status": ProjectFinancialContextBuilder._result_status(month.result),
+                }
+            )
+        return rows
 
     @staticmethod
     def _trend_rows(result):
@@ -258,23 +280,35 @@ class ProjectFinancialContextBuilder:
         has_activity = bool(months) and any((value or ZERO) != ZERO for value in values)
         has_positive = any((value or ZERO) > ZERO for value in values)
         has_negative = any((value or ZERO) < ZERO for value in values)
-        positive_area_percent = Decimal("50") if has_positive and has_negative else (Decimal("100") if has_positive else ZERO)
-        negative_area_percent = Decimal("50") if has_positive and has_negative else (Decimal("100") if has_negative else ZERO)
+        scale = cls._chart_scale(values)
+        axis_min = scale["axis_min"]
+        axis_max = scale["axis_max"]
+        axis_range = axis_max - axis_min
+        zero_line_percent = ZERO
+        if axis_range:
+            zero_line_percent = ((axis_max - ZERO) / axis_range * Decimal("100")).quantize(Decimal("0.01"))
+        positive_area_percent = zero_line_percent
+        negative_area_percent = Decimal("100") - zero_line_percent
 
         return {
             "max_absolute_value": max_absolute,
             "max_absolute_display": cls._money_with_currency(max_absolute, result.currency),
+            "axis_min": axis_min,
+            "axis_max": axis_max,
+            "axis_interval": scale["interval"],
+            "ticks": scale["ticks"],
             "has_activity": has_activity,
             "has_positive": has_positive,
             "has_negative": has_negative,
-            "positive_area_percent": int(positive_area_percent),
-            "negative_area_percent": int(negative_area_percent),
-            "zero_line_percent": int(positive_area_percent),
+            "positive_area_percent": f"{positive_area_percent:.2f}",
+            "negative_area_percent": f"{negative_area_percent:.2f}",
+            "zero_line_percent": f"{zero_line_percent:.2f}",
             "currency": result.currency,
             "months": [
                 cls._monthly_chart_month(
                     month,
-                    max_absolute=max_absolute,
+                    axis_min=axis_min,
+                    axis_max=axis_max,
                     positive_area_percent=positive_area_percent,
                     negative_area_percent=negative_area_percent,
                     currency=result.currency,
@@ -284,14 +318,15 @@ class ProjectFinancialContextBuilder:
         }
 
     @classmethod
-    def _monthly_chart_month(cls, month, *, max_absolute, positive_area_percent, negative_area_percent, currency):
+    def _monthly_chart_month(cls, month, *, axis_min, axis_max, positive_area_percent, negative_area_percent, currency):
         return {
             "label": month.period_start.strftime("%Y-%m"),
             "month": month,
             "revenue": cls._chart_bar(
                 "Revenue",
                 month.revenue,
-                max_absolute=max_absolute,
+                axis_min=axis_min,
+                axis_max=axis_max,
                 positive_area_percent=positive_area_percent,
                 negative_area_percent=negative_area_percent,
                 currency=currency,
@@ -300,7 +335,8 @@ class ProjectFinancialContextBuilder:
             "cost": cls._chart_bar(
                 "Cost",
                 month.total_cost,
-                max_absolute=max_absolute,
+                axis_min=axis_min,
+                axis_max=axis_max,
                 positive_area_percent=positive_area_percent,
                 negative_area_percent=negative_area_percent,
                 currency=currency,
@@ -309,7 +345,8 @@ class ProjectFinancialContextBuilder:
             "result": cls._chart_bar(
                 "Result",
                 month.result,
-                max_absolute=max_absolute,
+                axis_min=axis_min,
+                axis_max=axis_max,
                 positive_area_percent=positive_area_percent,
                 negative_area_percent=negative_area_percent,
                 currency=currency,
@@ -322,13 +359,13 @@ class ProjectFinancialContextBuilder:
         }
 
     @classmethod
-    def _chart_bar(cls, label, value, *, max_absolute, positive_area_percent, negative_area_percent, currency, css_class):
+    def _chart_bar(cls, label, value, *, axis_min, axis_max, positive_area_percent, negative_area_percent, currency, css_class):
         value = value or ZERO
         is_negative = value < ZERO
-        area_percent = negative_area_percent if is_negative else positive_area_percent
+        area_limit = abs(axis_min) if is_negative else axis_max
         height_percent = ZERO
-        if max_absolute:
-            height_percent = (abs(value) / max_absolute * area_percent).quantize(Decimal("0.01"))
+        if area_limit:
+            height_percent = (abs(value) / area_limit * Decimal("100")).quantize(Decimal("0.01"))
             if value != ZERO and height_percent < Decimal("2"):
                 height_percent = Decimal("2")
         display = cls._money_with_currency(value, currency)
@@ -343,6 +380,75 @@ class ProjectFinancialContextBuilder:
             "css_class": css_class,
             "aria_label": f"{label} - {display}",
         }
+
+    @classmethod
+    def _chart_scale(cls, values):
+        numeric_values = [Decimal(value or ZERO) for value in values]
+        max_positive = max([value for value in numeric_values if value > ZERO] + [ZERO])
+        min_negative = min([value for value in numeric_values if value < ZERO] + [ZERO])
+        max_absolute = max(abs(max_positive), abs(min_negative))
+        if max_absolute == ZERO:
+            return {"axis_min": ZERO, "axis_max": ZERO, "interval": ZERO, "ticks": []}
+
+        scale_basis = (max_positive - min_negative) if max_positive and min_negative else max_absolute
+        interval = cls._nice_interval(scale_basis)
+        axis_max = cls._round_up_to_interval(max_positive, interval) if max_positive else ZERO
+        axis_min = -cls._round_up_to_interval(abs(min_negative), interval) if min_negative else ZERO
+        if axis_max == ZERO and axis_min == ZERO:
+            axis_max = interval
+
+        ticks = []
+        value = axis_min
+        axis_range = axis_max - axis_min
+        guard = 0
+        while value <= axis_max and guard < 20:
+            position = ((axis_max - value) / axis_range * Decimal("100")).quantize(Decimal("0.01")) if axis_range else ZERO
+            ticks.append(
+                {
+                    "value": value,
+                    "label": format_axis_number(value),
+                    "position_percent": f"{position:.2f}",
+                    "is_zero": value == ZERO,
+                }
+            )
+            value += interval
+            guard += 1
+        if not any(tick["is_zero"] for tick in ticks):
+            position = ((axis_max - ZERO) / axis_range * Decimal("100")).quantize(Decimal("0.01")) if axis_range else ZERO
+            ticks.append(
+                {
+                    "value": ZERO,
+                    "label": "0",
+                    "position_percent": f"{position:.2f}",
+                    "is_zero": True,
+                }
+            )
+            ticks = sorted(ticks, key=lambda tick: tick["value"], reverse=True)
+        return {"axis_min": axis_min, "axis_max": axis_max, "interval": interval, "ticks": ticks}
+
+    @staticmethod
+    def _nice_interval(max_absolute):
+        target = Decimal(max_absolute) / Decimal("5")
+        exponent = target.adjusted()
+        base = Decimal(10) ** exponent
+        normalized = target / base
+        if normalized <= Decimal("1"):
+            factor = Decimal("1")
+        elif normalized <= Decimal("2"):
+            factor = Decimal("2")
+        elif normalized <= Decimal("2.5"):
+            factor = Decimal("2.5")
+        elif normalized <= Decimal("5"):
+            factor = Decimal("5")
+        else:
+            factor = Decimal("10")
+        return factor * base
+
+    @staticmethod
+    def _round_up_to_interval(value, interval):
+        if not value:
+            return ZERO
+        return (Decimal(value) / interval).to_integral_value(rounding=ROUND_CEILING) * interval
 
     @staticmethod
     def _warnings(result, include_overhead, currency):
@@ -456,15 +562,12 @@ class ProjectFinancialContextBuilder:
 
     @staticmethod
     def _money(value):
-        return f"{Decimal(value or ZERO):.6f}"
+        return format_money(value)
 
     @staticmethod
     def _money_with_currency(value, currency):
-        amount = ProjectFinancialContextBuilder._money(value)
-        return f"{amount} {currency}" if currency else amount
+        return format_money(value, currency)
 
     @staticmethod
     def _percent(value):
-        if value is None:
-            return "-"
-        return f"{Decimal(value):.2f}%"
+        return format_percent(value)

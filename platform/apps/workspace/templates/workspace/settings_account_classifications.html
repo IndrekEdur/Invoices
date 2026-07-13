@@ -9,7 +9,7 @@
         <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Classified</div><div class="mt-3 text-3xl font-semibold text-slate-950">{{ summary.classified_accounts }}</div></article>
         <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Unclassified</div><div class="mt-3 text-3xl font-semibold text-slate-950">{{ summary.unclassified_accounts }}</div></article>
         <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">With allocations</div><div class="mt-3 text-3xl font-semibold text-slate-950">{{ summary.accounts_with_project_allocations }}</div></article>
-        <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Unclassified alloc.</div><div class="mt-3 text-2xl font-semibold text-slate-950">{{ summary.unclassified_project_allocation_amount|stringformat:".6f" }}</div></article>
+        <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Unclassified alloc.</div><div class="mt-3 text-2xl font-semibold text-slate-950">{{ summary.unclassified_project_allocation_amount_display }}</div></article>
         <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Excluded</div><div class="mt-3 text-3xl font-semibold text-slate-950">{{ summary.excluded_accounts }}</div></article>
     </section>
 
@@ -78,9 +78,9 @@
                                         <div class="mt-1 text-xs font-semibold {% if account.currency_diagnostic.is_mixed %}text-orange-700{% else %}text-slate-500{% endif %}">{{ account.currency_diagnostic.label }}</div>
                                     </td>
                                     <td class="px-4 py-3 text-slate-700">{{ account.entry_count }}</td>
-                                    <td class="px-4 py-3 text-slate-700">{{ account.debit_total|stringformat:".6f" }}</td>
-                                    <td class="px-4 py-3 text-slate-700">{{ account.credit_total|stringformat:".6f" }}</td>
-                                    <td class="px-4 py-3 text-slate-700">{{ account.project_allocation_count }} / {{ account.project_allocation_total|stringformat:".6f" }}</td>
+                                    <td class="px-4 py-3 text-slate-700">{{ account.debit_total_display }}</td>
+                                    <td class="px-4 py-3 text-slate-700">{{ account.credit_total_display }}</td>
+                                    <td class="px-4 py-3 text-slate-700">{{ account.project_allocation_count }} / {{ account.project_allocation_total_display }}</td>
                                     <td class="px-4 py-3">{% include "workspace/partials/components/badge.html" with tone="info" label=account.category %}<div class="mt-1 text-xs text-slate-500">{{ account.source }}</div></td>
                                     <td class="px-4 py-3 text-slate-700">{{ account.reporting_sign }}</td>
                                     <td class="px-4 py-3">{% if account.include_in_project_result %}{% include "workspace/partials/components/status_badge.html" with status="success" label="included" %}{% else %}{% include "workspace/partials/components/status_badge.html" with status="neutral" label="excluded" %}{% endif %}</td>
