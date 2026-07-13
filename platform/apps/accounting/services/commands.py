@@ -358,6 +358,7 @@ class CreateManagementAllocationVersionCommand:
     version_number: int | None = None
     created_by: object = None
     reason: str = ""
+    version_metadata: dict | None = None
     metadata: dict | None = None
 
 
@@ -367,3 +368,36 @@ class ApproveManagementAllocationVersionCommand:
     actor: object = None
     reason: str = ""
     metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class GenerateManagementAllocationProposalCommand:
+    pool: object
+    year: int
+    month: int
+    project_ids: list
+    strategy: str | None = None
+    source_amount: object = None
+    project_manager_id: object = None
+    manual_percentages: dict | None = None
+    manual_amounts: dict | None = None
+    reason: str = ""
+    actor: object = None
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class GenerateManagementAllocationProposalResult:
+    period: object
+    pool: object
+    version: object
+    entries: list
+    strategy: str
+    source_amount: object
+    allocated_amount: object
+    unallocated_amount: object
+    total_percentage: object
+    project_count: int
+    warnings: list
+    created: bool
+    metadata: dict = field(default_factory=dict)

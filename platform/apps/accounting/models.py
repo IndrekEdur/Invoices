@@ -609,6 +609,7 @@ class ManagementAllocationVersion(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     approved_at = models.DateTimeField(blank=True, null=True)
     reason = models.TextField(blank=True, default="")
+    metadata = models.JSONField(default=dict, blank=True)
 
     class Meta:
         ordering = ["period", "pool__display_order", "pool__name", "-version_number", "id"]
@@ -678,6 +679,9 @@ class ManagementAllocationEntry(models.Model):
 
     class Meta:
         ordering = ["version", "project__code", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["version", "project"], name="unique_management_entry_project"),
+        ]
 
     def clean(self):
         super().clean()

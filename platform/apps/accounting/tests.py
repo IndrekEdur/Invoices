@@ -68,6 +68,7 @@ from apps.accounting.services import (
     CompleteAccountingSyncRunCommand,
     FailAccountingSyncRunCommand,
     GeneralLedgerVerificationResult,
+    GenerateManagementAllocationProposalCommand,
     GeneralLedgerCacheService,
     GeneralLedgerSyncService,
     GeneralLedgerVerificationService,
@@ -79,6 +80,7 @@ from apps.accounting.services import (
     ResolveDimensionConflictCommand,
     SaveAccountingAccountClassificationCommand,
     ManagementAllocationVersionService,
+    ManagementAllocationProposalService,
     ManagementCostPoolService,
     SuggestNextProjectCodeCommand,
     StartAccountingSyncRunCommand,
@@ -94,7 +96,7 @@ from apps.accounting.services import (
 )
 from apps.core.models import AuditEvent
 from apps.core.services import CreateOrganizationCommand, OrganizationService
-from apps.projects.models import Project
+from apps.projects.models import Project, ProjectParty
 
 
 def create_organization(name="Accounting Org"):
@@ -4454,3 +4456,356 @@ class ManagementCostAllocationServiceTests(TestCase):
                 )
 
         self.assertFalse(ManagementCostPool.objects.filter(name="Rollback Pool").exists())
+
+
+class FakeAggregationService:
+    def __init__(self, revenues):
+        self.revenues = revenues
+        self.calls = []
+
+    def aggregate(self, command):
+        self.calls.append(command)
+        return type(
+            "AggregationResult",
+            (),
+            {
+                "revenue": self.revenues.get(command.project.id, Decimal("0")),
+            },
+        )()
+
+
+class ManagementAllocationProposalServiceTests(TestCase):
+    def _setup(self):
+        organization = create_organization()
+        pool = ManagementCostPool.objects.create(organization=organization, name="Office")
+        first = Project.objects.create(organization=organization, code="26124", name="First")
+        second = Project.objects.create(organization=organization, code="26125", name="Second")
+        third = Project.objects.create(organization=organization, code="26126", name="Third")
+        return organization, pool, first, second, third
+
+    def _command(self, pool, projects, **kwargs):
+        defaults = {
+            "pool": pool,
+            "year": 2026,
+            "month": 6,
+            "project_ids": [project.id for project in projects],
+            "source_amount": Decimal("100.00"),
+        }
+        defaults.update(kwargs)
+        return GenerateManagementAllocationProposalCommand(**defaults)
+
+    def _service(self, revenues=None):
+        return ManagementAllocationProposalService(project_financial_aggregation_service=FakeAggregationService(revenues or {}))
+
+    def _gl_entry(self, organization, *, account_code="5000", batch_date=date(2026, 6, 15), debit="100.000000", credit="0.000000", suffix="1"):
+        integration = create_merit_integration(organization)
+        batch = AccountingGLBatch.objects.create(
+            organization=organization,
+            integration=integration,
+            external_id=f"mgmt-batch-{suffix}",
+            batch_date=batch_date,
+        )
+        return AccountingGLEntry.objects.create(
+            organization=organization,
+            integration=integration,
+            batch=batch,
+            external_id=f"mgmt-entry-{suffix}",
+            account_code=account_code,
+            debit_amount=Decimal(debit),
+            credit_amount=Decimal(credit),
+        )
+
+    def test_period_created_for_valid_month_and_metadata_not_mutated(self):
+        organization, pool, first, second, third = self._setup()
+        metadata = {"source": {"screen": "test"}}
+        original = deepcopy(metadata)
+
+        result = self._service().generate(
+            self._command(pool, [first, second], strategy=AllocationStrategy.EQUAL, metadata=metadata)
+        )
+
+        self.assertEqual(result.period.period_label, "2026-06")
+        self.assertEqual(result.version.status, VersionStatus.DRAFT)
+        self.assertEqual(metadata, original)
+
+    def test_invalid_month_inactive_pool_empty_projects_and_archived_period_rejected(self):
+        organization, pool, first, second, third = self._setup()
+
+        with self.assertRaisesMessage(ValueError, "month must be between 1 and 12"):
+            self._service().generate(self._command(pool, [first], month=13, strategy=AllocationStrategy.EQUAL))
+        pool.is_active = False
+        pool.save()
+        with self.assertRaisesMessage(ValueError, "Inactive management cost pools"):
+            self._service().generate(self._command(pool, [first], strategy=AllocationStrategy.EQUAL))
+        pool.is_active = True
+        pool.save()
+        with self.assertRaisesMessage(ValueError, "requires at least one selected project"):
+            self._service().generate(self._command(pool, [], strategy=AllocationStrategy.EQUAL))
+        ManagementAllocationPeriod.objects.create(
+            organization=organization,
+            year=2026,
+            month=7,
+            status=PeriodStatus.ARCHIVED,
+        )
+        with self.assertRaisesMessage(ValueError, "Archived management allocation periods"):
+            self._service().generate(self._command(pool, [first], month=7, strategy=AllocationStrategy.EQUAL))
+
+    def test_organization_isolation(self):
+        organization, pool, first, second, third = self._setup()
+        other_project = Project.objects.create(organization=create_organization("Other"), code="999", name="Other")
+
+        with self.assertRaisesMessage(ValueError, "belong to the pool organization"):
+            self._service().generate(self._command(pool, [first, other_project], strategy=AllocationStrategy.EQUAL))
+
+    def test_manual_source_amount_used_and_warning_for_existing_draft(self):
+        organization, pool, first, second, third = self._setup()
+        ManagementAllocationPeriod.objects.create(organization=organization, year=2026, month=6)
+        ManagementAllocationVersion.objects.create(
+            period=ManagementAllocationPeriod.objects.get(organization=organization, year=2026, month=6),
+            pool=pool,
+            version_number=1,
+        )
+
+        result = self._service().generate(self._command(pool, [first, second], strategy=AllocationStrategy.EQUAL))
+
+        self.assertEqual(result.source_amount, Decimal("100.00"))
+        self.assertEqual(result.version.metadata["source_amount_origin"], "manual")
+        self.assertIn("existing_draft_version", [warning["code"] for warning in result.warnings])
+
+    def test_gl_derived_source_amount_uses_debit_minus_credit_and_month_boundaries(self):
+        organization, pool, first, second, third = self._setup()
+        ManagementCostPoolAccount.objects.create(pool=pool, account_code="5000")
+        ManagementCostPoolAccount.objects.create(pool=pool, account_code="5100")
+        self._gl_entry(organization, account_code="5000", debit="100.000000", credit="0.000000", suffix="1")
+        self._gl_entry(organization, account_code="5100", debit="50.000000", credit="10.000000", suffix="2")
+        self._gl_entry(organization, account_code="5200", debit="999.000000", credit="0.000000", suffix="unmapped")
+        self._gl_entry(organization, account_code="5000", batch_date=date(2026, 7, 1), debit="999.000000", suffix="outside")
+
+        result = self._service().generate(
+            self._command(pool, [first, second], strategy=AllocationStrategy.EQUAL, source_amount=None)
+        )
+
+        self.assertEqual(result.source_amount, Decimal("140.000000"))
+        self.assertEqual(result.version.metadata["source_amount_origin"], "gl_pool_accounts")
+        self.assertEqual(result.version.metadata["calculation_diagnostics"]["source"]["amount_semantics"], "debit_amount_minus_credit_amount")
+
+    def test_reversal_negative_source_amount_from_gl(self):
+        organization, pool, first, second, third = self._setup()
+        ManagementCostPoolAccount.objects.create(pool=pool, account_code="5000")
+        self._gl_entry(organization, account_code="5000", debit="0.000000", credit="80.000000")
+
+        result = self._service().generate(
+            self._command(pool, [first, second], strategy=AllocationStrategy.EQUAL, source_amount=None)
+        )
+
+        self.assertEqual(result.source_amount, Decimal("-80.000000"))
+        self.assertEqual(sum(entry.amount for entry in result.entries), Decimal("-80.000000"))
+
+    def test_zero_source_amount_warning(self):
+        organization, pool, first, second, third = self._setup()
+
+        result = self._service().generate(
+            self._command(pool, [first, second], strategy=AllocationStrategy.EQUAL, source_amount=Decimal("0"))
+        )
+
+        self.assertEqual(result.allocated_amount, Decimal("0.00"))
+        self.assertIn("zero_source_amount", [warning["code"] for warning in result.warnings])
+
+    def test_revenue_strategy_weights_by_positive_revenue(self):
+        organization, pool, first, second, third = self._setup()
+        service = self._service({first.id: Decimal("300"), second.id: Decimal("100")})
+
+        result = service.generate(self._command(pool, [first, second], strategy=AllocationStrategy.REVENUE))
+
+        self.assertEqual([entry.amount for entry in result.entries], [Decimal("75.00"), Decimal("25.00")])
+        self.assertEqual(sum(entry.percentage for entry in result.entries), Decimal("100.0000"))
+        self.assertEqual(len(service.project_financial_aggregation_service.calls), 2)
+
+    def test_revenue_strategy_warns_zero_and_negative_revenue_and_fails_without_positive_basis(self):
+        organization, pool, first, second, third = self._setup()
+        result = self._service({first.id: Decimal("100"), second.id: Decimal("0"), third.id: Decimal("-50")}).generate(
+            self._command(pool, [first, second, third], strategy=AllocationStrategy.REVENUE)
+        )
+
+        self.assertEqual([entry.amount for entry in result.entries], [Decimal("100.00"), Decimal("0.00"), Decimal("0.00")])
+        self.assertIn("zero_revenue_project", [warning["code"] for warning in result.warnings])
+        self.assertIn("negative_revenue_project_excluded", [warning["code"] for warning in result.warnings])
+        with self.assertRaisesMessage(ValueError, "requires positive selected-project revenue"):
+            self._service({first.id: Decimal("0"), second.id: Decimal("-1")}).generate(
+                self._command(pool, [first, second], strategy=AllocationStrategy.REVENUE)
+            )
+
+    def test_equal_strategy_rounding_and_negative_amounts(self):
+        organization, pool, first, second, third = self._setup()
+
+        result = self._service().generate(
+            self._command(pool, [first, second, third], strategy=AllocationStrategy.EQUAL, source_amount=Decimal("100.00"))
+        )
+        negative = self._service().generate(
+            self._command(pool, [first, second], strategy=AllocationStrategy.EQUAL, source_amount=Decimal("-10.00"), month=7)
+        )
+
+        self.assertEqual([entry.amount for entry in result.entries], [Decimal("33.33"), Decimal("33.33"), Decimal("33.34")])
+        self.assertEqual(sum(entry.amount for entry in result.entries), Decimal("100.00"))
+        self.assertEqual(sum(entry.percentage for entry in result.entries), Decimal("100.0000"))
+        self.assertEqual(sum(entry.amount for entry in negative.entries), Decimal("-10.00"))
+
+    def test_manual_percentages_valid_and_invalid(self):
+        organization, pool, first, second, third = self._setup()
+        result = self._service().generate(
+            self._command(
+                pool,
+                [first, second],
+                strategy=AllocationStrategy.MANUAL_PERCENT,
+                manual_percentages={first.id: Decimal("60"), second.id: Decimal("40")},
+            )
+        )
+
+        self.assertEqual([entry.amount for entry in result.entries], [Decimal("60.00"), Decimal("40.00")])
+        self.assertTrue(all(entry.manual_override for entry in result.entries))
+        with self.assertRaisesMessage(ValueError, "cannot be negative"):
+            self._service().generate(
+                self._command(pool, [first, second], strategy=AllocationStrategy.MANUAL_PERCENT, manual_percentages={first.id: -1, second.id: 101})
+            )
+        with self.assertRaisesMessage(ValueError, "must total exactly 100"):
+            self._service().generate(
+                self._command(pool, [first, second], strategy=AllocationStrategy.MANUAL_PERCENT, manual_percentages={first.id: 60, second.id: 30})
+            )
+        with self.assertRaisesMessage(ValueError, "unknown project"):
+            self._service().generate(
+                self._command(pool, [first, second], strategy=AllocationStrategy.MANUAL_PERCENT, manual_percentages={first.id: 60, second.id: 40, 9999: 0})
+            )
+
+    def test_manual_amounts_valid_and_invalid(self):
+        organization, pool, first, second, third = self._setup()
+        result = self._service().generate(
+            self._command(
+                pool,
+                [first, second],
+                strategy=AllocationStrategy.MANUAL_AMOUNT,
+                manual_amounts={first.id: Decimal("70.00"), second.id: Decimal("30.00")},
+            )
+        )
+
+        self.assertEqual([entry.percentage for entry in result.entries], [Decimal("70.0000"), Decimal("30.0000")])
+        self.assertTrue(all(entry.manual_override for entry in result.entries))
+        with self.assertRaisesMessage(ValueError, "must total exactly"):
+            self._service().generate(
+                self._command(pool, [first, second], strategy=AllocationStrategy.MANUAL_AMOUNT, manual_amounts={first.id: 70, second.id: 20})
+            )
+        with self.assertRaisesMessage(ValueError, "unknown project"):
+            self._service().generate(
+                self._command(pool, [first, second], strategy=AllocationStrategy.MANUAL_AMOUNT, manual_amounts={first.id: 100, 9999: 0})
+            )
+        negative = self._service().generate(
+            self._command(
+                pool,
+                [first, second],
+                strategy=AllocationStrategy.MANUAL_AMOUNT,
+                source_amount=Decimal("-100.00"),
+                manual_amounts={first.id: Decimal("-70.00"), second.id: Decimal("-30.00")},
+                month=7,
+            )
+        )
+        self.assertEqual(sum(entry.amount for entry in negative.entries), Decimal("-100.00"))
+
+    def test_project_manager_strategy_requires_manager_and_respects_explicit_projects(self):
+        organization, pool, first, second, third = self._setup()
+        manager_one = ProjectParty.objects.create(
+            organization=organization,
+            project=first,
+            name="Manager",
+            email="manager@example.com",
+            role=ProjectParty.Role.PROJECT_MANAGER,
+        )
+        ProjectParty.objects.create(
+            organization=organization,
+            project=second,
+            name="Manager",
+            email="manager@example.com",
+            role=ProjectParty.Role.PROJECT_MANAGER,
+        )
+
+        with self.assertRaisesMessage(ValueError, "requires project_manager_id"):
+            self._service().generate(self._command(pool, [first], strategy=AllocationStrategy.PROJECT_MANAGER))
+        result = self._service({first.id: Decimal("100"), second.id: Decimal("100")}).generate(
+            self._command(
+                pool,
+                [first, second],
+                strategy=AllocationStrategy.PROJECT_MANAGER,
+                project_manager_id=manager_one.id,
+            )
+        )
+        self.assertEqual(result.project_count, 2)
+        self.assertEqual(result.version.metadata["project_manager_id"], manager_one.id)
+        with self.assertRaisesMessage(ValueError, "must be related"):
+            self._service({first.id: Decimal("100"), third.id: Decimal("100")}).generate(
+                self._command(pool, [first, third], strategy=AllocationStrategy.PROJECT_MANAGER, project_manager_id=manager_one.id, month=7)
+            )
+
+    def test_project_manager_rule_can_use_equal_basis(self):
+        organization, pool, first, second, third = self._setup()
+        manager_one = ProjectParty.objects.create(
+            organization=organization,
+            project=first,
+            name="Manager",
+            email="manager@example.com",
+            role=ProjectParty.Role.PROJECT_MANAGER,
+        )
+        ProjectParty.objects.create(
+            organization=organization,
+            project=second,
+            name="Manager",
+            email="manager@example.com",
+            role=ProjectParty.Role.PROJECT_MANAGER,
+        )
+        ManagementAllocationRule.objects.create(
+            pool=pool,
+            strategy=AllocationStrategy.PROJECT_MANAGER,
+            configuration={"basis": "equal"},
+        )
+
+        result = self._service({first.id: Decimal("1000"), second.id: Decimal("1")}).generate(
+            self._command(pool, [first, second], strategy=None, project_manager_id=manager_one.id)
+        )
+
+        self.assertEqual([entry.amount for entry in result.entries], [Decimal("50.00"), Decimal("50.00")])
+
+    def test_versioning_keeps_history_draft_and_no_auto_superseding(self):
+        organization, pool, first, second, third = self._setup()
+        first_result = self._service().generate(self._command(pool, [first], strategy=AllocationStrategy.EQUAL))
+        ManagementAllocationVersionService.approve(ApproveManagementAllocationVersionCommand(version=first_result.version))
+
+        second_result = self._service().generate(self._command(pool, [first], strategy=AllocationStrategy.EQUAL, month=6))
+        first_result.version.refresh_from_db()
+
+        self.assertEqual(first_result.version.status, VersionStatus.APPROVED)
+        self.assertEqual(second_result.version.version_number, 2)
+        self.assertEqual(second_result.version.status, VersionStatus.DRAFT)
+        self.assertEqual(ManagementAllocationEntry.objects.filter(version=second_result.version, project=first).count(), 1)
+
+    def test_rollback_when_entry_creation_fails_and_no_audit(self):
+        organization, pool, first, second, third = self._setup()
+
+        with patch("apps.accounting.services.management_allocations.ManagementAllocationEntry.objects.create") as create_mock:
+            create_mock.side_effect = RuntimeError("entry failed")
+            with self.assertRaises(RuntimeError):
+                self._service().generate(self._command(pool, [first], strategy=AllocationStrategy.EQUAL))
+
+        self.assertFalse(ManagementAllocationVersion.objects.exists())
+        self.assertFalse(AuditEvent.objects.filter(event_type="management_allocation_proposal_generated").exists())
+
+    def test_success_audit_and_no_source_model_mutation_or_merit_api(self):
+        organization, pool, first, second, third = self._setup()
+        entry_count = AccountingGLEntry.objects.count()
+        project_count = Project.objects.count()
+
+        with patch("apps.accounting.connectors.MeritAPIClient.request") as request_mock:
+            result = self._service().generate(self._command(pool, [first], strategy=AllocationStrategy.EQUAL))
+
+        request_mock.assert_not_called()
+        self.assertEqual(AccountingGLEntry.objects.count(), entry_count)
+        self.assertEqual(Project.objects.count(), project_count)
+        event = AuditEvent.objects.get(event_type="management_allocation_proposal_generated")
+        self.assertEqual(event.metadata["strategy"], AllocationStrategy.EQUAL)
+        self.assertEqual(event.metadata["allocated_amount"], str(result.allocated_amount))
