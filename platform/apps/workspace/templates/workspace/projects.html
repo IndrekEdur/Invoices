@@ -12,61 +12,79 @@
 {% endblock %}
 {% block content %}
 <div class="space-y-8">
-    {% include "workspace/partials/components/page_header.html" with eyebrow="Projects" title="Project List Management" body="Manage Workspace projects, project codes and cached Merit project dimensions from one place." %}
+    {% include "workspace/partials/components/page_header.html" with eyebrow="Projects" title="Project List Management" body="Manage Workspace projects, status, project codes and cached Merit project dimensions from one place." %}
 
     <section class="grid gap-4 md:grid-cols-3 xl:grid-cols-6">
-        {% for key, value in status_counts.items %}
-            <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">{{ key }}</div>
-                <div class="mt-2 text-3xl font-semibold text-slate-950">{{ value }}</div>
-            </div>
-        {% endfor %}
+        <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Total</div><div class="mt-2 text-3xl font-semibold text-slate-950">{{ status_counts.total }}</div></div>
+        <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Active</div><div class="mt-2 text-3xl font-semibold text-green-700">{{ status_counts.active }}</div></div>
+        <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Completed</div><div class="mt-2 text-3xl font-semibold text-blue-700">{{ status_counts.completed }}</div></div>
+        <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Archived</div><div class="mt-2 text-3xl font-semibold text-slate-700">{{ status_counts.archived }}</div></div>
+        <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Linked</div><div class="mt-2 text-3xl font-semibold text-emerald-700">{{ status_counts.linked }}</div></div>
+        <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Workspace only</div><div class="mt-2 text-3xl font-semibold text-amber-700">{{ status_counts.workspace_only }}</div></div>
     </section>
 
     <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <form method="get" class="grid gap-4 md:grid-cols-[220px_1fr_auto] md:items-end">
+        <form method="get" class="grid gap-4 lg:grid-cols-[190px_1fr_190px_160px_auto] lg:items-end">
             <div>
                 <label class="text-xs font-semibold uppercase tracking-wide text-slate-500" for="project-filter">Filter</label>
                 <select id="project-filter" name="filter" class="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-slate-500 focus:ring-4 focus:ring-slate-200">
                     <option value="all" {% if filter_value == "all" %}selected{% endif %}>All</option>
                     <option value="active" {% if filter_value == "active" %}selected{% endif %}>Active</option>
-                    <option value="planned" {% if filter_value == "planned" %}selected{% endif %}>Planned</option>
+                    <option value="completed" {% if filter_value == "completed" %}selected{% endif %}>Completed</option>
                     <option value="archived" {% if filter_value == "archived" %}selected{% endif %}>Archived</option>
+                    <option value="linked" {% if filter_value == "linked" %}selected{% endif %}>Linked</option>
                     <option value="missing_in_workspace" {% if filter_value == "missing_in_workspace" %}selected{% endif %}>Missing in Workspace</option>
                     <option value="workspace_only" {% if filter_value == "workspace_only" %}selected{% endif %}>Workspace only</option>
                 </select>
             </div>
             <div>
                 <label class="text-xs font-semibold uppercase tracking-wide text-slate-500" for="project-search">Search</label>
-                <input id="project-search" name="q" value="{{ query }}" placeholder="Search project code, project name, dimension code or dimension name"
+                <input id="project-search" name="q" value="{{ query }}" placeholder="Search ID, project code, name, description or dimension"
                        class="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-slate-500 focus:ring-4 focus:ring-slate-200">
+            </div>
+            <div>
+                <label class="text-xs font-semibold uppercase tracking-wide text-slate-500" for="project-sort">Sort</label>
+                <select id="project-sort" name="sort" class="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-slate-500 focus:ring-4 focus:ring-slate-200">
+                    {% for value,label in sort_options %}
+                        <option value="{{ value }}" {% if sort == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="text-xs font-semibold uppercase tracking-wide text-slate-500" for="project-direction">Direction</label>
+                <select id="project-direction" name="direction" class="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-slate-500 focus:ring-4 focus:ring-slate-200">
+                    {% for value,label in direction_options %}
+                        <option value="{{ value }}" {% if direction == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
             </div>
             <button type="submit" class="inline-flex items-center justify-center rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-slate-300">Apply</button>
         </form>
     </section>
 
     <section class="space-y-4">
-        {% include "workspace/partials/components/section_header.html" with title="Projects and Accounting Dimensions" body="Cached accounting dimensions are shown beside Workspace projects. Merit dimension creation will be added in future integration step." %}
+        {% include "workspace/partials/components/section_header.html" with title="Projects and Accounting Dimensions" body="Project status is controlled in Workspace only. Completing or archiving a project does not close Merit dimensions yet; that is planned for MERIT-014." %}
         {% if project_rows %}
             <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
                 <div class="overflow-x-auto">
                     <table class="min-w-full divide-y divide-slate-200 text-sm">
                         <thead class="sticky top-0 bg-slate-50">
                             <tr>
+                                <th class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">DB ID</th>
                                 <th class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Code</th>
                                 <th class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Name</th>
                                 <th class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Status</th>
                                 <th class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Type</th>
-                                <th class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Start</th>
-                                <th class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">End</th>
+                                <th class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Accounting</th>
                                 <th class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Created</th>
-                                <th class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Source</th>
-                                <th class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Sync</th>
+                                <th class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Updated</th>
+                                <th class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Actions</th>
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-slate-100">
                             {% for row in project_rows %}
                                 <tr class="odd:bg-white even:bg-slate-50/50 transition hover:bg-blue-50/60">
+                                    <td class="px-5 py-4 text-slate-600">{{ row.id|default:"-" }}</td>
                                     <td class="px-5 py-4 font-semibold text-slate-950">
                                         {% if row.project %}
                                             <a class="text-blue-700 hover:text-blue-900" href="{% url 'workspace:project_detail' row.project.id %}">{{ row.code }}</a>
@@ -76,17 +94,13 @@
                                     </td>
                                     <td class="px-5 py-4 text-slate-700">{{ row.name }}</td>
                                     <td class="px-5 py-4">
-                                        {% if row.status %}
+                                        {% if row.project %}
                                             {% include "workspace/partials/components/status_badge.html" with status=row.status label=row.status %}
                                         {% else %}
-                                            <span class="text-slate-400">-</span>
+                                            {% include "workspace/partials/components/status_badge.html" with status="needs_review" label="missing_in_workspace" %}
                                         {% endif %}
                                     </td>
                                     <td class="px-5 py-4 text-slate-700">{{ row.project_type|default:"-" }}</td>
-                                    <td class="px-5 py-4 text-slate-700">{{ row.start_date|default:"-" }}</td>
-                                    <td class="px-5 py-4 text-slate-700">{{ row.end_date|default:"-" }}</td>
-                                    <td class="px-5 py-4 text-slate-700">{{ row.created_at|date:"Y-m-d" }}</td>
-                                    <td class="px-5 py-4">{% include "workspace/partials/components/badge.html" with tone="info" label=row.source %}</td>
                                     <td class="px-5 py-4">
                                         {% if row.sync_status == "linked" %}
                                             {% include "workspace/partials/components/status_badge.html" with status="success" label="linked" %}
@@ -94,6 +108,20 @@
                                             {% include "workspace/partials/components/status_badge.html" with status="needs_review" label="missing_in_workspace" %}
                                         {% else %}
                                             {% include "workspace/partials/components/status_badge.html" with status="pending" label="workspace_only" %}
+                                        {% endif %}
+                                    </td>
+                                    <td class="px-5 py-4 text-slate-700">{{ row.created_at|date:"Y-m-d" }}</td>
+                                    <td class="px-5 py-4 text-slate-700">{{ row.updated_at|date:"Y-m-d" }}</td>
+                                    <td class="px-5 py-4">
+                                        {% if row.project %}
+                                            <div class="flex flex-wrap gap-2">
+                                                <a href="{% url 'workspace:project_detail' row.project.id %}" class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">Open</a>
+                                                <a href="{% url 'workspace:project_edit' row.project.id %}" class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">Edit</a>
+                                                <a href="{% url 'workspace:project_financials' row.project.id %}" class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">Financials</a>
+                                                <a href="{% url 'workspace:project_detail' row.project.id %}#lifecycle" class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">Change status</a>
+                                            </div>
+                                        {% else %}
+                                            <span class="text-xs text-slate-500">Create Workspace Project first</span>
                                         {% endif %}
                                     </td>
                                 </tr>

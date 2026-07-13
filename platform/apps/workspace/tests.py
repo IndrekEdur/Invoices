@@ -34,7 +34,7 @@ from apps.core.services import CreateOrganizationCommand, OrganizationService
 from apps.documents.models import Document
 from apps.knowledge.services import ProjectKnowledgeBuilder
 from apps.projects.models import Project, ProjectAddress, ProjectParty
-from apps.projects.services import CreateProjectWithSuggestedCodeResult
+from apps.projects.services import ChangeProjectStatusCommand, CreateProjectWithSuggestedCodeResult, ProjectStatusService
 from apps.workflow.models import WorkflowDefinition, WorkflowInstance, WorkflowState
 
 
@@ -1961,6 +1961,151 @@ class ProjectListManagementUITests(TestCase):
         self.assertContains(response, "Searchable Dimension")
         self.assertNotContains(response, "Searchable Workspace")
         self.assertNotContains(response, "Other project")
+
+    def test_project_list_defaults_to_code_descending(self):
+        organization = create_organization()
+        create_project(organization, code="26110", name="Lower project")
+        create_project(organization, code="26199", name="Higher project")
+
+        response = self.client.get(reverse("workspace:projects"))
+        content = response.content.decode()
+
+        self.assertLess(content.index("26199"), content.index("26110"))
+
+    def test_project_list_shows_database_id_updated_and_actions(self):
+        organization = create_organization()
+        project = create_project(organization, code="26144", name="Action project")
+
+        response = self.client.get(reverse("workspace:projects"))
+
+        self.assertContains(response, "DB ID")
+        self.assertContains(response, str(project.id))
+        self.assertContains(response, "Updated")
+        self.assertContains(response, reverse("workspace:project_edit", args=[project.id]))
+        self.assertContains(response, reverse("workspace:project_financials", args=[project.id]))
+        self.assertContains(response, "Change status")
+
+    def test_search_by_project_id_and_description_works(self):
+        organization = create_organization()
+        project = Project.objects.create(
+            organization=organization,
+            code="26145",
+            name="ID searchable",
+            description="Unique project description marker",
+        )
+        create_project(organization, code="26146", name="Other project")
+
+        id_response = self.client.get(reverse("workspace:projects"), {"q": str(project.id)})
+        description_response = self.client.get(reverse("workspace:projects"), {"q": "description marker"})
+
+        self.assertContains(id_response, "ID searchable")
+        self.assertContains(description_response, "ID searchable")
+        self.assertNotContains(description_response, "Other project")
+
+    def test_filter_completed_and_archived_work(self):
+        organization = create_organization()
+        completed = create_project(organization, code="26147", name="Completed project")
+        archived = create_project(organization, code="26148", name="Archived project")
+        completed.status = Project.Status.COMPLETED
+        archived.status = Project.Status.ARCHIVED
+        completed.save(update_fields=["status", "updated_at"])
+        archived.save(update_fields=["status", "updated_at"])
+
+        completed_response = self.client.get(reverse("workspace:projects"), {"filter": "completed"})
+        archived_response = self.client.get(reverse("workspace:projects"), {"filter": "archived"})
+
+        self.assertContains(completed_response, "Completed project")
+        self.assertNotContains(completed_response, "Archived project")
+        self.assertContains(archived_response, "Archived project")
+        self.assertNotContains(archived_response, "Completed project")
+
+    def test_merit_only_row_has_no_edit_or_status_action(self):
+        organization = create_organization()
+        AccountingDimension.objects.create(
+            organization=organization,
+            code="26149",
+            name="Only in Merit",
+        )
+
+        response = self.client.get(reverse("workspace:projects"))
+
+        self.assertContains(response, "Only in Merit")
+        self.assertContains(response, "Create Workspace Project first")
+        self.assertNotContains(response, "/workspace/projects/26149/edit/")
+
+    def test_project_edit_page_returns_200_and_shows_read_only_identity(self):
+        organization = create_organization()
+        project = create_project(organization, code="26150", name="Editable project")
+
+        response = self.client.get(reverse("workspace:project_edit", args=[project.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Read-only identity")
+        self.assertContains(response, "26150")
+        self.assertContains(response, "Use the Lifecycle panel to change project status")
+
+    def test_project_edit_post_updates_safe_fields_not_code(self):
+        organization = create_organization()
+        project = create_project(organization, code="26151", name="Old name")
+
+        response = self.client.post(
+            reverse("workspace:project_edit", args=[project.id]),
+            {
+                "name": "New name",
+                "description": "Updated description",
+                "project_type": Project.Type.ELECTRICAL,
+                "start_date": "2026-06-01",
+                "end_date": "2026-06-30",
+            },
+        )
+
+        self.assertRedirects(response, reverse("workspace:project_detail", args=[project.id]))
+        project.refresh_from_db()
+        self.assertEqual(project.code, "26151")
+        self.assertEqual(project.name, "New name")
+        self.assertEqual(project.description, "Updated description")
+        self.assertEqual(project.project_type, Project.Type.ELECTRICAL)
+        self.assertEqual(project.status, Project.Status.ACTIVE)
+        self.assertTrue(AuditEvent.objects.filter(event_type="project.details_updated").exists())
+
+    def test_status_endpoint_requires_post_and_get_does_not_mutate(self):
+        organization = create_organization()
+        project = create_project(organization, code="26152", name="Status project")
+
+        response = self.client.get(reverse("workspace:project_status", args=[project.id]))
+
+        self.assertEqual(response.status_code, 405)
+        project.refresh_from_db()
+        self.assertEqual(project.status, Project.Status.ACTIVE)
+
+    def test_status_endpoint_changes_status_through_service(self):
+        organization = create_organization()
+        project = create_project(organization, code="26153", name="Status service project")
+
+        with patch.object(ProjectStatusService, "change_status", wraps=ProjectStatusService.change_status) as change_mock:
+            response = self.client.post(
+                reverse("workspace:project_status", args=[project.id]),
+                {"new_status": Project.Status.COMPLETED, "reason": "Finished"},
+            )
+
+        self.assertRedirects(response, reverse("workspace:project_detail", args=[project.id]))
+        change_mock.assert_called_once()
+        command = change_mock.call_args.args[0]
+        self.assertIsInstance(command, ChangeProjectStatusCommand)
+        project.refresh_from_db()
+        self.assertEqual(project.status, Project.Status.COMPLETED)
+
+    def test_completed_and_archived_financials_still_return_200(self):
+        organization = create_organization()
+        completed = create_project(organization, code="26154", name="Completed financials")
+        archived = create_project(organization, code="26155", name="Archived financials")
+        completed.status = Project.Status.COMPLETED
+        archived.status = Project.Status.ARCHIVED
+        completed.save(update_fields=["status", "updated_at"])
+        archived.save(update_fields=["status", "updated_at"])
+
+        self.assertEqual(self.client.get(reverse("workspace:project_financials", args=[completed.id])).status_code, 200)
+        self.assertEqual(self.client.get(reverse("workspace:project_financials", args=[archived.id])).status_code, 200)
 
 
 class MeritDimensionSyncUITests(TestCase):

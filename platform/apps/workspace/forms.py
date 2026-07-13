@@ -2,6 +2,8 @@ from django import forms
 
 from apps.accounting.models import AccountingAccountClassification, AccountingIntegration
 from apps.communications.models import EmailAccount
+from apps.projects.models import Project
+from apps.projects.services import ProjectStatusService
 
 
 FIELD_CLASS = "mt-2 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm"
@@ -173,3 +175,44 @@ class AccountClassificationForm(forms.Form):
         else:
             self.fields["category"].initial = AccountingAccountClassification.Category.UNCLASSIFIED
             self.fields["reporting_sign"].initial = "1"
+
+
+class ProjectEditForm(forms.ModelForm):
+    class Meta:
+        model = Project
+        fields = [
+            "name",
+            "description",
+            "project_type",
+            "start_date",
+            "end_date",
+        ]
+        widgets = {
+            "name": forms.TextInput(attrs={"class": FIELD_CLASS}),
+            "description": forms.Textarea(attrs={"class": FIELD_CLASS, "rows": 4}),
+            "project_type": forms.Select(attrs={"class": FIELD_CLASS}),
+            "start_date": forms.DateInput(attrs={"class": FIELD_CLASS, "type": "date"}),
+            "end_date": forms.DateInput(attrs={"class": FIELD_CLASS, "type": "date"}),
+        }
+
+
+class ProjectStatusChangeForm(forms.Form):
+    new_status = forms.ChoiceField(widget=forms.Select(attrs={"class": FIELD_CLASS}))
+    reason = forms.CharField(
+        required=False,
+        widget=forms.Textarea(
+            attrs={
+                "class": FIELD_CLASS,
+                "rows": 2,
+                "placeholder": "Optional reason for audit history",
+            }
+        ),
+    )
+
+    def __init__(self, *args, project=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        choices = []
+        if project:
+            allowed_statuses = ProjectStatusService.ALLOWED_TRANSITIONS.get(project.status, set())
+            choices = [(status, label) for status, label in Project.Status.choices if status in allowed_statuses]
+        self.fields["new_status"].choices = choices

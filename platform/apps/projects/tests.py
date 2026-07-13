@@ -6,7 +6,12 @@ from apps.accounting.models import AccountingDimension
 from apps.accounting.services import ProjectCodeSuggestion
 from apps.core.models import AuditEvent
 from apps.core.services import CreateOrganizationCommand, OrganizationService
-from apps.projects.services import CreateProjectWithSuggestedCodeCommand, ProjectCreationService
+from apps.projects.services import (
+    ChangeProjectStatusCommand,
+    CreateProjectWithSuggestedCodeCommand,
+    ProjectCreationService,
+    ProjectStatusService,
+)
 
 from .models import Project, ProjectAddress, ProjectParty
 
@@ -444,3 +449,100 @@ class ProjectCreationServiceTests(TestCase):
         )
 
         self.assertEqual(AccountingDimension.objects.count(), dimension_count)
+
+
+class ProjectStatusServiceTests(TestCase):
+    def test_active_project_can_be_completed(self):
+        project = create_project()
+
+        result = ProjectStatusService.change_status(
+            ChangeProjectStatusCommand(
+                project=project,
+                new_status=Project.Status.COMPLETED,
+                reason="Work finished",
+            )
+        )
+
+        project.refresh_from_db()
+        self.assertTrue(result.changed)
+        self.assertEqual(result.previous_status, Project.Status.ACTIVE)
+        self.assertEqual(project.status, Project.Status.COMPLETED)
+
+    def test_completed_project_can_be_reopened(self):
+        project = create_project()
+        project.status = Project.Status.COMPLETED
+        project.save(update_fields=["status", "updated_at"])
+
+        ProjectStatusService.change_status(
+            ChangeProjectStatusCommand(project=project, new_status=Project.Status.ACTIVE)
+        )
+
+        project.refresh_from_db()
+        self.assertEqual(project.status, Project.Status.ACTIVE)
+
+    def test_archived_project_can_be_reopened(self):
+        project = create_project()
+        project.status = Project.Status.ARCHIVED
+        project.save(update_fields=["status", "updated_at"])
+
+        ProjectStatusService.change_status(
+            ChangeProjectStatusCommand(project=project, new_status=Project.Status.ACTIVE)
+        )
+
+        project.refresh_from_db()
+        self.assertEqual(project.status, Project.Status.ACTIVE)
+
+    def test_same_status_is_idempotent_and_not_audited(self):
+        project = create_project()
+        audit_count = AuditEvent.objects.count()
+
+        result = ProjectStatusService.change_status(
+            ChangeProjectStatusCommand(project=project, new_status=Project.Status.ACTIVE)
+        )
+
+        project.refresh_from_db()
+        self.assertFalse(result.changed)
+        self.assertEqual(project.status, Project.Status.ACTIVE)
+        self.assertEqual(AuditEvent.objects.count(), audit_count)
+
+    def test_invalid_transition_raises_clear_error(self):
+        project = create_project()
+
+        with self.assertRaises(ValueError):
+            ProjectStatusService.change_status(
+                ChangeProjectStatusCommand(project=project, new_status=Project.Status.PLANNED)
+            )
+
+    def test_status_change_creates_audit_event_with_reason(self):
+        project = create_project()
+
+        ProjectStatusService.change_status(
+            ChangeProjectStatusCommand(
+                project=project,
+                new_status=Project.Status.ARCHIVED,
+                reason="No longer in daily work",
+            )
+        )
+
+        audit_event = AuditEvent.objects.get(event_type="project.status_changed")
+        self.assertEqual(audit_event.object_id, str(project.id))
+        self.assertEqual(audit_event.metadata["project_code"], project.code)
+        self.assertEqual(audit_event.metadata["previous_status"], Project.Status.ACTIVE)
+        self.assertEqual(audit_event.metadata["new_status"], Project.Status.ARCHIVED)
+        self.assertEqual(audit_event.metadata["reason"], "No longer in daily work")
+
+    def test_status_change_does_not_deactivate_accounting_dimension(self):
+        project = create_project()
+        dimension = AccountingDimension.objects.create(
+            organization=project.organization,
+            code=project.code,
+            name=project.name,
+            is_active=True,
+        )
+
+        ProjectStatusService.change_status(
+            ChangeProjectStatusCommand(project=project, new_status=Project.Status.COMPLETED)
+        )
+
+        dimension.refresh_from_db()
+        self.assertTrue(dimension.is_active)

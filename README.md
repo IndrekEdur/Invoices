@@ -79,6 +79,8 @@ The accounting app includes a minimal SecretProvider abstraction so external API
 
 The Workspace Projects UI at `/workspace/projects/` shows Workspace projects together with cached accounting project dimensions, project code status indicators, filters, search, detail placeholders, and a controlled create-project flow using suggested project codes.
 
+The Workspace Projects UI supports safe project status management for active, completed and archived projects through audited service-layer actions. Status changes do not close or reopen Merit dimensions yet; that external accounting behavior is planned as a later explicit integration step.
+
 The Workspace Projects UI includes a CSRF-protected manual `Sync Merit dimensions` action that refreshes cached Merit project dimensions through the accounting sync service and reports created, updated, unchanged, archived and conflict counts.
 
 The Dimension Conflict Review UI at `/workspace/accounting/dimensions/conflicts/` shows the latest Merit dimension sync conflicts from audit metadata for safe manual review without resolving, deleting, or writing to external APIs.

@@ -12,7 +12,9 @@ Current engineering phase: Engineering Standards.
 
 Current implementation phase: Platform Core.
 
-Current implementation: Project Financial Overview UI.
+Current implementation: Project Status Management UI.
+
+Planned follow-up: MERIT-014 should define explicit Merit dimension close/reopen behavior after Workspace project completion or archival. Current status changes are local, audited Workspace actions only.
 
 Current implementation focus: End-to-End Email Processing.
 

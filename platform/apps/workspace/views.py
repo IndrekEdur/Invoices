@@ -38,9 +38,22 @@ from apps.accounting.services import (
 )
 from apps.core.models import Organization
 from apps.projects.models import Project
-from apps.projects.services import CreateProjectWithSuggestedCodeCommand, ProjectCreationService
+from apps.projects.services import (
+    ChangeProjectStatusCommand,
+    CreateProjectWithSuggestedCodeCommand,
+    ProjectCreationService,
+    ProjectDetailsService,
+    ProjectStatusService,
+    UpdateProjectDetailsCommand,
+)
 
-from .forms import AccountClassificationForm, AccountingIntegrationForm, EmailAccountForm
+from .forms import (
+    AccountClassificationForm,
+    AccountingIntegrationForm,
+    EmailAccountForm,
+    ProjectEditForm,
+    ProjectStatusChangeForm,
+)
 from .services import (
     AccountingDimensionConflictContextBuilder,
     GLAccountClassificationContextBuilder,
@@ -376,9 +389,90 @@ class ProjectsView(WorkspacePageView):
             ProjectsContextBuilder.build(
                 filter_value=self.request.GET.get("filter", "all"),
                 query=self.request.GET.get("q", ""),
+                sort=self.request.GET.get("sort", "code"),
+                direction=self.request.GET.get("direction", "desc"),
             )
         )
         return context
+
+
+class ProjectEditView(WorkspacePageView):
+    template_name = "workspace/project_edit.html"
+    page_title = "Edit Project"
+    section = "projects"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(ProjectsContextBuilder.build_detail(project_id=self.kwargs["project_id"]))
+        context["form"] = kwargs.get("form") or ProjectEditForm(instance=context["project"])
+        return context
+
+    def post(self, request, project_id, *args, **kwargs):
+        context = ProjectsContextBuilder.build_detail(project_id=project_id)
+        project = context["project"]
+        form = ProjectEditForm(request.POST, instance=project)
+        if not form.is_valid():
+            messages.error(request, "Project could not be saved. Check the highlighted fields.")
+            render_context = self.get_context_data(form=form)
+            return self.render_to_response(render_context)
+
+        try:
+            ProjectDetailsService.update(
+                UpdateProjectDetailsCommand(
+                    project=project,
+                    name=form.cleaned_data["name"],
+                    description=form.cleaned_data["description"],
+                    project_type=form.cleaned_data["project_type"],
+                    start_date=form.cleaned_data["start_date"],
+                    end_date=form.cleaned_data["end_date"],
+                    actor=request.user if request.user.is_authenticated else None,
+                    metadata={"source": "workspace_project_edit"},
+                )
+            )
+        except Exception:
+            messages.error(request, "Project save failed.")
+            render_context = self.get_context_data(form=form)
+            return self.render_to_response(render_context)
+
+        messages.success(request, f"Project {project.code} updated.")
+        return redirect("workspace:project_detail", project_id=project.id)
+
+
+class ProjectStatusView(View):
+    def post(self, request, project_id, *args, **kwargs):
+        try:
+            project = ProjectsContextBuilder.build_detail(project_id=project_id)["project"]
+        except Project.DoesNotExist:
+            messages.error(request, "Project was not found.")
+            return redirect("workspace:projects")
+
+        form = ProjectStatusChangeForm(request.POST, project=project)
+        if not form.is_valid():
+            messages.error(request, "Choose a valid status transition.")
+            return redirect("workspace:project_detail", project_id=project.id)
+
+        try:
+            result = ProjectStatusService.change_status(
+                ChangeProjectStatusCommand(
+                    project=project,
+                    new_status=form.cleaned_data["new_status"],
+                    reason=form.cleaned_data["reason"],
+                    actor=request.user if request.user.is_authenticated else None,
+                    metadata={"source": "workspace_project_status"},
+                )
+            )
+        except Exception:
+            messages.error(request, "Project status change failed.")
+            return redirect("workspace:project_detail", project_id=project.id)
+
+        if result.changed:
+            messages.success(
+                request,
+                f"Project status changed from {result.previous_status} to {result.new_status}.",
+            )
+        else:
+            messages.info(request, result.message)
+        return redirect("workspace:project_detail", project_id=project.id)
 
 
 class ProjectCreateView(WorkspacePageView):

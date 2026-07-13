@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Edit {{ project.code }} | Operations Workspace Platform{% endblock %}
+{% block actions %}
+<a href="{% url 'workspace:project_detail' project.id %}" class="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 shadow-sm transition hover:bg-slate-50">Back to Project</a>
+{% endblock %}
+{% block content %}
+<div class="space-y-8">
+    {% include "workspace/partials/components/page_header.html" with eyebrow="Project Settings" title="Edit Project" body="Update safe Workspace project fields. Project code, organization and accounting linkage stay read-only." %}
+
+    <section class="grid gap-4 lg:grid-cols-[1fr_2fr]">
+        <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-500">Read-only identity</h2>
+            <dl class="mt-4 space-y-3 text-sm">
+                <div><dt class="font-semibold text-slate-500">Database ID</dt><dd class="mt-1 text-slate-950">{{ project.id }}</dd></div>
+                <div><dt class="font-semibold text-slate-500">Organization</dt><dd class="mt-1 text-slate-950">{{ project.organization.name }}</dd></div>
+                <div><dt class="font-semibold text-slate-500">Project code</dt><dd class="mt-1 text-slate-950">{{ project.code }}</dd></div>
+                <div><dt class="font-semibold text-slate-500">Created</dt><dd class="mt-1 text-slate-950">{{ project.created_at|date:"Y-m-d H:i" }}</dd></div>
+                <div><dt class="font-semibold text-slate-500">Updated</dt><dd class="mt-1 text-slate-950">{{ project.updated_at|date:"Y-m-d H:i" }}</dd></div>
+                <div>
+                    <dt class="font-semibold text-slate-500">Accounting linkage</dt>
+                    <dd class="mt-2">
+                        {% if sync_status == "linked" %}
+                            {% include "workspace/partials/components/status_badge.html" with status="success" label="linked" %}
+                        {% else %}
+                            {% include "workspace/partials/components/status_badge.html" with status="pending" label="workspace_only" %}
+                        {% endif %}
+                    </dd>
+                </div>
+            </dl>
+        </div>
+
+        <form method="post" class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            {% csrf_token %}
+            <div class="grid gap-5">
+                <div>
+                    <label class="text-xs font-semibold uppercase tracking-wide text-slate-500" for="{{ form.name.id_for_label }}">Name</label>
+                    {{ form.name }}
+                    {{ form.name.errors }}
+                </div>
+                <div>
+                    <label class="text-xs font-semibold uppercase tracking-wide text-slate-500" for="{{ form.description.id_for_label }}">Description</label>
+                    {{ form.description }}
+                    {{ form.description.errors }}
+                </div>
+                <div class="grid gap-5 md:grid-cols-2">
+                    <div>
+                        <label class="text-xs font-semibold uppercase tracking-wide text-slate-500" for="{{ form.project_type.id_for_label }}">Project type</label>
+                        {{ form.project_type }}
+                        {{ form.project_type.errors }}
+                    </div>
+                    <div>
+                        <label class="text-xs font-semibold uppercase tracking-wide text-slate-500">Status</label>
+                        <div class="mt-3">{% include "workspace/partials/components/status_badge.html" with status=project.status label=project.status %}</div>
+                        <p class="mt-2 text-xs text-slate-500">Use the Lifecycle panel to change project status.</p>
+                    </div>
+                    <div>
+                        <label class="text-xs font-semibold uppercase tracking-wide text-slate-500" for="{{ form.start_date.id_for_label }}">Start date</label>
+                        {{ form.start_date }}
+                        {{ form.start_date.errors }}
+                    </div>
+                    <div>
+                        <label class="text-xs font-semibold uppercase tracking-wide text-slate-500" for="{{ form.end_date.id_for_label }}">End date</label>
+                        {{ form.end_date }}
+                        {{ form.end_date.errors }}
+                    </div>
+                </div>
+            </div>
+            <div class="mt-6 flex flex-wrap gap-3">
+                <button type="submit" class="inline-flex items-center justify-center rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-slate-300">Save Project</button>
+                <a href="{% url 'workspace:project_detail' project.id %}" class="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 shadow-sm transition hover:bg-slate-50">Cancel</a>
+            </div>
+        </form>
+    </section>
+</div>
+{% endblock %}

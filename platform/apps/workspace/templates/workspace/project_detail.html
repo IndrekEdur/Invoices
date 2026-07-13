@@ -1,10 +1,17 @@
 {% extends "base.html" %}
 {% block title %}{{ project.code }} | Operations Workspace Platform{% endblock %}
+{% block actions %}
+<div class="flex flex-wrap gap-3">
+    <a href="{% url 'workspace:project_edit' project.id %}" class="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 shadow-sm transition hover:bg-slate-50">Edit Project</a>
+    <a href="{% url 'workspace:project_financials' project.id %}" class="inline-flex items-center justify-center rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800">Financials</a>
+</div>
+{% endblock %}
 {% block content %}
 <div class="space-y-8">
     {% include "workspace/partials/components/page_header.html" with eyebrow="Project Workspace" title=project.name body="A project workspace collects related communication, documents, people, addresses, evidence, timeline and audit history." %}
 
     <nav class="flex flex-wrap gap-2 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm" aria-label="Project workspace sections">
+        <a href="#lifecycle" class="rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Lifecycle</a>
         <a href="#overview" class="rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Overview</a>
         <a href="#timeline" class="rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Timeline</a>
         <a href="#communications" class="rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Communications</a>
@@ -15,6 +22,39 @@
         <a href="{% url 'workspace:project_financials' project.id %}" class="rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Financials</a>
         <a href="#audit" class="rounded-xl px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">Audit</a>
     </nav>
+
+    <section id="lifecycle" class="space-y-5">
+        {% include "workspace/partials/components/section_header.html" with title="Lifecycle" body="Project status is a Workspace business state. Changing it never closes Merit dimensions or removes financial history." %}
+        <div class="grid gap-4 lg:grid-cols-[1fr_1fr]">
+            <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div class="grid gap-4 sm:grid-cols-2">
+                    <div><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Database ID</div><div class="mt-1 font-semibold text-slate-950">{{ project.id }}</div></div>
+                    <div><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Code</div><div class="mt-1 font-semibold text-slate-950">{{ project.code }}</div></div>
+                    <div><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Status</div><div class="mt-2">{% include "workspace/partials/components/status_badge.html" with status=project.status label=project.status %}</div></div>
+                    <div><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Type</div><div class="mt-1 font-semibold text-slate-950">{{ project.project_type }}</div></div>
+                    <div><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Created</div><div class="mt-1 text-slate-700">{{ project.created_at|date:"Y-m-d H:i" }}</div></div>
+                    <div><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Updated</div><div class="mt-1 text-slate-700">{{ project.updated_at|date:"Y-m-d H:i" }}</div></div>
+                </div>
+            </div>
+            <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500">Change status</h3>
+                <p class="mt-2 text-sm text-slate-600">Allowed transitions are controlled by ProjectStatusService and audited. MERIT-014 will later add explicit Merit dimension close/reopen behavior.</p>
+                <div class="mt-4 space-y-3">
+                    {% if project.status == "active" %}
+                        {% include "workspace/partials/project_status_button.html" with project=project new_status="completed" label="Mark completed" tone="success" %}
+                        {% include "workspace/partials/project_status_button.html" with project=project new_status="archived" label="Archive project" tone="neutral" %}
+                    {% elif project.status == "completed" %}
+                        {% include "workspace/partials/project_status_button.html" with project=project new_status="active" label="Reopen active" tone="info" %}
+                        {% include "workspace/partials/project_status_button.html" with project=project new_status="archived" label="Archive project" tone="neutral" %}
+                    {% elif project.status == "archived" %}
+                        {% include "workspace/partials/project_status_button.html" with project=project new_status="active" label="Reopen active" tone="info" %}
+                    {% else %}
+                        {% include "workspace/partials/components/empty_state.html" with title="No status actions available" body="Only active, completed and archived project states have lifecycle actions in this UI." %}
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </section>
 
     <section id="overview" class="space-y-5">
         {% include "workspace/partials/components/section_header.html" with title="Overview" body="Project identity and current context summary." %}

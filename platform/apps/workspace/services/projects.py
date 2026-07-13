@@ -15,38 +15,51 @@ class ProjectsContextBuilder:
         return Organization.objects.order_by("id").first()
 
     @staticmethod
-    def build(*, filter_value="all", query=""):
+    def build(*, filter_value="all", query="", sort="code", direction="desc"):
         organization = ProjectsContextBuilder.get_default_organization()
         if not organization:
             return {
                 "organization": None,
                 "filter_value": filter_value,
                 "query": query,
+                "sort": "code",
+                "direction": "desc",
                 "project_rows": [],
                 "status_counts": {
-                    "all": 0,
+                    "total": 0,
                     "active": 0,
-                    "planned": 0,
+                    "completed": 0,
                     "archived": 0,
+                    "linked": 0,
                     "missing_in_workspace": 0,
                     "workspace_only": 0,
                 },
             }
 
-        projects = Project.objects.filter(organization=organization).order_by("code", "id")
+        sort = sort if sort in ProjectsContextBuilder._sort_keys() else "code"
+        direction = direction if direction in ("asc", "desc") else "desc"
+
+        projects = Project.objects.filter(organization=organization)
         dimensions = AccountingDimension.objects.filter(
             organization=organization,
             dimension_type=AccountingDimension.DimensionType.PROJECT,
             is_active=True,
-        ).order_by("code", "id")
+        )
 
         if query:
-            projects = projects.filter(Q(code__icontains=query) | Q(name__icontains=query))
+            project_query = (
+                Q(code__icontains=query)
+                | Q(name__icontains=query)
+                | Q(description__icontains=query)
+            )
+            if query.isdigit():
+                project_query |= Q(id=int(query))
+            projects = projects.filter(project_query)
             dimensions = dimensions.filter(Q(code__icontains=query) | Q(name__icontains=query))
 
         project_by_code = {project.code: project for project in projects}
         dimension_by_code = {dimension.code: dimension for dimension in dimensions}
-        all_codes = sorted(set(project_by_code) | set(dimension_by_code))
+        all_codes = set(project_by_code) | set(dimension_by_code)
 
         rows = []
         for code in all_codes:
@@ -59,6 +72,7 @@ class ProjectsContextBuilder:
 
             rows.append(
                 {
+                    "id": project.id if project else None,
                     "code": code,
                     "name": project.name if project else dimension.name,
                     "status": project.status if project else "",
@@ -66,17 +80,31 @@ class ProjectsContextBuilder:
                     "start_date": project.start_date if project else None,
                     "end_date": project.end_date if project else None,
                     "created_at": project.created_at if project else dimension.created_at,
+                    "updated_at": project.updated_at if project else dimension.updated_at,
                     "project": project,
                     "dimension": dimension,
                     "sync_status": sync_status,
                     "source": ProjectsContextBuilder._source(project, dimension),
                 }
             )
+        rows = ProjectsContextBuilder._sort_rows(rows, sort=sort, direction=direction)
 
         return {
             "organization": organization,
             "filter_value": filter_value,
             "query": query,
+            "sort": sort,
+            "direction": direction,
+            "sort_options": (
+                ("id", "Database ID"),
+                ("code", "Project code"),
+                ("name", "Name"),
+                ("status", "Status"),
+                ("project_type", "Type"),
+                ("created_at", "Created"),
+                ("updated_at", "Updated"),
+            ),
+            "direction_options": (("asc", "Ascending"), ("desc", "Descending")),
             "project_rows": rows,
             "status_counts": ProjectsContextBuilder._status_counts(projects, dimensions),
         }
@@ -106,7 +134,11 @@ class ProjectsContextBuilder:
 
     @staticmethod
     def build_detail(*, project_id):
-        project = Project.objects.get(id=project_id)
+        organization = ProjectsContextBuilder.get_default_organization()
+        project_query = Project.objects
+        if organization:
+            project_query = project_query.filter(organization=organization)
+        project = project_query.get(id=project_id)
         knowledge = ProjectKnowledgeBuilder.build(BuildProjectKnowledgeCommand(project=project))
         dimension = AccountingDimension.objects.filter(
             organization=project.organization,
@@ -150,9 +182,9 @@ class ProjectsContextBuilder:
     def _matches_filter(project, sync_status, filter_value):
         if filter_value in ("", "all"):
             return True
-        if filter_value in ("missing_in_workspace", "workspace_only"):
+        if filter_value in ("linked", "missing_in_workspace", "workspace_only"):
             return sync_status == filter_value
-        if filter_value in ("active", "planned", "archived"):
+        if filter_value in ("active", "completed", "archived"):
             return bool(project and project.status == filter_value)
         return True
 
@@ -163,10 +195,31 @@ class ProjectsContextBuilder:
         project_codes = {project.code for project in project_list}
 
         return {
-            "all": len(project_codes | dimension_codes),
+            "total": len(project_codes | dimension_codes),
             "active": sum(1 for project in project_list if project.status == Project.Status.ACTIVE),
-            "planned": sum(1 for project in project_list if project.status == Project.Status.PLANNED),
+            "completed": sum(1 for project in project_list if project.status == Project.Status.COMPLETED),
             "archived": sum(1 for project in project_list if project.status == Project.Status.ARCHIVED),
+            "linked": len(project_codes & dimension_codes),
             "missing_in_workspace": len(dimension_codes - project_codes),
             "workspace_only": len(project_codes - dimension_codes),
         }
+
+    @staticmethod
+    def _sort_keys():
+        return {
+            "id": lambda row: row["id"] or 0,
+            "code": lambda row: row["code"] or "",
+            "name": lambda row: row["name"] or "",
+            "status": lambda row: row["status"] or "",
+            "project_type": lambda row: row["project_type"] or "",
+            "created_at": lambda row: row["created_at"],
+            "updated_at": lambda row: row["updated_at"],
+        }
+
+    @staticmethod
+    def _sort_rows(rows, *, sort, direction):
+        return sorted(
+            rows,
+            key=ProjectsContextBuilder._sort_keys()[sort],
+            reverse=direction == "desc",
+        )
