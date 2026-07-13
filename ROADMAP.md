@@ -12,7 +12,9 @@ Current engineering phase: Engineering Standards.
 
 Current implementation phase: Platform Core.
 
-Current implementation: Financial UI Formatting, Chart Gridlines and Sticky Navigation.
+Current implementation: Organization Financial Dashboard.
+
+Planned financial follow-ups: FIN-008 Financial Alert Rules Engine, financial report drafts, scheduled report distribution, and invoice/payment reconciliation.
 
 Planned follow-up: MERIT-014 should define explicit Merit dimension close/reopen behavior after Workspace project completion or archival. Current status changes are local, audited Workspace actions only.
 

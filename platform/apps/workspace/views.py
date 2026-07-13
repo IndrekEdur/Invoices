@@ -64,6 +64,7 @@ from .services import (
     DashboardContextBuilder,
     EmailAccountSettingsContextBuilder,
     InboxContextBuilder,
+    OrganizationFinancialDashboardContextBuilder,
     ProjectLinkReviewContextBuilder,
     ProjectFinancialContextBuilder,
     ProjectsContextBuilder,
@@ -712,6 +713,17 @@ class ProjectFinancialAllocationsView(WorkspacePageView):
                 params=self.request.GET,
             )
         )
+        return context
+
+
+class FinancialDashboardView(WorkspacePageView):
+    template_name = "workspace/financial_dashboard.html"
+    page_title = "Financial Dashboard"
+    section = "financials"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(OrganizationFinancialDashboardContextBuilder.build(self.request.GET))
         return context
 
 

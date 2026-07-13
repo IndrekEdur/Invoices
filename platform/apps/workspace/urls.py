@@ -23,6 +23,7 @@ from .views import (
     EmailAccountEditView,
     EmailAccountListView,
     EmailAccountTestConnectionView,
+    FinancialDashboardView,
     InboxDetailView,
     InboxSyncView,
     MeritDimensionSyncView,
@@ -75,6 +76,7 @@ urlpatterns = [
         name="project_financial_allocations",
     ),
     path("projects/<int:project_id>/", ProjectDetailView.as_view(), name="project_detail"),
+    path("financials/", FinancialDashboardView.as_view(), name="financial_dashboard"),
     path("accounting/dimensions/sync/", MeritDimensionSyncView.as_view(), name="merit_dimensions_sync"),
     path(
         "accounting/dimensions/conflicts/",

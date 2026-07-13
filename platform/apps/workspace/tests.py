@@ -1,4 +1,5 @@
 from unittest.mock import patch
+from decimal import Decimal
 
 from django.contrib.messages import get_messages
 from django.test import TestCase
@@ -133,6 +134,7 @@ class WorkspaceRouteTests(TestCase):
         ("workspace:dashboard", "/workspace/dashboard/"),
         ("workspace:inbox", "/workspace/inbox/"),
         ("workspace:projects", "/workspace/projects/"),
+        ("workspace:financial_dashboard", "/workspace/financials/"),
         ("workspace:documents", "/workspace/documents/"),
         ("workspace:reviews", "/workspace/reviews/"),
         ("workspace:search", "/workspace/search/"),
@@ -202,6 +204,12 @@ class WorkspaceRouteTests(TestCase):
 
         self.assertContains(response, "Design System")
         self.assertContains(response, reverse("workspace:design_system"))
+
+    def test_navigation_contains_financials_link(self):
+        response = self.client.get(reverse("workspace:dashboard"))
+
+        self.assertContains(response, "Financials")
+        self.assertContains(response, reverse("workspace:financial_dashboard"))
 
 
 class GLAccountClassificationSettingsTests(TestCase):
@@ -926,6 +934,246 @@ class ProjectFinancialOverviewTests(TestCase):
         self.assertContains(response, "-1 000,00")
         self.assertContains(response, "1 000,00")
         self.assertNotContains(response, "4002")
+
+
+class OrganizationFinancialDashboardTests(TestCase):
+    def _setup(self):
+        organization = create_organization()
+        integration = create_merit_integration(organization)
+        AccountingAccountClassification.objects.create(
+            organization=organization,
+            integration=integration,
+            account_code="3000",
+            category=AccountingAccountClassification.Category.REVENUE,
+            reporting_sign="-1",
+        )
+        AccountingAccountClassification.objects.create(
+            organization=organization,
+            integration=integration,
+            account_code="4000",
+            category=AccountingAccountClassification.Category.MATERIAL_COST,
+            reporting_sign="1",
+        )
+        return organization, integration
+
+    def _allocation(self, project, integration, account_code, amount, batch_date="2026-06-15", suffix="a", currency="EUR"):
+        batch = AccountingGLBatch.objects.create(
+            organization=project.organization,
+            integration=integration,
+            external_id=f"orgfin-batch-{project.code}-{account_code}-{suffix}",
+            batch_date=timezone.datetime.fromisoformat(batch_date).date(),
+            currency_code=currency,
+        )
+        entry = AccountingGLEntry.objects.create(
+            organization=project.organization,
+            integration=integration,
+            batch=batch,
+            external_id=f"orgfin-entry-{project.code}-{account_code}-{suffix}",
+            account_code=account_code,
+            account_name=f"Account {account_code}",
+            debit_amount="0.000000",
+            credit_amount="0.000000",
+        )
+        return AccountingGLAllocation.objects.create(
+            organization=project.organization,
+            integration=integration,
+            entry=entry,
+            external_id=f"orgfin-alloc-{project.code}-{account_code}-{suffix}",
+            dimension_code=project.code,
+            dimension_name=project.name,
+            amount=amount,
+            project=project,
+        )
+
+    def _project_with_activity(self, code="26170", name="Revenue project", status=Project.Status.ACTIVE, revenue="1000.000000", cost="250.000000", currency="EUR"):
+        organization, integration = self._setup()
+        project = create_project(organization, code=code, name=name)
+        project.status = status
+        project.save()
+        if revenue is not None:
+            self._allocation(project, integration, "3000", f"-{revenue}", suffix="rev", currency=currency)
+        if cost is not None:
+            self._allocation(project, integration, "4000", cost, suffix="cost", currency=currency)
+        return organization, integration, project
+
+    def test_financial_dashboard_route_default_month_sidebar_and_no_api_call(self):
+        _organization, _integration, project = self._project_with_activity()
+        counts = (AccountingGLBatch.objects.count(), AccountingGLEntry.objects.count(), AccountingGLAllocation.objects.count(), AuditEvent.objects.count())
+
+        with patch.object(MeritAPIClient, "request") as request_mock:
+            response = self.client.get(reverse("workspace:financial_dashboard"), {"month": "2026-06"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Financial Dashboard")
+        self.assertContains(response, "Organization-wide project revenue")
+        self.assertContains(response, project.code)
+        self.assertContains(response, "Financials")
+        request_mock.assert_not_called()
+        self.assertEqual(counts, (AccountingGLBatch.objects.count(), AccountingGLEntry.objects.count(), AccountingGLAllocation.objects.count(), AuditEvent.objects.count()))
+
+    def test_invalid_month_is_safe_and_month_links_render(self):
+        response = self.client.get(reverse("workspace:financial_dashboard"), {"month": "bad"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Invalid month. Use YYYY-MM.")
+        self.assertContains(response, "Previous month")
+        self.assertContains(response, "Next month")
+        self.assertContains(response, "Current month")
+
+    def test_candidate_selection_includes_activity_and_excludes_inactive_no_data_by_default(self):
+        organization, integration = self._setup()
+        active = create_project(organization, code="26171", name="Active activity")
+        empty = create_project(organization, code="26172", name="No data")
+        self._allocation(active, integration, "3000", "-500.000000", suffix="rev")
+
+        with patch.object(ProjectFinancialAggregationService, "aggregate", wraps=ProjectFinancialAggregationService().aggregate) as aggregate_mock:
+            response = self.client.get(reverse("workspace:financial_dashboard"), {"month": "2026-06"})
+
+        self.assertContains(response, active.code)
+        self.assertNotContains(response, empty.name)
+        self.assertEqual(aggregate_mock.call_count, 1)
+
+    def test_organization_isolation_and_month_boundaries(self):
+        organization, integration = self._setup()
+        visible = create_project(organization, code="261710", name="Visible June")
+        outside_month = create_project(organization, code="261711", name="Outside month")
+        other_org = create_organization("Other financial org")
+        other_integration = create_merit_integration(other_org)
+        other_project = create_project(other_org, code="99901", name="Other org project")
+        self._allocation(visible, integration, "3000", "-500.000000", batch_date="2026-06-30", suffix="visible")
+        self._allocation(outside_month, integration, "3000", "-600.000000", batch_date="2026-07-01", suffix="outside")
+        self._allocation(other_project, other_integration, "3000", "-700.000000", batch_date="2026-06-15", suffix="other")
+
+        response = self.client.get(reverse("workspace:financial_dashboard"), {"month": "2026-06"})
+
+        self.assertContains(response, visible.name)
+        self.assertNotContains(response, outside_month.name)
+        self.assertNotContains(response, other_project.name)
+
+    def test_show_no_data_includes_empty_projects(self):
+        organization, _integration = self._setup()
+        empty = create_project(organization, code="26173", name="Empty shown")
+
+        response = self.client.get(reverse("workspace:financial_dashboard"), {"month": "2026-06", "show_no_data": "1"})
+
+        self.assertContains(response, empty.name)
+        self.assertContains(response, "no_data")
+
+    def test_completed_and_archived_projects_with_activity_are_visible(self):
+        organization, integration = self._setup()
+        completed = create_project(organization, code="26174", name="Completed activity")
+        archived = create_project(organization, code="26175", name="Archived activity")
+        completed.status = Project.Status.COMPLETED
+        archived.status = Project.Status.ARCHIVED
+        completed.save()
+        archived.save()
+        self._allocation(completed, integration, "3000", "-300.000000", suffix="completed")
+        self._allocation(archived, integration, "4000", "120.000000", suffix="archived")
+
+        response = self.client.get(reverse("workspace:financial_dashboard"), {"month": "2026-06"})
+
+        self.assertContains(response, "Completed activity")
+        self.assertContains(response, "Archived activity")
+        completed_only = self.client.get(reverse("workspace:financial_dashboard"), {"month": "2026-06", "status": "completed"})
+        self.assertContains(completed_only, "Completed activity")
+        self.assertNotContains(completed_only, "Archived activity")
+
+    def test_search_result_and_data_quality_filters(self):
+        organization, integration = self._setup()
+        profitable = create_project(organization, code="26176", name="Searchable profit")
+        cost_only = create_project(organization, code="26177", name="Cost only")
+        unclassified = create_project(organization, code="26178", name="Unclassified project")
+        self._allocation(profitable, integration, "3000", "-900.000000", suffix="profit-rev")
+        self._allocation(profitable, integration, "4000", "100.000000", suffix="profit-cost")
+        self._allocation(cost_only, integration, "4000", "300.000000", suffix="cost-only")
+        self._allocation(unclassified, integration, "9999", "40.000000", suffix="unclassified")
+
+        search = self.client.get(reverse("workspace:financial_dashboard"), {"month": "2026-06", "search": "Searchable"})
+        self.assertContains(search, profitable.name)
+        self.assertNotContains(search, cost_only.name)
+
+        costs = self.client.get(reverse("workspace:financial_dashboard"), {"month": "2026-06", "result_status": "costs_without_revenue"})
+        self.assertContains(costs, cost_only.name)
+        self.assertNotContains(costs, profitable.name)
+
+        quality = self.client.get(reverse("workspace:financial_dashboard"), {"month": "2026-06", "data_quality": "unclassified"})
+        self.assertContains(quality, unclassified.name)
+        self.assertNotContains(quality, profitable.name)
+
+    def test_default_sort_revenue_desc_and_sort_links(self):
+        organization, integration = self._setup()
+        high = create_project(organization, code="26179", name="High revenue")
+        low = create_project(organization, code="26180", name="Low revenue")
+        self._allocation(low, integration, "3000", "-100.000000", suffix="low")
+        self._allocation(high, integration, "3000", "-900.000000", suffix="high")
+
+        response = self.client.get(reverse("workspace:financial_dashboard"), {"month": "2026-06"})
+        content = response.content.decode()
+
+        self.assertLess(content.index("High revenue"), content.index("Low revenue"))
+        self.assertContains(response, "sort=total_cost")
+        ascending = self.client.get(reverse("workspace:financial_dashboard"), {"month": "2026-06", "sort": "revenue", "direction": "asc"})
+        ascending_content = ascending.content.decode().split("Project Financial Ranking", 1)[1]
+        self.assertLess(ascending_content.index("Low revenue"), ascending_content.index("High revenue"))
+
+    def test_summary_cards_use_totals_and_overall_margin(self):
+        organization, integration = self._setup()
+        first = create_project(organization, code="26181", name="First")
+        second = create_project(organization, code="26182", name="Second")
+        self._allocation(first, integration, "3000", "-1000.000000", suffix="first-rev")
+        self._allocation(first, integration, "4000", "200.000000", suffix="first-cost")
+        self._allocation(second, integration, "3000", "-500.000000", suffix="second-rev")
+        self._allocation(second, integration, "4000", "100.000000", suffix="second-cost")
+
+        response = self.client.get(reverse("workspace:financial_dashboard"), {"month": "2026-06", "currency": "EUR"})
+
+        self.assertContains(response, "Projects with activity")
+        self.assertContains(response, "1 500,00 EUR")
+        self.assertContains(response, "300,00 EUR")
+        self.assertContains(response, "1 200,00 EUR")
+        self.assertContains(response, "80,00%")
+        self.assertContains(response, "Profitable projects")
+
+    def test_currency_filter_and_mixed_currency_warning(self):
+        organization, integration = self._setup()
+        eur = create_project(organization, code="26183", name="EUR project")
+        usd = create_project(organization, code="26184", name="USD project")
+        self._allocation(eur, integration, "3000", "-100.000000", suffix="eur", currency="EUR")
+        self._allocation(usd, integration, "3000", "-200.000000", suffix="usd", currency="USD")
+
+        mixed = self.client.get(reverse("workspace:financial_dashboard"), {"month": "2026-06"})
+        self.assertContains(mixed, "Multiple currencies found")
+        self.assertContains(mixed, "Select currency")
+
+        filtered = self.client.get(reverse("workspace:financial_dashboard"), {"month": "2026-06", "currency": "EUR"})
+        self.assertContains(filtered, "EUR project")
+        self.assertNotContains(filtered, "USD project")
+        self.assertContains(filtered, "100,00 EUR")
+
+    def test_table_links_preserve_month_currency_and_overhead(self):
+        _organization, _integration, project = self._project_with_activity()
+
+        response = self.client.get(reverse("workspace:financial_dashboard"), {"month": "2026-06", "currency": "EUR", "include_overhead": "0"})
+
+        self.assertContains(response, reverse("workspace:project_financials", args=[project.id]))
+        self.assertContains(response, "start=2026-06-01")
+        self.assertContains(response, "end=2026-06-30")
+        self.assertContains(response, "currency=EUR")
+        self.assertContains(response, "include_overhead=0")
+        self.assertContains(response, "Allocation Drill-down")
+
+    def test_pagination_preserves_filters(self):
+        organization, integration = self._setup()
+        for index in range(30):
+            project = create_project(organization, code=f"27{index:03d}", name=f"Paged {index:02d}")
+            self._allocation(project, integration, "3000", f"-{100 + index}.000000", suffix=str(index))
+
+        response = self.client.get(reverse("workspace:financial_dashboard"), {"month": "2026-06", "currency": "EUR", "sort": "project_code", "direction": "asc"})
+
+        self.assertContains(response, "Page 1 of 2")
+        self.assertContains(response, "page=2")
+        self.assertContains(response, "sort=project_code")
+        self.assertContains(response, "currency=EUR")
 
 
 class DashboardMVPTests(TestCase):

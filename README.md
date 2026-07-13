@@ -66,6 +66,8 @@ Project Financial Overview includes a server-rendered vertical monthly revenue/c
 
 Project Financials now formats monetary values with consistent two-decimal display, includes labeled Y-axis gridlines on the monthly chart, and keeps the Workspace sidebar visible while long desktop pages scroll.
 
+Organization Financial Dashboard at `/workspace/financials/` compares selected-month project revenue, cost, result, margin and data quality from local synchronized GL allocations. It ranks projects by highest revenue by default, keeps completed and archived projects visible when they have financial activity, and avoids silently combining mixed-currency totals.
+
 Read-only project financial summary example:
 
 ```powershell
