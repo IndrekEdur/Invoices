@@ -381,12 +381,22 @@ class OrganizationFinancialDashboardContextBuilder:
     @classmethod
     def _chart_rows(cls, rows):
         top_rows = rows[:10]
-        max_value = max(
-            [abs(value) for row in top_rows for value in [row.revenue, row.total_cost, row.result]] + [ZERO]
-        )
-        if max_value == ZERO:
+        positive_values = [value for row in top_rows for value in [row.revenue, row.total_cost, row.result]]
+        max_positive = max(positive_values + [ZERO])
+        min_negative = min([row.result for row in top_rows] + [ZERO])
+        axis_range = max_positive - min_negative
+        if axis_range == ZERO:
             return []
-        has_negative = any(row.result < ZERO for row in top_rows)
+        zero_line = (abs(min_negative) / axis_range * Decimal("100")).quantize(Decimal("0.01"))
+        has_negative = min_negative < ZERO
+        axis = {
+            "min_negative": min_negative,
+            "max_positive": max_positive,
+            "zero_line_percent": f"{zero_line:.2f}",
+            "negative_label": format_money(min_negative, top_rows[0].currency) if has_negative else "",
+            "positive_label": format_money(max_positive, top_rows[0].currency),
+            "zero_label": format_money(ZERO, top_rows[0].currency),
+        }
         chart_rows = []
         for row in top_rows:
             chart_rows.append(
@@ -394,31 +404,32 @@ class OrganizationFinancialDashboardContextBuilder:
                     "row": row,
                     "project_label": f"{row.project_code} {row.project_name}",
                     "margin_display": row.margin_display,
-                    "max_value_display": format_money(max_value, row.currency),
+                    "max_value_display": format_money(max_positive, row.currency),
                     "has_negative": has_negative,
+                    "axis": axis,
                     "metrics": [
                         cls._chart_metric(
                             row=row,
                             label="Revenue",
                             value=row.revenue,
-                            max_value=max_value,
-                            has_negative=has_negative,
+                            min_negative=min_negative,
+                            axis_range=axis_range,
                             css_class="bg-blue-500",
                         ),
                         cls._chart_metric(
                             row=row,
                             label="Cost",
                             value=row.total_cost,
-                            max_value=max_value,
-                            has_negative=has_negative,
+                            min_negative=min_negative,
+                            axis_range=axis_range,
                             css_class="bg-slate-500",
                         ),
                         cls._chart_metric(
                             row=row,
                             label="Result",
                             value=row.result,
-                            max_value=max_value,
-                            has_negative=has_negative,
+                            min_negative=min_negative,
+                            axis_range=axis_range,
                             css_class="bg-green-500" if row.result >= ZERO else "bg-red-500",
                         ),
                     ],
@@ -431,15 +442,15 @@ class OrganizationFinancialDashboardContextBuilder:
         return chart_rows
 
     @staticmethod
-    def _chart_metric(row, label, value, max_value, has_negative, css_class):
-        scale = Decimal("50") if has_negative else Decimal("100")
+    def _chart_metric(row, label, value, min_negative, axis_range, css_class):
         width = Decimal("0")
-        if max_value:
-            width = (abs(value) / max_value * scale).quantize(Decimal("0.01"))
-        if has_negative:
-            left = Decimal("50.00") - width if value < ZERO else Decimal("50.00")
+        if axis_range:
+            width = (abs(value) / axis_range * Decimal("100")).quantize(Decimal("0.01"))
+        zero_line = (abs(min_negative) / axis_range * Decimal("100")).quantize(Decimal("0.01")) if axis_range else ZERO
+        if value < ZERO:
+            left = zero_line - width
         else:
-            left = Decimal("0.00")
+            left = zero_line
         display_value = format_money(value, row.currency)
         return {
             "label": label,

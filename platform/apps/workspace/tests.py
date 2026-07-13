@@ -1163,7 +1163,28 @@ class OrganizationFinancialDashboardTests(TestCase):
 
         self.assertContains(response, f"{project.code} {project.name} Result: -150,00 EUR")
         self.assertContains(response, "bg-red-500")
-        self.assertContains(response, "left: 20.00%; width: 30.00%;")
+        self.assertContains(response, "left: 0.00%; width: 37.50%;")
+        self.assertContains(response, "left: 37.50%;")
+
+    def test_financial_dashboard_chart_negative_axis_uses_actual_min_result(self):
+        organization, integration = self._setup()
+        positive = create_project(organization, code="26195", name="Positive axis chart")
+        negative = create_project(organization, code="26196", name="Small negative axis chart")
+        self._allocation(positive, integration, "3000", "-1000.000000", suffix="positive-rev")
+        self._allocation(negative, integration, "3000", "-100.000000", suffix="negative-rev")
+        self._allocation(negative, integration, "4000", "250.000000", suffix="negative-cost")
+
+        response = self.client.get(reverse("workspace:financial_dashboard"), {"month": "2026-06", "currency": "EUR"})
+        chart_rows = response.context["chart_rows"]
+        negative_chart = next(chart for chart in chart_rows if chart["row"].project_code == negative.code)
+        negative_result = next(metric for metric in negative_chart["metrics"] if metric["label"] == "Result")
+
+        self.assertEqual(negative_chart["axis"]["min_negative"], Decimal("-150.000000"))
+        self.assertEqual(negative_chart["axis"]["max_positive"], Decimal("1000.000000"))
+        self.assertEqual(negative_chart["axis"]["zero_line_percent"], "13.04")
+        self.assertEqual(negative_result["left_percent"], "0.00")
+        self.assertEqual(negative_result["width_percent"], "13.04")
+        self.assertContains(response, "-150,00 EUR")
 
     def test_financial_dashboard_chart_uses_shared_monetary_scale(self):
         organization, integration = self._setup()
