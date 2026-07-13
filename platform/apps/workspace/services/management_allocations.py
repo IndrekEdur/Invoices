@@ -3,6 +3,8 @@ from datetime import date
 from decimal import Decimal
 
 from apps.accounting.models import (
+    AllocationSourceAmountBasis,
+    AllocationSourceType,
     AllocationStrategy,
     ManagementAllocationPeriod,
     ManagementAllocationVersion,
@@ -30,7 +32,7 @@ class ManagementAllocationContextBuilder:
         versions = ManagementAllocationVersion.objects.none()
         if organization:
             versions = ManagementAllocationVersion.objects.filter(period__organization=organization).select_related(
-                "period", "pool", "created_by", "approved_by"
+                "period", "pool", "source_project", "created_by", "approved_by"
             )
         if month:
             year, month_number = cls._parse_month(month)
@@ -43,8 +45,21 @@ class ManagementAllocationContextBuilder:
         if strategy:
             versions = versions.filter(metadata__strategy=strategy)
         if query:
-            versions = versions.filter(pool__name__icontains=query) | versions.filter(reason__icontains=query)
-        versions = versions.order_by("-period__year", "-period__month", "pool__display_order", "pool__name", "-version_number")
+            versions = (
+                versions.filter(pool__name__icontains=query)
+                | versions.filter(source_project__code__icontains=query)
+                | versions.filter(source_project__name__icontains=query)
+                | versions.filter(reason__icontains=query)
+            )
+        versions = versions.order_by(
+            "-period__year",
+            "-period__month",
+            "source_type",
+            "pool__display_order",
+            "pool__name",
+            "source_project__code",
+            "-version_number",
+        )
         rows = [cls._version_row(version) for version in versions]
         selected_month = month or date.today().strftime("%Y-%m")
         return {
@@ -53,12 +68,13 @@ class ManagementAllocationContextBuilder:
             "pools": ManagementCostPool.objects.filter(organization=organization).order_by("display_order", "name") if organization else [],
             "status_choices": VersionStatus.choices,
             "strategy_choices": AllocationStrategy.choices,
+            "source_type_choices": AllocationSourceType.choices,
             "filters": {"month": selected_month, "pool_id": pool_id, "status": status, "strategy": strategy, "q": query},
             "summary": cls._summary(organization, selected_month),
         }
 
     @classmethod
-    def build_create(cls, *, month=""):
+    def build_create(cls, *, month="", source_type="", source_project_id="", source_currency=""):
         organization = cls.get_default_organization()
         selected_month = month or date.today().strftime("%Y-%m")
         year, month_number = cls._parse_month(selected_month)
@@ -73,10 +89,21 @@ class ManagementAllocationContextBuilder:
                     is_active=True,
                 ).order_by("name", "email", "project__code")
             )
-        project_rows = cls._project_rows(projects, year, month_number)
+        selected_source_type = source_type or AllocationSourceType.COST_POOL
+        source_project = None
+        if selected_source_type == AllocationSourceType.WORKSPACE_PROJECT and source_project_id:
+            source_project = Project.objects.filter(organization=organization, id=source_project_id).first()
+        project_rows = cls._project_rows(projects, year, month_number, source_project=source_project)
         return {
             "organization": organization,
             "pools": ManagementCostPool.objects.filter(organization=organization, is_active=True).order_by("display_order", "name") if organization else [],
+            "source_type_choices": AllocationSourceType.choices,
+            "source_amount_basis_choices": AllocationSourceAmountBasis.choices,
+            "source_projects": projects,
+            "selected_source_type": selected_source_type,
+            "selected_source_project": source_project,
+            "source_currency": source_currency,
+            "source_preview": cls._source_preview(source_project, year, month_number, source_currency) if source_project else None,
             "projects": project_rows,
             "project_managers": managers,
             "strategy_choices": AllocationStrategy.choices,
@@ -86,7 +113,7 @@ class ManagementAllocationContextBuilder:
     @classmethod
     def build_detail(cls, version_id):
         version = ManagementAllocationVersion.objects.select_related(
-            "period", "pool", "created_by", "approved_by"
+            "period", "pool", "source_project", "created_by", "approved_by"
         ).get(id=version_id)
         entries = list(version.entries.select_related("project").order_by("project__code", "project_id"))
         source_amount = Decimal(str((version.metadata or {}).get("source_amount", "0")))
@@ -94,8 +121,8 @@ class ManagementAllocationContextBuilder:
         percentage_total = sum(entry.percentage for entry in entries)
         history = [
             cls._version_row(item)
-            for item in ManagementAllocationVersion.objects.filter(period=version.period, pool=version.pool)
-            .select_related("period", "pool", "created_by", "approved_by")
+            for item in ManagementAllocationVersion.objects.filter(**cls._source_filter(version))
+            .select_related("period", "pool", "source_project", "created_by", "approved_by")
             .order_by("-version_number")
         ]
         return {
@@ -104,6 +131,11 @@ class ManagementAllocationContextBuilder:
             "history": history,
             "source_amount": source_amount,
             "source_amount_display": format_money(source_amount, "EUR"),
+            "source_type": version.source_type,
+            "source_label": version.source_label,
+            "source_display_name": version.source_display_name,
+            "source_amount_basis": version.source_amount_basis,
+            "source_currency": version.source_currency or "EUR",
             "allocated_amount": allocated,
             "allocated_amount_display": format_money(allocated, "EUR"),
             "unallocated_amount": source_amount - allocated,
@@ -119,9 +151,18 @@ class ManagementAllocationContextBuilder:
         }
 
     @classmethod
-    def _project_rows(cls, projects, year, month):
+    def _project_rows(cls, projects, year, month, source_project=None):
         if not year or not month:
-            return [{"project": project, "revenue": Decimal("0"), "cost": Decimal("0"), "managers": []} for project in projects]
+            return [
+                {
+                    "project": project,
+                    "revenue": Decimal("0"),
+                    "cost": Decimal("0"),
+                    "managers": [],
+                    "is_source_project": bool(source_project and project.id == source_project.id),
+                }
+                for project in projects
+            ]
         period_start = date(year, month, 1)
         period_end = date(year, month, monthrange(year, month)[1])
         aggregation_service = ProjectFinancialAggregationService()
@@ -138,9 +179,36 @@ class ManagementAllocationContextBuilder:
                     "cost": result.total_cost,
                     "cost_display": format_money(result.total_cost, result.currency or "EUR"),
                     "managers": list(project.parties.filter(role=ProjectParty.Role.PROJECT_MANAGER, is_active=True)),
+                    "is_source_project": bool(source_project and project.id == source_project.id),
                 }
             )
         return rows
+
+    @staticmethod
+    def _source_preview(source_project, year, month, source_currency=""):
+        if not source_project or not year or not month:
+            return None
+        period_start = date(year, month, 1)
+        period_end = date(year, month, monthrange(year, month)[1])
+        result = ProjectFinancialAggregationService().aggregate(
+            AggregateProjectFinancialsCommand(
+                project=source_project,
+                period_start=period_start,
+                period_end=period_end,
+                currency=source_currency or None,
+                metadata={"source": "workspace_management_allocation_source_preview"},
+            )
+        )
+        return {
+            "project": source_project,
+            "amount": result.total_cost,
+            "amount_display": format_money(result.total_cost, result.currency or source_currency or "EUR"),
+            "currency": result.currency or source_currency or "EUR",
+            "data_quality_status": result.data_quality_status,
+            "warnings": result.warnings,
+            "period_start": period_start,
+            "period_end": period_end,
+        }
 
     @staticmethod
     def _version_row(version):
@@ -152,6 +220,9 @@ class ManagementAllocationContextBuilder:
             "version": version,
             "period": version.period.period_label,
             "strategy": (version.metadata or {}).get("strategy", ""),
+            "source_label": version.source_label,
+            "source_type": version.source_type,
+            "source_display_name": version.source_display_name,
             "source_amount": source_amount,
             "source_amount_display": format_money(source_amount, "EUR"),
             "allocated_amount": allocated,
@@ -159,6 +230,16 @@ class ManagementAllocationContextBuilder:
             "project_count": len(entries),
             "warning_count": len(warnings),
         }
+
+    @staticmethod
+    def _source_filter(version):
+        if version.source_type == AllocationSourceType.WORKSPACE_PROJECT:
+            return {
+                "period": version.period,
+                "source_type": AllocationSourceType.WORKSPACE_PROJECT,
+                "source_project": version.source_project,
+            }
+        return {"period": version.period, "source_type": AllocationSourceType.COST_POOL, "pool": version.pool}
 
     @classmethod
     def _summary(cls, organization, selected_month):

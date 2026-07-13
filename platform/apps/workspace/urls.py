@@ -32,6 +32,7 @@ from .views import (
     ManagementAllocationDetailView,
     ManagementAllocationEditView,
     ManagementAllocationListView,
+    ManagementAllocationSourcePreviewView,
     ManagementAllocationReviseView,
     MeritDimensionSyncView,
     InboxView,
@@ -87,6 +88,11 @@ urlpatterns = [
     path("financials/sync-month/", FinancialDashboardSyncMonthView.as_view(), name="financial_dashboard_sync_month"),
     path("management-allocations/", ManagementAllocationListView.as_view(), name="management_allocations"),
     path("management-allocations/create/", ManagementAllocationCreateView.as_view(), name="management_allocation_create"),
+    path(
+        "management-allocations/source-preview/",
+        ManagementAllocationSourcePreviewView.as_view(),
+        name="management_allocation_source_preview",
+    ),
     path(
         "management-allocations/<int:version_id>/",
         ManagementAllocationDetailView.as_view(),

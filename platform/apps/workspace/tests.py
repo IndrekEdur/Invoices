@@ -23,6 +23,7 @@ from apps.accounting.models import (
     AccountingIntegration,
     AccountingSyncRun,
     AccountingSyncState,
+    AllocationSourceType,
     AllocationStrategy,
     ManagementAllocationEntry,
     ManagementAllocationPeriod,
@@ -4019,6 +4020,50 @@ class ManagementAllocationWorkspaceTests(TestCase):
         self.assertRedirects(response, reverse("workspace:management_allocation_detail", args=[version.id]))
         self.assertEqual(version.status, VersionStatus.DRAFT)
         self.assertEqual(version.entries.count(), 2)
+
+    def test_workspace_project_source_preview_and_create_form_render(self):
+        response = self.client.get(
+            reverse("workspace:management_allocation_source_preview"),
+            {
+                "month": "2026-06",
+                "source_type": AllocationSourceType.WORKSPACE_PROJECT,
+                "source_project_id": self.first_project.id,
+                "source_currency": "EUR",
+            },
+        )
+        create_response = self.client.get(
+            reverse("workspace:management_allocation_create"),
+            {
+                "month": "2026-06",
+                "source_type": AllocationSourceType.WORKSPACE_PROJECT,
+                "source_project_id": self.first_project.id,
+                "source_currency": "EUR",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Allocation source preview")
+        self.assertContains(response, self.first_project.code)
+        self.assertContains(create_response, "Workspace Project source")
+        self.assertContains(create_response, "source Project cannot be target")
+
+    def test_workspace_project_source_create_rejects_source_as_target(self):
+        response = self.client.post(
+            reverse("workspace:management_allocation_create"),
+            {
+                "source_type": AllocationSourceType.WORKSPACE_PROJECT,
+                "source_project_id": self.first_project.id,
+                "month": "2026-06",
+                "strategy": AllocationStrategy.EQUAL,
+                "source_amount_basis": "project_direct_cost",
+                "source_currency": "EUR",
+                "project_ids": [self.first_project.id, self.second_project.id],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "source Project cannot also be selected")
+        self.assertFalse(ManagementAllocationVersion.objects.exists())
 
     def test_create_calls_proposal_service_once_and_no_merit_api(self):
         with patch.object(ManagementAllocationProposalService, "generate", wraps=ManagementAllocationProposalService().generate) as generate_mock:

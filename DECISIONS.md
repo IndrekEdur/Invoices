@@ -414,3 +414,24 @@ Reason:
 - These allocations are management accounting decisions, not source accounting entries.
 - Keeping them separate preserves trust in Merit-sourced data while allowing Workspace to support internal project profitability, department profitability, future alerts, and management reports.
 - Versioning and audit make later corrections explainable without rewriting historical source data.
+
+## ADR-027: Management Allocations Support Cost Pool And Workspace Project Sources
+
+Date: 2026-07-13
+
+Decision:
+
+- Management allocations shall use one lifecycle for multiple allocation source types instead of creating separate workflows.
+- Supported source types are `cost_pool` and `workspace_project`.
+- Cost pool versions are identified by period and pool.
+- Workspace Project versions are identified by period and source Project.
+- A Workspace Project source uses direct project cost from `ProjectFinancialAggregationService`, not raw GL summing in Workspace code.
+- The source Project cannot also be a recipient Project.
+- Project Financials must distinguish allocated-in, allocated-out, net management allocation, and management total cost.
+
+Reason:
+
+- Internal management allocations sometimes redistribute indirect cost pools and sometimes redistribute direct cost from one operational Project to other Projects.
+- Reusing one proposal, review, approval, revision, and audit lifecycle keeps the feature understandable and avoids duplicate workflows.
+- Source identity and allocated-out reporting prevent source-project allocations from double-counting direct cost.
+- Keeping the source amount derived from the existing financial aggregation service preserves traceability and avoids new accounting logic in views or templates.

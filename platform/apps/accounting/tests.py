@@ -41,6 +41,8 @@ from apps.accounting.models import (
     AccountingIntegration,
     AccountingSyncRun,
     AccountingSyncState,
+    AllocationSourceAmountBasis,
+    AllocationSourceType,
     AllocationStrategy,
     ManagementAllocationEntry,
     ManagementAllocationPeriod,
@@ -1378,6 +1380,41 @@ class ProjectManagementFinancialServiceTests(TestCase):
         self.assertEqual(management.management_total_cost, Decimal("375.000000"))
         self.assertEqual(management.accounting_result, Decimal("750.000000"))
         self.assertEqual(management.management_result, Decimal("625.000000"))
+
+    def test_workspace_project_source_is_allocated_out_for_source_and_in_for_recipient(self):
+        organization, _integration, source_project = self._setup_project()
+        recipient = Project.objects.create(organization=organization, code="26125", name="Recipient")
+        period = ManagementAllocationPeriod.objects.create(organization=organization, year=2026, month=6)
+        version = ManagementAllocationVersion.objects.create(
+            period=period,
+            source_type=AllocationSourceType.WORKSPACE_PROJECT,
+            source_project=source_project,
+            source_amount_basis=AllocationSourceAmountBasis.PROJECT_DIRECT_COST,
+            source_currency="EUR",
+            source_period_start=date(2026, 6, 1),
+            source_period_end=date(2026, 6, 30),
+            version_number=1,
+            status=VersionStatus.APPROVED,
+            approved_at=timezone.now(),
+            metadata={"source_amount": "100.000000"},
+        )
+        ManagementAllocationEntry.objects.create(
+            version=version,
+            project=recipient,
+            percentage=Decimal("100.0000"),
+            amount=Decimal("100.000000"),
+        )
+
+        source_management = self._management_result(self._accounting_result(source_project))
+        recipient_management = self._management_result(self._accounting_result(recipient))
+
+        self.assertEqual(source_management.management_cost_allocated_in, Decimal("0"))
+        self.assertEqual(source_management.management_cost_allocated_out, Decimal("100.000000"))
+        self.assertEqual(source_management.net_management_allocation, Decimal("-100.000000"))
+        self.assertEqual(source_management.management_total_cost, Decimal("150.000000"))
+        self.assertEqual(recipient_management.management_cost_allocated_in, Decimal("100.000000"))
+        self.assertEqual(recipient_management.management_cost_allocated_out, Decimal("0"))
+        self.assertEqual(recipient_management.management_total_cost, Decimal("100.000000"))
 
     def test_approved_only_draft_and_superseded_ignored(self):
         organization, _integration, project = self._setup_project()
@@ -4639,8 +4676,10 @@ class ManagementCostAllocationServiceTests(TestCase):
 
 
 class FakeAggregationService:
-    def __init__(self, revenues):
+    def __init__(self, revenues, costs=None, data_quality_status="ok"):
         self.revenues = revenues
+        self.costs = costs or {}
+        self.data_quality_status = data_quality_status
         self.calls = []
 
     def aggregate(self, command):
@@ -4650,6 +4689,14 @@ class FakeAggregationService:
             (),
             {
                 "revenue": self.revenues.get(command.project.id, Decimal("0")),
+                "total_cost": self.costs.get(command.project.id, Decimal("0")),
+                "result": self.revenues.get(command.project.id, Decimal("0")) - self.costs.get(command.project.id, Decimal("0")),
+                "currency": command.currency or "EUR",
+                "data_quality_status": self.data_quality_status,
+                "warnings": ["mixed_currency"] if self.data_quality_status == "mixed_currency" else [],
+                "allocation_count": 1,
+                "source_batch_count": 1,
+                "source_entry_count": 1,
             },
         )()
 
@@ -4674,8 +4721,14 @@ class ManagementAllocationProposalServiceTests(TestCase):
         defaults.update(kwargs)
         return GenerateManagementAllocationProposalCommand(**defaults)
 
-    def _service(self, revenues=None):
-        return ManagementAllocationProposalService(project_financial_aggregation_service=FakeAggregationService(revenues or {}))
+    def _service(self, revenues=None, costs=None, data_quality_status="ok"):
+        return ManagementAllocationProposalService(
+            project_financial_aggregation_service=FakeAggregationService(
+                revenues or {},
+                costs=costs,
+                data_quality_status=data_quality_status,
+            )
+        )
 
     def _gl_entry(self, organization, *, account_code="5000", batch_date=date(2026, 6, 15), debit="100.000000", credit="0.000000", suffix="1"):
         integration = create_merit_integration(organization)
@@ -4768,6 +4821,63 @@ class ManagementAllocationProposalServiceTests(TestCase):
         self.assertEqual(result.source_amount, Decimal("140.000000"))
         self.assertEqual(result.version.metadata["source_amount_origin"], "gl_pool_accounts")
         self.assertEqual(result.version.metadata["calculation_diagnostics"]["source"]["amount_semantics"], "debit_amount_minus_credit_amount")
+
+    def test_workspace_project_source_uses_project_direct_cost_and_traceability(self):
+        organization, pool, first, second, third = self._setup()
+        service = self._service(costs={first.id: Decimal("345.670000")})
+
+        result = service.generate(
+            GenerateManagementAllocationProposalCommand(
+                year=2026,
+                month=6,
+                project_ids=[second.id, third.id],
+                source_type=AllocationSourceType.WORKSPACE_PROJECT,
+                source_project=first,
+                source_amount_basis=AllocationSourceAmountBasis.PROJECT_DIRECT_COST,
+                source_currency="EUR",
+                strategy=AllocationStrategy.EQUAL,
+            )
+        )
+
+        self.assertIsNone(result.pool)
+        self.assertEqual(result.source_project, first)
+        self.assertEqual(result.source_amount, Decimal("345.670000"))
+        self.assertEqual(result.version.source_type, AllocationSourceType.WORKSPACE_PROJECT)
+        self.assertIsNone(result.version.pool)
+        self.assertEqual(result.version.source_project, first)
+        self.assertEqual(result.version.source_amount_basis, AllocationSourceAmountBasis.PROJECT_DIRECT_COST)
+        self.assertEqual(result.version.metadata["source_amount_origin"], "workspace_project_direct_cost")
+        self.assertEqual(result.version.metadata["source_project_code"], first.code)
+        self.assertEqual(result.version.metadata["calculation_diagnostics"]["source"]["direct_cost"], "345.670000")
+        self.assertEqual([entry.project for entry in result.entries], [second, third])
+
+    def test_workspace_project_source_cannot_be_target_or_mixed_currency_without_explicit_currency(self):
+        organization, pool, first, second, third = self._setup()
+
+        with self.assertRaisesMessage(ValueError, "source Project cannot also be selected"):
+            self._service(costs={first.id: Decimal("100")}).generate(
+                GenerateManagementAllocationProposalCommand(
+                    year=2026,
+                    month=6,
+                    project_ids=[first.id, second.id],
+                    source_type=AllocationSourceType.WORKSPACE_PROJECT,
+                    source_project=first,
+                    source_amount_basis=AllocationSourceAmountBasis.PROJECT_DIRECT_COST,
+                    strategy=AllocationStrategy.EQUAL,
+                )
+            )
+        with self.assertRaisesMessage(ValueError, "mixed currency"):
+            self._service(costs={first.id: Decimal("100")}, data_quality_status="mixed_currency").generate(
+                GenerateManagementAllocationProposalCommand(
+                    year=2026,
+                    month=6,
+                    project_ids=[second.id],
+                    source_type=AllocationSourceType.WORKSPACE_PROJECT,
+                    source_project=first,
+                    source_amount_basis=AllocationSourceAmountBasis.PROJECT_DIRECT_COST,
+                    strategy=AllocationStrategy.EQUAL,
+                )
+            )
 
     def test_reversal_negative_source_amount_from_gl(self):
         organization, pool, first, second, third = self._setup()

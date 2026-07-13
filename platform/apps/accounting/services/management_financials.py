@@ -24,17 +24,26 @@ class ProjectManagementFinancialService:
     def build(cls, command) -> ManagementFinancialResult:
         accounting_result = command.accounting_result
         metadata = deepcopy(command.metadata or {})
-        entries = cls._approved_entries(accounting_result)
-        breakdown = cls._breakdown(entries)
-        allocated_total = sum((item.amount for item in breakdown), ZERO)
-        monthly_breakdowns = cls._monthly_breakdowns(entries)
+        incoming_entries = cls._approved_entries(accounting_result)
+        outgoing_entries = cls._approved_outgoing_entries(accounting_result)
+        incoming_breakdown = cls._breakdown(incoming_entries, direction="in")
+        outgoing_breakdown = cls._breakdown(outgoing_entries, direction="out")
+        allocated_in = sum((item.amount for item in incoming_breakdown), ZERO)
+        allocated_out = sum((item.amount for item in outgoing_breakdown), ZERO)
+        net_management_allocation = allocated_in - allocated_out
+        monthly_incoming_breakdowns = cls._monthly_breakdowns(incoming_entries, direction="in")
+        monthly_outgoing_breakdowns = cls._monthly_breakdowns(outgoing_entries, direction="out")
         months = [
-            cls._month(month, monthly_breakdowns.get((month.year, month.month), []))
+            cls._month(
+                month,
+                monthly_incoming_breakdowns.get((month.year, month.month), []),
+                monthly_outgoing_breakdowns.get((month.year, month.month), []),
+            )
             for month in accounting_result.months
         ]
-        management_total_cost = accounting_result.total_cost + allocated_total
+        management_total_cost = accounting_result.total_cost + net_management_allocation
         management_result = accounting_result.revenue - management_total_cost
-        warnings = cls._warnings(accounting_result, entries, breakdown)
+        warnings = cls._warnings(accounting_result, incoming_entries, incoming_breakdown)
         return ManagementFinancialResult(
             project=accounting_result.project,
             period_start=accounting_result.period_start,
@@ -43,18 +52,23 @@ class ProjectManagementFinancialService:
             months=months,
             direct_revenue=accounting_result.revenue,
             direct_cost=accounting_result.total_cost,
-            allocated_management_cost=allocated_total,
+            allocated_management_cost=allocated_in,
+            management_cost_allocated_in=allocated_in,
+            management_cost_allocated_out=allocated_out,
+            net_management_allocation=net_management_allocation,
             management_total_cost=management_total_cost,
             accounting_result=accounting_result.result,
             management_result=management_result,
             accounting_margin=accounting_result.margin,
             management_margin=cls._margin(accounting_result.revenue, management_result),
-            allocation_breakdown=breakdown,
+            allocation_breakdown=incoming_breakdown,
             warnings=warnings,
             metadata={
                 "input_metadata": metadata,
-                "allocation_entry_count": len(entries),
-                "approved_version_ids": sorted({entry.version_id for entry in entries}),
+                "allocation_entry_count": len(incoming_entries),
+                "allocated_out_entry_count": len(outgoing_entries),
+                "approved_version_ids": sorted({entry.version_id for entry in incoming_entries + outgoing_entries}),
+                "allocated_out_breakdown": outgoing_breakdown,
             },
         )
 
@@ -71,15 +85,39 @@ class ProjectManagementFinancialService:
                 project__organization=accounting_result.project.organization,
                 version__status=VersionStatus.APPROVED,
                 version__period__organization=accounting_result.project.organization,
-                version__pool__organization=accounting_result.project.organization,
             )
             .filter(month_filters)
-            .select_related("version", "version__period", "version__pool", "project")
-            .order_by("version__period__year", "version__period__month", "version__pool__display_order", "version__pool__name", "id")
+            .select_related("version", "version__period", "version__pool", "version__source_project", "project")
+            .order_by(
+                "version__period__year",
+                "version__period__month",
+                "version__pool__display_order",
+                "version__pool__name",
+                "version__source_project__code",
+                "id",
+            )
         )
 
     @classmethod
-    def _breakdown(cls, entries):
+    def _approved_outgoing_entries(cls, accounting_result):
+        month_filters = Q()
+        for month in accounting_result.months:
+            month_filters |= Q(version__period__year=month.year, version__period__month=month.month)
+        if not month_filters:
+            return []
+        return list(
+            ManagementAllocationEntry.objects.filter(
+                version__source_project=accounting_result.project,
+                version__status=VersionStatus.APPROVED,
+                version__period__organization=accounting_result.project.organization,
+            )
+            .filter(month_filters)
+            .select_related("version", "version__period", "version__pool", "version__source_project", "project")
+            .order_by("version__period__year", "version__period__month", "project__code", "id")
+        )
+
+    @classmethod
+    def _breakdown(cls, entries, *, direction="in"):
         total = sum((entry.amount for entry in entries), ZERO)
         grouped = defaultdict(lambda: {"amount": ZERO, "entries": []})
         for entry in entries:
@@ -100,28 +138,42 @@ class ProjectManagementFinancialService:
                     percentage_of_total=percentage,
                     source_version=f"v{first.version.version_number}",
                     approved_at=first.version.approved_at,
+                    direction=direction,
                     metadata={
                         "entry_ids": [entry.id for entry in data["entries"]],
                         "manual_override": any(entry.manual_override for entry in data["entries"]),
+                        "source_type": first.version.source_type,
+                        "source_identifier": first.version.source_identifier,
                     },
                 )
             )
-        return sorted(items, key=lambda item: (item.period.year, item.period.month, item.pool.display_order, item.pool.name, item.version.id))
+        return sorted(
+            items,
+            key=lambda item: (
+                item.period.year,
+                item.period.month,
+                item.pool.display_order if item.pool else 9999,
+                item.pool.name if item.pool else item.version.source_display_name,
+                item.version.id,
+            ),
+        )
 
     @classmethod
-    def _monthly_breakdowns(cls, entries):
+    def _monthly_breakdowns(cls, entries, *, direction="in"):
         grouped = defaultdict(list)
-        for item in cls._breakdown(entries):
+        for item in cls._breakdown(entries, direction=direction):
             grouped[(item.period.year, item.period.month)].append(item)
         return grouped
 
     @classmethod
-    def _month(cls, month, breakdown):
-        allocated = sum((item.amount for item in breakdown), ZERO)
-        management_total_cost = month.total_cost + allocated
+    def _month(cls, month, incoming_breakdown, outgoing_breakdown):
+        allocated_in = sum((item.amount for item in incoming_breakdown), ZERO)
+        allocated_out = sum((item.amount for item in outgoing_breakdown), ZERO)
+        net_management_allocation = allocated_in - allocated_out
+        management_total_cost = month.total_cost + net_management_allocation
         management_result = month.revenue - management_total_cost
         warnings = list(month.warnings)
-        if not breakdown:
+        if not incoming_breakdown and not outgoing_breakdown:
             warnings.append("no_approved_management_allocations")
         return ManagementFinancialMonth(
             year=month.year,
@@ -130,15 +182,18 @@ class ProjectManagementFinancialService:
             period_end=month.period_end,
             direct_revenue=month.revenue,
             direct_cost=month.total_cost,
-            allocated_management_cost=allocated,
+            allocated_management_cost=allocated_in,
+            management_cost_allocated_in=allocated_in,
+            management_cost_allocated_out=allocated_out,
+            net_management_allocation=net_management_allocation,
             management_total_cost=management_total_cost,
             accounting_result=month.result,
             management_result=management_result,
             accounting_margin=month.margin,
             management_margin=cls._margin(month.revenue, management_result),
             warnings=warnings,
-            allocation_breakdown=breakdown,
-            metadata={},
+            allocation_breakdown=incoming_breakdown,
+            metadata={"allocated_out_breakdown": outgoing_breakdown},
         )
 
     @staticmethod
@@ -172,9 +227,9 @@ class ProjectManagementFinancialService:
             warnings.append("mixed_currency")
         if not breakdown:
             return warnings
-        pool_count = len({item.pool.id for item in breakdown})
+        pool_count = len({item.pool.id for item in breakdown if item.pool})
         if pool_count < 1:
-            warnings.append("multiple_pools_missing")
+            warnings.append("cost_pool_not_applicable")
         return warnings
 
     @staticmethod

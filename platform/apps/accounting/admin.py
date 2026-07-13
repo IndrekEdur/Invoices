@@ -167,9 +167,19 @@ class ManagementAllocationPeriodAdmin(admin.ModelAdmin):
 
 @admin.register(ManagementAllocationVersion)
 class ManagementAllocationVersionAdmin(admin.ModelAdmin):
-    list_display = ("period", "pool", "version_number", "status", "created_by", "approved_by", "approved_at")
-    list_filter = ("status", "pool", "period__year", "period__month")
-    search_fields = ("pool__name", "period__organization__name", "reason")
+    list_display = (
+        "period",
+        "source_type",
+        "pool",
+        "source_project",
+        "version_number",
+        "status",
+        "created_by",
+        "approved_by",
+        "approved_at",
+    )
+    list_filter = ("status", "source_type", "pool", "period__year", "period__month")
+    search_fields = ("pool__name", "source_project__code", "source_project__name", "period__organization__name", "reason")
     readonly_fields = ("created_at",)
 
 
@@ -184,5 +194,5 @@ class ManagementAllocationRuleAdmin(admin.ModelAdmin):
 @admin.register(ManagementAllocationEntry)
 class ManagementAllocationEntryAdmin(admin.ModelAdmin):
     list_display = ("version", "project", "percentage", "amount", "manual_override")
-    list_filter = ("manual_override", "version__status", "version__pool")
-    search_fields = ("project__code", "project__name", "version__pool__name", "notes")
+    list_filter = ("manual_override", "version__status", "version__source_type", "version__pool")
+    search_fields = ("project__code", "project__name", "version__pool__name", "version__source_project__code", "notes")

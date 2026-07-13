@@ -30,7 +30,7 @@
             <option value="">All statuses</option>
             {% for value,label in status_choices %}<option value="{{ value }}" {% if filters.status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
         </select>
-        <input type="search" name="q" value="{{ filters.q }}" placeholder="Pool or reason" class="rounded-xl border border-slate-300 px-3 py-2 text-sm">
+        <input type="search" name="q" value="{{ filters.q }}" placeholder="Source, Project or reason" class="rounded-xl border border-slate-300 px-3 py-2 text-sm">
         <button class="rounded-xl bg-slate-950 px-4 py-2 text-sm font-semibold text-white" type="submit">Filter</button>
     </form>
 
@@ -38,14 +38,14 @@
         <table class="min-w-full divide-y divide-slate-200 text-sm">
             <thead class="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
                 <tr>
-                    <th class="px-4 py-3">Period</th><th class="px-4 py-3">Pool</th><th class="px-4 py-3">Version</th><th class="px-4 py-3">Strategy</th><th class="px-4 py-3">Source</th><th class="px-4 py-3">Allocated</th><th class="px-4 py-3">Status</th><th class="px-4 py-3">Projects</th><th class="px-4 py-3">Warnings</th><th class="px-4 py-3">Actions</th>
+                    <th class="px-4 py-3">Period</th><th class="px-4 py-3">Source</th><th class="px-4 py-3">Version</th><th class="px-4 py-3">Strategy</th><th class="px-4 py-3">Source amount</th><th class="px-4 py-3">Allocated</th><th class="px-4 py-3">Status</th><th class="px-4 py-3">Projects</th><th class="px-4 py-3">Warnings</th><th class="px-4 py-3">Actions</th>
                 </tr>
             </thead>
             <tbody class="divide-y divide-slate-100">
                 {% for row in versions %}
                 <tr class="hover:bg-slate-50">
                     <td class="px-4 py-3">{{ row.period }}</td>
-                    <td class="px-4 py-3 font-medium">{{ row.version.pool.name }}</td>
+                    <td class="px-4 py-3 font-medium"><div>{{ row.source_display_name }}</div><div class="text-xs text-slate-500">{{ row.source_type }}</div></td>
                     <td class="px-4 py-3">v{{ row.version.version_number }}</td>
                     <td class="px-4 py-3">{{ row.strategy|default:"-" }}</td>
                     <td class="px-4 py-3">{{ row.source_amount_display }}</td>

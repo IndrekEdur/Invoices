@@ -52,8 +52,9 @@ Confirmed boundaries:
 - Project selection is explicit; the system must not guess participating projects.
 - Approved allocations are immutable; revisions create new versions.
 - Only one approved version is active for a pool and month.
+- Only one approved version is active for a source and month. A source may be a cost pool or a Workspace Project.
 - Every allocated euro must explain its source, strategy, version, approval, and user decision.
-- Reports must separate direct cost from allocated management cost.
+- Reports must separate direct cost, allocated-in management cost, allocated-out management cost, and net management allocation.
 
 ## 4. Domain Model
 
@@ -193,12 +194,23 @@ Future notes:
 
 Purpose:
 
-An approved allocation snapshot for one pool and month.
+An approved allocation snapshot for one source and month.
+
+Supported source types:
+
+- `cost_pool`: allocates a configured ManagementCostPool.
+- `workspace_project`: allocates direct accounting cost from a source Project to other Projects.
 
 Key fields:
 
 - `organization`
 - `pool`
+- `source_type`
+- `source_project`
+- `source_amount_basis`
+- `source_currency`
+- `source_period_start`
+- `source_period_end`
 - `month`
 - `version_number`
 - `status`
@@ -218,6 +230,44 @@ Status examples:
 - `voided`
 
 Relationships:
+
+- For `cost_pool`, `pool` is required and `source_project` must be empty.
+- For `workspace_project`, `source_project` is required and `pool` must be empty.
+- The same source Project cannot also be a target/recipient Project.
+
+Version identity:
+
+- Cost pool source: `period + pool`.
+- Workspace Project source: `period + source_project`.
+- Approving a new version supersedes only prior approved versions for the same source/month.
+
+### Workspace Project Allocation Source
+
+Purpose:
+
+Allows direct accounting cost from one Workspace Project to be redistributed internally to other Projects without changing Merit or GL cache data.
+
+Amount basis:
+
+- `project_direct_cost` uses `ProjectFinancialAggregationService` for the exact selected month.
+- It reads `ProjectFinancialAggregationResult.total_cost`.
+- It excludes management allocations from the source amount.
+- It stores source diagnostics, data quality status, period, currency, and selected target traceability in version metadata.
+
+Validation:
+
+- Source Project must belong to the same Organization.
+- Source Project cannot be a target Project.
+- Mixed-currency project source data requires an explicit currency selection.
+- No raw GL summing belongs in Workspace views or templates.
+
+Reporting:
+
+- Recipient Projects receive `management_cost_allocated_in`.
+- Source Projects receive `management_cost_allocated_out`.
+- Net management allocation is `allocated_in - allocated_out`.
+- Management total cost is `direct_cost + allocated_in - allocated_out`.
+- Cost pool sources do not create source-project offsets.
 
 - Belongs to one pool and month.
 - Has many allocation entries.

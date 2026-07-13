@@ -477,6 +477,18 @@ class VersionStatus(models.TextChoices):
     SUPERSEDED = "superseded", "Superseded"
 
 
+class AllocationSourceType(models.TextChoices):
+    COST_POOL = "cost_pool", "Cost pool"
+    WORKSPACE_PROJECT = "workspace_project", "Workspace Project"
+
+
+class AllocationSourceAmountBasis(models.TextChoices):
+    MAPPED_GL_ACCOUNTS = "mapped_gl_accounts", "Mapped GL accounts"
+    PROJECT_DIRECT_COST = "project_direct_cost", "Project direct cost"
+    PROJECT_SELECTED_COSTS = "project_selected_costs", "Project selected costs"
+    MANUAL = "manual", "Manual"
+
+
 class ManagementCostPool(models.Model):
     organization = models.ForeignKey(
         Organization,
@@ -589,7 +601,29 @@ class ManagementAllocationVersion(models.Model):
         ManagementCostPool,
         on_delete=models.CASCADE,
         related_name="allocation_versions",
+        blank=True,
+        null=True,
     )
+    source_type = models.CharField(
+        max_length=32,
+        choices=AllocationSourceType.choices,
+        default=AllocationSourceType.COST_POOL,
+    )
+    source_project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="sourced_management_allocation_versions",
+        blank=True,
+        null=True,
+    )
+    source_amount_basis = models.CharField(
+        max_length=32,
+        choices=AllocationSourceAmountBasis.choices,
+        default=AllocationSourceAmountBasis.MAPPED_GL_ACCOUNTS,
+    )
+    source_currency = models.CharField(max_length=8, blank=True, default="")
+    source_period_start = models.DateField(blank=True, null=True)
+    source_period_end = models.DateField(blank=True, null=True)
     version_number = models.PositiveIntegerField()
     status = models.CharField(max_length=32, choices=VersionStatus.choices, default=VersionStatus.DRAFT)
     created_by = models.ForeignKey(
@@ -612,16 +646,46 @@ class ManagementAllocationVersion(models.Model):
     metadata = models.JSONField(default=dict, blank=True)
 
     class Meta:
-        ordering = ["period", "pool__display_order", "pool__name", "-version_number", "id"]
+        ordering = [
+            "period",
+            "source_type",
+            "pool__display_order",
+            "pool__name",
+            "source_project__code",
+            "-version_number",
+            "id",
+        ]
         constraints = [
             models.UniqueConstraint(
                 fields=["period", "pool", "version_number"],
-                name="unique_management_version_number",
+                condition=Q(pool__isnull=False),
+                name="unique_management_pool_version_number",
+            ),
+            models.UniqueConstraint(
+                fields=["period", "source_project", "version_number"],
+                condition=Q(source_project__isnull=False),
+                name="unique_management_project_version_number",
             ),
             models.UniqueConstraint(
                 fields=["period", "pool"],
-                condition=Q(status=VersionStatus.APPROVED),
-                name="unique_approved_management_version",
+                condition=Q(status=VersionStatus.APPROVED, pool__isnull=False),
+                name="unique_approved_management_pool_version",
+            ),
+            models.UniqueConstraint(
+                fields=["period", "source_project"],
+                condition=Q(status=VersionStatus.APPROVED, source_project__isnull=False),
+                name="unique_approved_management_project_version",
+            ),
+            models.CheckConstraint(
+                check=(
+                    Q(source_type=AllocationSourceType.COST_POOL, pool__isnull=False, source_project__isnull=True)
+                    | Q(
+                        source_type=AllocationSourceType.WORKSPACE_PROJECT,
+                        pool__isnull=True,
+                        source_project__isnull=False,
+                    )
+                ),
+                name="management_allocation_valid_source",
             ),
         ]
 
@@ -629,17 +693,53 @@ class ManagementAllocationVersion(models.Model):
         super().clean()
         if self.version_number < 1:
             raise ValidationError("Management allocation version number must be positive.")
-        if self.pool_id and self.period_id and self.pool.organization_id != self.period.organization_id:
-            raise ValidationError("Management allocation pool and period must belong to the same organization.")
+        if self.source_type == AllocationSourceType.COST_POOL:
+            if not self.pool_id or self.source_project_id:
+                raise ValidationError("Cost pool allocations require a pool and no source Project.")
+            if self.period_id and self.pool.organization_id != self.period.organization_id:
+                raise ValidationError("Management allocation pool and period must belong to the same organization.")
+        elif self.source_type == AllocationSourceType.WORKSPACE_PROJECT:
+            if not self.source_project_id or self.pool_id:
+                raise ValidationError("Workspace Project allocations require a source Project and no pool.")
+            if self.period_id and self.source_project.organization_id != self.period.organization_id:
+                raise ValidationError("Management allocation source Project and period must belong to the same organization.")
+        else:
+            raise ValidationError("Unsupported management allocation source type.")
         if self.status == VersionStatus.APPROVED and self.pool_id and not self.pool.is_active:
             raise ValidationError("Inactive management cost pools cannot be approved.")
+        if self.source_period_start and self.source_period_end and self.source_period_end < self.source_period_start:
+            raise ValidationError("Management allocation source period end cannot be before source period start.")
 
     def save(self, *args, **kwargs):
         self.full_clean()
         return super().save(*args, **kwargs)
 
+    @property
+    def source_label(self) -> str:
+        if self.source_type == AllocationSourceType.WORKSPACE_PROJECT and self.source_project_id:
+            return f"Workspace Project {self.source_project.code}"
+        if self.pool_id:
+            return f"Cost Pool {self.pool.name}"
+        return self.source_type
+
+    @property
+    def source_identifier(self) -> str:
+        if self.source_type == AllocationSourceType.WORKSPACE_PROJECT and self.source_project_id:
+            return f"project:{self.source_project_id}"
+        if self.pool_id:
+            return f"pool:{self.pool_id}"
+        return "unknown"
+
+    @property
+    def source_display_name(self) -> str:
+        if self.source_type == AllocationSourceType.WORKSPACE_PROJECT and self.source_project_id:
+            return f"{self.source_project.code} {self.source_project.name}"
+        if self.pool_id:
+            return self.pool.name
+        return self.get_source_type_display()
+
     def __str__(self) -> str:
-        return f"{self.period.period_label} {self.pool.name} v{self.version_number} ({self.status})"
+        return f"{self.period.period_label} {self.source_display_name} v{self.version_number} ({self.status})"
 
 
 class ManagementAllocationRule(models.Model):
@@ -691,6 +791,8 @@ class ManagementAllocationEntry(models.Model):
             version_org_id = self.version.period.organization_id
             if self.project.organization_id != version_org_id:
                 raise ValidationError("Management allocation entry project must belong to the same organization.")
+            if self.version.source_project_id and self.project_id == self.version.source_project_id:
+                raise ValidationError("Management allocation source Project cannot also be a target Project.")
 
     def save(self, *args, **kwargs):
         self.full_clean()

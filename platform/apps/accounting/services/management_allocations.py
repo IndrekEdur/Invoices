@@ -19,6 +19,8 @@ from .commands import (
 from .financial_aggregation import ProjectFinancialAggregationService
 from ..models import (
     AccountingGLEntry,
+    AllocationSourceAmountBasis,
+    AllocationSourceType,
     AllocationStrategy,
     ManagementAllocationRule,
     ManagementAllocationEntry,
@@ -93,9 +95,15 @@ class ManagementAllocationVersionService:
     def create_version(command):
         metadata = deepcopy(command.metadata or {})
         version_number = command.version_number
+        source_filter = ManagementAllocationVersionService._source_filter(
+            period=command.period,
+            source_type=command.source_type,
+            pool=command.pool,
+            source_project=command.source_project,
+        )
         if version_number is None:
             latest = (
-                ManagementAllocationVersion.objects.filter(period=command.period, pool=command.pool)
+                ManagementAllocationVersion.objects.filter(**source_filter)
                 .aggregate(max_version=Max("version_number"))
                 .get("max_version")
                 or 0
@@ -105,6 +113,12 @@ class ManagementAllocationVersionService:
         version = ManagementAllocationVersion.objects.create(
             period=command.period,
             pool=command.pool,
+            source_type=command.source_type,
+            source_project=command.source_project,
+            source_amount_basis=command.source_amount_basis,
+            source_currency=command.source_currency,
+            source_period_start=command.source_period_start,
+            source_period_end=command.source_period_end,
             version_number=version_number,
             created_by=command.created_by,
             reason=command.reason,
@@ -128,6 +142,7 @@ class ManagementAllocationVersionService:
         source = (
             ManagementAllocationVersion.objects.select_for_update()
             .select_related("period", "pool")
+            .select_related("source_project")
             .prefetch_related("entries")
             .get(pk=command.source_version.pk)
         )
@@ -136,7 +151,7 @@ class ManagementAllocationVersionService:
         if source.period.status == PeriodStatus.ARCHIVED:
             raise ValueError("Archived management allocation periods cannot receive revisions.")
         latest = (
-            ManagementAllocationVersion.objects.filter(period=source.period, pool=source.pool)
+            ManagementAllocationVersion.objects.filter(**ManagementAllocationVersionService._source_filter_from_version(source))
             .aggregate(max_version=Max("version_number"))
             .get("max_version")
             or 0
@@ -149,6 +164,12 @@ class ManagementAllocationVersionService:
         version = ManagementAllocationVersion.objects.create(
             period=source.period,
             pool=source.pool,
+            source_type=source.source_type,
+            source_project=source.source_project,
+            source_amount_basis=source.source_amount_basis,
+            source_currency=source.source_currency,
+            source_period_start=source.source_period_start,
+            source_period_end=source.source_period_end,
             version_number=latest + 1,
             status=VersionStatus.DRAFT,
             created_by=command.actor,
@@ -179,6 +200,8 @@ class ManagementAllocationVersionService:
                 "new_version_id": version.id,
                 "period": source.period.period_label,
                 "pool_id": source.pool_id,
+                "source_type": source.source_type,
+                "source_identifier": source.source_identifier,
                 "reason": command.reason,
             },
         )
@@ -195,20 +218,20 @@ class ManagementAllocationVersionService:
         metadata = deepcopy(command.metadata or {})
         version = (
             ManagementAllocationVersion.objects.select_for_update()
-            .select_related("period", "pool")
+            .select_related("period", "pool", "source_project")
             .get(pk=command.version.pk)
         )
         if version.status != VersionStatus.DRAFT:
             raise ValueError("Only draft management allocation versions can be approved.")
         if version.period.status == PeriodStatus.ARCHIVED:
             raise ValueError("Archived management allocation periods cannot be approved.")
-        if not version.pool.is_active:
+        if version.pool_id and not version.pool.is_active:
             raise ValueError("Inactive management cost pools cannot be approved.")
         ManagementAllocationVersionService._validate_approval_balance(version)
 
         previous_versions = (
             ManagementAllocationVersion.objects.select_for_update()
-            .filter(period=version.period, pool=version.pool, status=VersionStatus.APPROVED)
+            .filter(**ManagementAllocationVersionService._source_filter_from_version(version), status=VersionStatus.APPROVED)
             .exclude(pk=version.pk)
         )
         for previous in previous_versions:
@@ -249,6 +272,8 @@ class ManagementAllocationVersionService:
         if "source_amount" not in (version.metadata or {}):
             return
         entries = list(version.entries.all())
+        if version.source_project_id and any(entry.project_id == version.source_project_id for entry in entries):
+            raise ValueError("Management allocation source Project cannot also be a target Project.")
         source_amount = Decimal(str((version.metadata or {}).get("source_amount", "0")))
         if not entries:
             raise ValueError("Management allocation version cannot be approved without entries.")
@@ -256,6 +281,31 @@ class ManagementAllocationVersionService:
             raise ValueError("Management allocation version amounts do not balance.")
         if source_amount != ZERO and sum(entry.percentage for entry in entries) != ONE_HUNDRED:
             raise ValueError("Management allocation version percentages do not balance.")
+
+    @staticmethod
+    def _source_filter(*, period, source_type, pool=None, source_project=None):
+        if source_type == AllocationSourceType.COST_POOL:
+            if not pool:
+                raise ValueError("Cost pool allocation versions require a pool.")
+            return {"period": period, "source_type": AllocationSourceType.COST_POOL, "pool": pool}
+        if source_type == AllocationSourceType.WORKSPACE_PROJECT:
+            if not source_project:
+                raise ValueError("Workspace Project allocation versions require a source Project.")
+            return {
+                "period": period,
+                "source_type": AllocationSourceType.WORKSPACE_PROJECT,
+                "source_project": source_project,
+            }
+        raise ValueError("Unsupported management allocation source type.")
+
+    @staticmethod
+    def _source_filter_from_version(version):
+        return ManagementAllocationVersionService._source_filter(
+            period=version.period,
+            source_type=version.source_type,
+            pool=version.pool,
+            source_project=version.source_project,
+        )
 
 
 class ManagementAllocationDraftService:
@@ -271,7 +321,7 @@ class ManagementAllocationDraftService:
         input_entries = deepcopy(command.entries or [])
         version = (
             ManagementAllocationVersion.objects.select_for_update()
-            .select_related("period", "pool")
+            .select_related("period", "pool", "source_project")
             .get(pk=command.version.pk)
         )
         if version.status != VersionStatus.DRAFT:
@@ -286,6 +336,8 @@ class ManagementAllocationDraftService:
 
         source_amount = Decimal(str((version.metadata or {}).get("source_amount", "0")))
         project_ids = [int(item["project_id"]) for item in input_entries]
+        if version.source_project_id and version.source_project_id in project_ids:
+            raise ValueError("Management allocation source Project cannot also be a target Project.")
         if len(project_ids) != len(set(project_ids)):
             raise ValueError("Management allocation draft cannot contain duplicate Projects.")
         projects = list(
@@ -422,15 +474,16 @@ class ManagementAllocationProposalService:
     @transaction.atomic
     def generate(self, command):
         metadata = deepcopy(command.metadata or {})
-        pool = ManagementCostPool.objects.select_for_update().get(pk=command.pool.pk)
         self._validate_period_input(command.year, command.month)
-        if not pool.is_active:
+        source_type, pool, source_project = self._source(command)
+        organization = pool.organization if pool else source_project.organization
+        if pool and not pool.is_active:
             raise ValueError("Inactive management cost pools cannot generate allocation proposals.")
         if not command.project_ids:
             raise ValueError("Management allocation proposal requires at least one selected project.")
 
         period, _created = ManagementAllocationPeriod.objects.select_for_update().get_or_create(
-            organization=pool.organization,
+            organization=organization,
             year=command.year,
             month=command.month,
             defaults={"status": PeriodStatus.DRAFT},
@@ -438,19 +491,32 @@ class ManagementAllocationProposalService:
         if period.status == PeriodStatus.ARCHIVED:
             raise ValueError("Archived management allocation periods cannot receive new proposals.")
 
-        projects = self._selected_projects(pool.organization, command.project_ids)
+        projects = self._selected_projects(organization, command.project_ids)
+        if source_project and source_project.id in {project.id for project in projects}:
+            raise ValueError("A source Project cannot also be selected as a target Project.")
         strategy, strategy_rule = self._resolve_strategy(pool, command.strategy)
         warnings = []
         if ManagementAllocationVersion.objects.filter(
-            period=period,
-            pool=pool,
+            **ManagementAllocationVersionService._source_filter(
+                period=period,
+                source_type=source_type,
+                pool=pool,
+                source_project=source_project,
+            ),
             status=VersionStatus.DRAFT,
         ).exists():
             warnings.append({"code": "existing_draft_version", "message": "Another draft version already exists."})
 
         period_start = date(command.year, command.month, 1)
         period_end = date(command.year, command.month, monthrange(command.year, command.month)[1])
-        source_amount, source_origin, source_diagnostics = self._source_amount(command, pool, period_start, period_end)
+        source_amount, source_origin, source_diagnostics, source_basis, source_currency = self._source_amount(
+            command,
+            source_type,
+            pool,
+            source_project,
+            period_start,
+            period_end,
+        )
         if source_amount == ZERO:
             warnings.append({"code": "zero_source_amount", "message": "Source amount is zero."})
 
@@ -472,8 +538,18 @@ class ManagementAllocationProposalService:
 
         version_metadata = {
             "strategy": strategy,
+            "source_type": source_type,
+            "source_identifier": self._source_identifier(source_type, pool, source_project),
+            "source_display_name": self._source_display_name(source_type, pool, source_project),
+            "source_amount_basis": source_basis,
             "source_amount_origin": source_origin,
             "source_amount": str(source_amount),
+            "source_currency": source_currency,
+            "source_period_start": period_start.isoformat(),
+            "source_period_end": period_end.isoformat(),
+            "source_project_id": source_project.id if source_project else None,
+            "source_project_code": source_project.code if source_project else "",
+            "source_project_name": source_project.name if source_project else "",
             "selected_project_ids": [project.id for project in projects],
             "selected_project_codes": [project.code for project in projects],
             "generated_at": timezone.now().isoformat(),
@@ -486,11 +562,17 @@ class ManagementAllocationProposalService:
             },
             "input_metadata": metadata,
         }
-        next_version_number = self._next_version_number(period, pool)
+        next_version_number = self._next_version_number(period, source_type, pool=pool, source_project=source_project)
         version = self.allocation_version_service.create_version(
             CreateManagementAllocationVersionCommand(
                 period=period,
                 pool=pool,
+                source_type=source_type,
+                source_project=source_project,
+                source_amount_basis=source_basis,
+                source_currency=source_currency,
+                source_period_start=period_start,
+                source_period_end=period_end,
                 version_number=next_version_number,
                 created_by=command.actor,
                 reason=command.reason,
@@ -513,8 +595,11 @@ class ManagementAllocationProposalService:
         self.validate_proposal(version, source_amount=source_amount)
 
         audit_metadata = {
-            "pool_id": pool.id,
-            "pool_name": pool.name,
+            "pool_id": pool.id if pool else None,
+            "pool_name": pool.name if pool else "",
+            "source_type": source_type,
+            "source_identifier": self._source_identifier(source_type, pool, source_project),
+            "source_display_name": self._source_display_name(source_type, pool, source_project),
             "period": period.period_label,
             "version_number": version.version_number,
             "strategy": strategy,
@@ -528,8 +613,8 @@ class ManagementAllocationProposalService:
         }
         self.audit_service.record(
             event_type="management_allocation_proposal_generated",
-            message=f"Management allocation proposal generated for {pool.name} {period.period_label}",
-            organization=pool.organization,
+            message=f"Management allocation proposal generated for {version.source_display_name} {period.period_label}",
+            organization=organization,
             actor=command.actor,
             object_type="ManagementAllocationVersion",
             object_id=str(version.id),
@@ -548,6 +633,10 @@ class ManagementAllocationProposalService:
             project_count=len(projects),
             warnings=warnings,
             created=True,
+            source_type=source_type,
+            source_project=source_project,
+            source_amount_basis=source_basis,
+            source_currency=source_currency,
             metadata={
                 "source_amount_origin": source_origin,
                 "source_diagnostics": source_diagnostics,
@@ -564,6 +653,8 @@ class ManagementAllocationProposalService:
         for entry in entries:
             if entry.project.organization_id != version.period.organization_id:
                 raise ValueError("Management allocation proposal contains a project from another organization.")
+            if version.source_project_id and entry.project_id == version.source_project_id:
+                raise ValueError("Management allocation source Project cannot also be a target Project.")
             if entry.percentage < ZERO or entry.percentage > ONE_HUNDRED:
                 raise ValueError("Management allocation proposal contains invalid percentages.")
         if sum(entry.amount for entry in entries) != source_amount:
@@ -572,6 +663,37 @@ class ManagementAllocationProposalService:
             raise ValueError("Management allocation proposal percentages do not total 100.")
         if not version.metadata.get("source_amount_origin"):
             raise ValueError("Management allocation proposal lacks source amount traceability metadata.")
+
+    @staticmethod
+    def _source(command):
+        source_type = command.source_type or (
+            AllocationSourceType.WORKSPACE_PROJECT if command.source_project else AllocationSourceType.COST_POOL
+        )
+        if source_type == AllocationSourceType.COST_POOL:
+            if not command.pool:
+                raise ValueError("Cost pool allocation source requires a pool.")
+            if command.source_project:
+                raise ValueError("Cost pool allocation source cannot also include a source Project.")
+            return source_type, ManagementCostPool.objects.select_for_update().get(pk=command.pool.pk), None
+        if source_type == AllocationSourceType.WORKSPACE_PROJECT:
+            if not command.source_project:
+                raise ValueError("Workspace Project allocation source requires a source Project.")
+            if command.pool:
+                raise ValueError("Workspace Project allocation source cannot also include a cost pool.")
+            return source_type, None, Project.objects.select_for_update().get(pk=command.source_project.pk)
+        raise ValueError("Unsupported management allocation source type.")
+
+    @staticmethod
+    def _source_identifier(source_type, pool, source_project):
+        if source_type == AllocationSourceType.WORKSPACE_PROJECT:
+            return f"project:{source_project.id}"
+        return f"pool:{pool.id}"
+
+    @staticmethod
+    def _source_display_name(source_type, pool, source_project):
+        if source_type == AllocationSourceType.WORKSPACE_PROJECT:
+            return f"{source_project.code} {source_project.name}"
+        return pool.name
 
     @staticmethod
     def _validate_period_input(year, month):
@@ -596,19 +718,59 @@ class ManagementAllocationProposalService:
             if command_strategy not in AllocationStrategy.values:
                 raise ValueError("Unsupported management allocation strategy.")
             return command_strategy, None
+        if not pool:
+            return AllocationStrategy.EQUAL, None
         rule = pool.allocation_rules.filter(is_active=True).order_by("id").first()
         strategy = rule.strategy if rule else pool.default_strategy
         if strategy not in AllocationStrategy.values:
             raise ValueError("Unsupported management allocation strategy.")
         return strategy, rule
 
-    @staticmethod
-    def _source_amount(command, pool, period_start, period_end):
+    def _source_amount(self, command, source_type, pool, source_project, period_start, period_end):
         if command.source_amount is not None:
             return (
                 Decimal(str(command.source_amount)),
                 "manual",
                 {"manually_supplied": True},
+                AllocationSourceAmountBasis.MANUAL,
+                command.source_currency or "",
+            )
+
+        if source_type == AllocationSourceType.WORKSPACE_PROJECT:
+            basis = command.source_amount_basis or AllocationSourceAmountBasis.PROJECT_DIRECT_COST
+            if basis != AllocationSourceAmountBasis.PROJECT_DIRECT_COST:
+                raise ValueError("Workspace Project allocation source currently supports project_direct_cost only.")
+            result = self.project_financial_aggregation_service.aggregate(
+                AggregateProjectFinancialsCommand(
+                    project=source_project,
+                    period_start=period_start,
+                    period_end=period_end,
+                    currency=command.source_currency or None,
+                    metadata={"source": "management_allocation_workspace_project_source"},
+                )
+            )
+            if result.data_quality_status == "mixed_currency" and not command.source_currency:
+                raise ValueError("Workspace Project source has mixed currency data; choose an explicit source currency.")
+            return (
+                Decimal(str(result.total_cost)),
+                "workspace_project_direct_cost",
+                {
+                    "source_project_id": source_project.id,
+                    "source_project_code": source_project.code,
+                    "basis": basis,
+                    "direct_cost": str(result.total_cost),
+                    "revenue": str(result.revenue),
+                    "result": str(result.result),
+                    "currency": result.currency or command.source_currency or "",
+                    "data_quality_status": result.data_quality_status,
+                    "warnings": list(result.warnings),
+                    "allocation_count": result.allocation_count,
+                    "source_batch_count": result.source_batch_count,
+                    "source_entry_count": result.source_entry_count,
+                    "semantics": "ProjectFinancialAggregationResult.total_cost for exact source month.",
+                },
+                basis,
+                command.source_currency or result.currency or "",
             )
 
         account_codes = list(
@@ -619,6 +781,8 @@ class ManagementAllocationProposalService:
                 ZERO,
                 "gl_pool_accounts",
                 {"mapped_account_codes": [], "entry_count": 0, "missing_active_pool_account_mappings": True},
+                AllocationSourceAmountBasis.MAPPED_GL_ACCOUNTS,
+                command.source_currency or "",
             )
         entries = AccountingGLEntry.objects.filter(
             organization=pool.organization,
@@ -638,6 +802,8 @@ class ManagementAllocationProposalService:
                 "entry_count": entries.count(),
                 "amount_semantics": "debit_amount_minus_credit_amount",
             },
+            AllocationSourceAmountBasis.MAPPED_GL_ACCOUNTS,
+            command.source_currency or "",
         )
 
     def _weights_for_strategy(
@@ -832,10 +998,16 @@ class ManagementAllocationProposalService:
         }
 
     @staticmethod
-    def _next_version_number(period, pool):
-        list(ManagementAllocationVersion.objects.select_for_update().filter(period=period, pool=pool))
+    def _next_version_number(period, source_type, pool=None, source_project=None):
+        source_filter = ManagementAllocationVersionService._source_filter(
+            period=period,
+            source_type=source_type,
+            pool=pool,
+            source_project=source_project,
+        )
+        list(ManagementAllocationVersion.objects.select_for_update().filter(**source_filter))
         latest = (
-            ManagementAllocationVersion.objects.filter(period=period, pool=pool)
+            ManagementAllocationVersion.objects.filter(**source_filter)
             .aggregate(max_version=Max("version_number"))
             .get("max_version")
             or 0

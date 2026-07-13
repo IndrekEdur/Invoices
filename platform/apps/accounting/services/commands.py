@@ -328,6 +328,7 @@ class ManagementAllocationBreakdownItem:
     percentage_of_total: object
     source_version: str
     approved_at: object
+    direction: str = "in"
     metadata: dict = field(default_factory=dict)
 
 
@@ -340,6 +341,9 @@ class ManagementFinancialMonth:
     direct_revenue: object
     direct_cost: object
     allocated_management_cost: object
+    management_cost_allocated_in: object
+    management_cost_allocated_out: object
+    net_management_allocation: object
     management_total_cost: object
     accounting_result: object
     management_result: object
@@ -360,6 +364,9 @@ class ManagementFinancialResult:
     direct_revenue: object
     direct_cost: object
     allocated_management_cost: object
+    management_cost_allocated_in: object
+    management_cost_allocated_out: object
+    net_management_allocation: object
     management_total_cost: object
     accounting_result: object
     management_result: object
@@ -411,7 +418,13 @@ class CreateManagementAllocationRuleCommand:
 @dataclass(frozen=True)
 class CreateManagementAllocationVersionCommand:
     period: object
-    pool: object
+    pool: object = None
+    source_type: str = "cost_pool"
+    source_project: object = None
+    source_amount_basis: str = "mapped_gl_accounts"
+    source_currency: str = ""
+    source_period_start: object = None
+    source_period_end: object = None
     version_number: int | None = None
     created_by: object = None
     reason: str = ""
@@ -429,10 +442,14 @@ class ApproveManagementAllocationVersionCommand:
 
 @dataclass(frozen=True)
 class GenerateManagementAllocationProposalCommand:
-    pool: object
     year: int
     month: int
     project_ids: list
+    pool: object = None
+    source_type: str = "cost_pool"
+    source_project: object = None
+    source_amount_basis: str | None = None
+    source_currency: str = ""
     strategy: str | None = None
     source_amount: object = None
     project_manager_id: object = None
@@ -457,6 +474,10 @@ class GenerateManagementAllocationProposalResult:
     project_count: int
     warnings: list
     created: bool
+    source_type: str = "cost_pool"
+    source_project: object = None
+    source_amount_basis: str = ""
+    source_currency: str = ""
     metadata: dict = field(default_factory=dict)
 
 

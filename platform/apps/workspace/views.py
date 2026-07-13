@@ -32,6 +32,7 @@ from apps.accounting.models import (
     AccountingAccountClassification,
     AccountingIntegration,
     AccountingSyncState,
+    AllocationSourceType,
     AllocationStrategy,
     ManagementAllocationVersion,
     ManagementCostPool,
@@ -297,13 +298,32 @@ class ManagementAllocationCreateView(WorkspacePageView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context.update(ManagementAllocationContextBuilder.build_create(month=self.request.GET.get("month", "")))
+        context.update(
+            ManagementAllocationContextBuilder.build_create(
+                month=self.request.GET.get("month", ""),
+                source_type=self.request.GET.get("source_type", ""),
+                source_project_id=self.request.GET.get("source_project_id", ""),
+                source_currency=self.request.GET.get("source_currency", ""),
+            )
+        )
         return context
 
     def post(self, request, *args, **kwargs):
-        pool = ManagementCostPool.objects.filter(id=request.POST.get("pool_id"), is_active=True).first()
-        if not pool:
+        source_type = request.POST.get("source_type") or AllocationSourceType.COST_POOL
+        pool = None
+        source_project = None
+        if source_type == AllocationSourceType.COST_POOL:
+            pool = ManagementCostPool.objects.filter(id=request.POST.get("pool_id"), is_active=True).first()
+        elif source_type == AllocationSourceType.WORKSPACE_PROJECT:
+            source_project = Project.objects.filter(id=request.POST.get("source_project_id")).first()
+        else:
+            messages.error(request, "Choose a valid management allocation source type.")
+            return self.render_to_response(self.get_context_data())
+        if source_type == AllocationSourceType.COST_POOL and not pool:
             messages.error(request, "Choose an active management cost pool.")
+            return self.render_to_response(self.get_context_data())
+        if source_type == AllocationSourceType.WORKSPACE_PROJECT and not source_project:
+            messages.error(request, "Choose a source Project.")
             return self.render_to_response(self.get_context_data())
         project_ids = request.POST.getlist("project_ids")
         if not project_ids:
@@ -313,10 +333,14 @@ class ManagementAllocationCreateView(WorkspacePageView):
             year, month = self._parse_month(request.POST.get("month"))
             result = ManagementAllocationProposalService().generate(
                 GenerateManagementAllocationProposalCommand(
-                    pool=pool,
                     year=year,
                     month=month,
                     project_ids=[int(project_id) for project_id in project_ids],
+                    pool=pool,
+                    source_type=source_type,
+                    source_project=source_project,
+                    source_amount_basis=request.POST.get("source_amount_basis") or None,
+                    source_currency=request.POST.get("source_currency", "").strip().upper(),
                     strategy=request.POST.get("strategy") or None,
                     source_amount=self._source_amount(request),
                     project_manager_id=request.POST.get("project_manager_id") or None,
@@ -352,6 +376,24 @@ class ManagementAllocationCreateView(WorkspacePageView):
             if key.startswith(prefix) and value not in {"", None}:
                 values[int(key.replace(prefix, ""))] = value
         return values or None
+
+
+class ManagementAllocationSourcePreviewView(WorkspacePageView):
+    template_name = "workspace/management_allocation_source_preview.html"
+    page_title = "Allocation Source Preview"
+    section = "management_allocations"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(
+            ManagementAllocationContextBuilder.build_create(
+                month=self.request.GET.get("month", ""),
+                source_type=self.request.GET.get("source_type", AllocationSourceType.WORKSPACE_PROJECT),
+                source_project_id=self.request.GET.get("source_project_id", ""),
+                source_currency=self.request.GET.get("source_currency", ""),
+            )
+        )
+        return context
 
 
 class ManagementAllocationDetailView(WorkspacePageView):
