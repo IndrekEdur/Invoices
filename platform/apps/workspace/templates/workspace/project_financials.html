@@ -114,22 +114,77 @@
     </section>
 
     <section class="space-y-4">
-        {% include "workspace/partials/components/section_header.html" with title="Monthly Trend" body="Compact server-rendered bars for revenue, total cost and result. The table below remains the source-readable view." %}
-        <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div class="space-y-4">
-                {% for row in trend_rows %}
-                    <div class="grid gap-2 md:grid-cols-[100px_1fr]">
-                        <div class="text-sm font-semibold text-slate-700">{{ row.month.period_start|date:"Y-m" }}</div>
-                        <div class="space-y-1">
-                            <div class="h-2 rounded bg-blue-100"><div class="h-2 rounded bg-blue-500" style="width: {{ row.revenue_width }}%"></div></div>
-                            <div class="h-2 rounded bg-slate-100"><div class="h-2 rounded bg-slate-500" style="width: {{ row.cost_width }}%"></div></div>
-                            <div class="h-2 rounded {% if row.result_status == 'danger' %}bg-red-100{% else %}bg-green-100{% endif %}"><div class="h-2 rounded {% if row.result_status == 'danger' %}bg-red-500{% else %}bg-green-500{% endif %}" style="width: {{ row.result_width }}%"></div></div>
+        {% include "workspace/partials/components/section_header.html" with title="Monthly Trend" body="Vertical monthly comparison of revenue, total cost and result. The table below remains the exact numeric source." %}
+        <div class="financial-chart rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            {% if warnings %}
+                <div class="mb-5 rounded-xl border border-orange-200 bg-orange-50 px-4 py-3 text-sm font-medium text-orange-900">
+                    Data-quality warnings apply to this chart:
+                    {% for warning in warnings %}<span class="ml-1">{{ warning }}</span>{% endfor %}
+                </div>
+            {% endif %}
+            {% if monthly_chart.has_activity %}
+                <div class="mb-5 flex flex-wrap items-center justify-between gap-4">
+                    <div class="flex flex-wrap gap-3 text-xs font-semibold uppercase tracking-wide text-slate-600" aria-label="Financial chart legend">
+                        <span class="inline-flex items-center gap-2"><span class="h-3 w-3 rounded bg-blue-500"></span>Revenue</span>
+                        <span class="inline-flex items-center gap-2"><span class="h-3 w-3 rounded bg-slate-500"></span>Cost</span>
+                        <span class="inline-flex items-center gap-2"><span class="h-3 w-3 rounded bg-green-500"></span>Result</span>
+                        <span class="inline-flex items-center gap-2"><span class="h-3 w-3 rounded bg-red-500"></span>Negative result</span>
+                    </div>
+                    <div class="text-xs font-medium text-slate-500">Scale max: {{ monthly_chart.max_absolute_display }}</div>
+                </div>
+                <div class="overflow-x-auto">
+                    <div class="financial-chart__plot relative min-h-80 min-w-max border-l border-b border-slate-200 px-4 pt-4">
+                        <div class="financial-chart__zero-line absolute left-0 right-0 border-t border-slate-400" style="top: {{ monthly_chart.zero_line_percent }}%"></div>
+                        <div class="relative z-10 flex min-h-72 items-stretch gap-6">
+                            {% for chart_month in monthly_chart.months %}
+                                <div class="financial-chart__month flex min-w-28 flex-col items-center justify-end gap-3" aria-label="{{ chart_month.label }} financial bars">
+                                    <div class="grid h-64 w-full grid-cols-3 gap-2">
+                                        <div class="financial-chart__bar-slot flex flex-col">
+                                            <div class="flex items-end justify-center" style="height: {{ monthly_chart.positive_area_percent }}%">
+                                                {% if not chart_month.revenue.is_negative %}
+                                                    <div class="financial-chart__bar financial-chart__bar--revenue w-5 rounded-t bg-blue-500" style="height: {{ chart_month.revenue.height_percent_display }}%" title="{{ chart_month.revenue.aria_label }}" aria-label="{{ chart_month.revenue.aria_label }}"></div>
+                                                {% endif %}
+                                            </div>
+                                            <div class="flex items-start justify-center" style="height: {{ monthly_chart.negative_area_percent }}%">
+                                                {% if chart_month.revenue.is_negative %}
+                                                    <div class="financial-chart__bar financial-chart__bar--revenue w-5 rounded-b bg-blue-500" style="height: {{ chart_month.revenue.height_percent_display }}%" title="{{ chart_month.revenue.aria_label }}" aria-label="{{ chart_month.revenue.aria_label }}"></div>
+                                                {% endif %}
+                                            </div>
+                                        </div>
+                                        <div class="financial-chart__bar-slot flex flex-col">
+                                            <div class="flex items-end justify-center" style="height: {{ monthly_chart.positive_area_percent }}%">
+                                                {% if not chart_month.cost.is_negative %}
+                                                    <div class="financial-chart__bar financial-chart__bar--cost w-5 rounded-t bg-slate-500" style="height: {{ chart_month.cost.height_percent_display }}%" title="{{ chart_month.cost.aria_label }}" aria-label="{{ chart_month.cost.aria_label }}"></div>
+                                                {% endif %}
+                                            </div>
+                                            <div class="flex items-start justify-center" style="height: {{ monthly_chart.negative_area_percent }}%">
+                                                {% if chart_month.cost.is_negative %}
+                                                    <div class="financial-chart__bar financial-chart__bar--cost w-5 rounded-b bg-slate-500" style="height: {{ chart_month.cost.height_percent_display }}%" title="{{ chart_month.cost.aria_label }}" aria-label="{{ chart_month.cost.aria_label }}"></div>
+                                                {% endif %}
+                                            </div>
+                                        </div>
+                                        <div class="financial-chart__bar-slot flex flex-col">
+                                            <div class="flex items-end justify-center" style="height: {{ monthly_chart.positive_area_percent }}%">
+                                                {% if not chart_month.result.is_negative %}
+                                                    <div class="financial-chart__bar {{ chart_month.result.css_class }} w-5 rounded-t bg-green-500" style="height: {{ chart_month.result.height_percent_display }}%" title="{{ chart_month.result.aria_label }}" aria-label="{{ chart_month.result.aria_label }}"></div>
+                                                {% endif %}
+                                            </div>
+                                            <div class="flex items-start justify-center" style="height: {{ monthly_chart.negative_area_percent }}%">
+                                                {% if chart_month.result.is_negative %}
+                                                    <div class="financial-chart__bar {{ chart_month.result.css_class }} w-5 rounded-b bg-red-500" style="height: {{ chart_month.result.height_percent_display }}%" title="{{ chart_month.result.aria_label }}" aria-label="{{ chart_month.result.aria_label }}"></div>
+                                                {% endif %}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="whitespace-nowrap text-xs font-semibold text-slate-600">{{ chart_month.label }}</div>
+                                </div>
+                            {% endfor %}
                         </div>
                     </div>
-                {% empty %}
-                    <p class="text-sm text-slate-600">No monthly trend data for this period.</p>
-                {% endfor %}
-            </div>
+                </div>
+            {% else %}
+                {% include "workspace/partials/components/empty_state.html" with title="No monthly financial activity found for the selected period." body="The chart appears after synchronized GL allocations produce non-zero monthly values." %}
+            {% endif %}
         </div>
     </section>
 

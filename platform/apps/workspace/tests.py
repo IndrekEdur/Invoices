@@ -671,6 +671,148 @@ class ProjectFinancialOverviewTests(TestCase):
         self.assertNotContains(response, "999.000000")
         self.assertContains(response, "2026-06")
 
+    def test_monthly_vertical_chart_renders_for_one_month(self):
+        _organization, _integration, project = self._classified_project()
+
+        response = self.client.get(
+            reverse("workspace:project_financials", args=[project.id]),
+            {"period": "custom", "start": "2026-06-01", "end": "2026-06-30"},
+        )
+
+        self.assertContains(response, "financial-chart")
+        self.assertContains(response, "financial-chart__zero-line")
+        self.assertContains(response, "2026-06 financial bars")
+        self.assertContains(response, "Revenue")
+        self.assertContains(response, "Cost")
+        self.assertContains(response, "Result")
+        self.assertContains(response, "Revenue - 1000.000000 EUR")
+        self.assertContains(response, "Cost - 250.000000 EUR")
+        self.assertContains(response, "Result - 750.000000 EUR")
+
+    def test_monthly_vertical_chart_renders_multiple_months_chronologically(self):
+        _organization, integration, project = self._classified_project()
+        self._allocation(project, integration, "3000", "Revenue", "-200.000000", "2026-05-01", "revenue-may")
+        self._allocation(project, integration, "4002", "Materials", "50.000000", "2026-07-01", "materials-july")
+
+        response = self.client.get(
+            reverse("workspace:project_financials", args=[project.id]),
+            {"period": "custom", "start": "2026-05-01", "end": "2026-07-31"},
+        )
+        content = response.content.decode()
+
+        self.assertLess(content.index("2026-05 financial bars"), content.index("2026-06 financial bars"))
+        self.assertLess(content.index("2026-06 financial bars"), content.index("2026-07 financial bars"))
+        self.assertContains(response, "financial-chart__bar--revenue")
+        self.assertContains(response, "financial-chart__bar--cost")
+        self.assertContains(response, "financial-chart__bar--result-positive")
+
+    def test_monthly_vertical_chart_uses_shared_scaling(self):
+        _organization, _integration, project = self._classified_project()
+
+        response = self.client.get(
+            reverse("workspace:project_financials", args=[project.id]),
+            {"period": "custom", "start": "2026-06-01", "end": "2026-06-30"},
+        )
+
+        self.assertContains(response, "Scale max: 1000.000000 EUR")
+        self.assertContains(response, 'style="height: 100.00%"', html=False)
+        self.assertContains(response, 'style="height: 25.00%"', html=False)
+        self.assertContains(response, 'style="height: 75.00%"', html=False)
+
+    def test_monthly_vertical_chart_negative_result_extends_below_zero(self):
+        organization = create_organization()
+        project = create_project(organization, code="26126", name="Loss project")
+        integration = create_merit_integration(organization)
+        AccountingAccountClassification.objects.create(
+            organization=organization,
+            integration=integration,
+            account_code="4002",
+            account_name="Materials",
+            category=AccountingAccountClassification.Category.MATERIAL_COST,
+            reporting_sign="1",
+        )
+        self._allocation(project, integration, "4002", "Materials", "500.000000", "2026-06-15", "loss-materials")
+
+        response = self.client.get(
+            reverse("workspace:project_financials", args=[project.id]),
+            {"period": "custom", "start": "2026-06-01", "end": "2026-06-30"},
+        )
+
+        self.assertContains(response, "financial-chart__bar--result-negative")
+        self.assertContains(response, "Result - -500.000000 EUR")
+        self.assertContains(response, 'style="top: 50%"', html=False)
+
+    def test_monthly_vertical_chart_zero_values_have_accessible_labels(self):
+        _organization, integration, project = self._classified_project()
+        self._allocation(project, integration, "4002", "Materials", "0.000000", "2026-07-01", "zero")
+
+        response = self.client.get(
+            reverse("workspace:project_financials", args=[project.id]),
+            {"period": "custom", "start": "2026-06-01", "end": "2026-07-31"},
+        )
+
+        self.assertContains(response, "Revenue - 0.000000 EUR")
+        self.assertContains(response, "Cost - 0.000000 EUR")
+        self.assertContains(response, "Result - 0.000000 EUR")
+
+    def test_monthly_vertical_chart_all_zero_or_empty_state(self):
+        organization = create_organization()
+        project = create_project(organization, code="26127", name="No monthly activity")
+
+        response = self.client.get(reverse("workspace:project_financials", args=[project.id]))
+
+        self.assertContains(response, "No monthly financial activity found for the selected period.")
+
+    def test_monthly_vertical_chart_mixed_currency_warning_remains(self):
+        _organization, integration, project = self._classified_project()
+        self._allocation(project, integration, "4002", "Materials", "100.000000", "2026-07-01", "usd", currency="USD")
+
+        response = self.client.get(
+            reverse("workspace:project_financials", args=[project.id]),
+            {"period": "custom", "start": "2026-06-01", "end": "2026-07-31"},
+        )
+
+        self.assertContains(response, "Data-quality warnings apply to this chart")
+        self.assertContains(response, "mixed_currency")
+
+    def test_monthly_table_still_renders_below_chart(self):
+        _organization, _integration, project = self._classified_project()
+
+        response = self.client.get(
+            reverse("workspace:project_financials", args=[project.id]),
+            {"period": "custom", "start": "2026-06-01", "end": "2026-06-30"},
+        )
+
+        self.assertContains(response, "Monthly Financials")
+        self.assertContains(response, "<th class=\"px-4 py-3 text-left\">Month</th>", html=False)
+
+    def test_monthly_vertical_chart_get_does_not_call_api_or_write_database(self):
+        _organization, _integration, project = self._classified_project()
+        counts = (
+            AccountingGLBatch.objects.count(),
+            AccountingGLEntry.objects.count(),
+            AccountingGLAllocation.objects.count(),
+            AuditEvent.objects.count(),
+        )
+
+        with patch.object(MeritAPIClient, "request") as request_mock:
+            response = self.client.get(
+                reverse("workspace:project_financials", args=[project.id]),
+                {"period": "custom", "start": "2026-06-01", "end": "2026-06-30"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        request_mock.assert_not_called()
+        self.assertEqual(
+            counts,
+            (
+                AccountingGLBatch.objects.count(),
+                AccountingGLEntry.objects.count(),
+                AccountingGLAllocation.objects.count(),
+                AuditEvent.objects.count(),
+            ),
+        )
+
     def test_no_data_state_and_mixed_currency_warning(self):
         _organization, integration, project = self._classified_project()
         empty_project = create_project(project.organization, code="26125", name="Empty")

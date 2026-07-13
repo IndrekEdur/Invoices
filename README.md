@@ -62,6 +62,8 @@ GL Account Classification Settings at `/workspace/settings/account-classificatio
 
 Project Financial Overview UI at `/workspace/projects/<id>/financials/` shows monthly and period-based revenue, cost, result, margin, data-quality warnings, unclassified account impact, sync status, and read-only allocation drill-downs from local synchronized GL allocations. Invoice/payment reporting, alerts, snapshots, and report distribution are not implemented yet.
 
+Project Financial Overview includes a server-rendered vertical monthly revenue/cost/result chart. The chart uses already aggregated monthly values, keeps the numeric monthly table below it, and does not call Merit while rendering.
+
 Read-only project financial summary example:
 
 ```powershell

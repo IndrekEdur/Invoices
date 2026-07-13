@@ -74,6 +74,7 @@ class ProjectFinancialContextBuilder:
             "other_breakdown": cls._category_rows(result, OTHER_CATEGORIES),
             "months_newest_first": cls._month_rows(result),
             "trend_rows": cls._trend_rows(result),
+            "monthly_chart": cls._monthly_chart(result),
             "warnings": cls._warnings(result, include_overhead, currency),
             "unclassified_accounts": cls._unclassified_accounts(project, period["start"], period["end"], currency),
             "sync_context": cls._sync_context(project),
@@ -247,6 +248,102 @@ class ProjectFinancialContextBuilder:
             )
         return rows
 
+    @classmethod
+    def _monthly_chart(cls, result):
+        months = list(result.months)
+        values = []
+        for month in months:
+            values.extend([month.revenue, month.total_cost, month.result])
+        max_absolute = max([abs(value or ZERO) for value in values] + [ZERO])
+        has_activity = bool(months) and any((value or ZERO) != ZERO for value in values)
+        has_positive = any((value or ZERO) > ZERO for value in values)
+        has_negative = any((value or ZERO) < ZERO for value in values)
+        positive_area_percent = Decimal("50") if has_positive and has_negative else (Decimal("100") if has_positive else ZERO)
+        negative_area_percent = Decimal("50") if has_positive and has_negative else (Decimal("100") if has_negative else ZERO)
+
+        return {
+            "max_absolute_value": max_absolute,
+            "max_absolute_display": cls._money_with_currency(max_absolute, result.currency),
+            "has_activity": has_activity,
+            "has_positive": has_positive,
+            "has_negative": has_negative,
+            "positive_area_percent": int(positive_area_percent),
+            "negative_area_percent": int(negative_area_percent),
+            "zero_line_percent": int(positive_area_percent),
+            "currency": result.currency,
+            "months": [
+                cls._monthly_chart_month(
+                    month,
+                    max_absolute=max_absolute,
+                    positive_area_percent=positive_area_percent,
+                    negative_area_percent=negative_area_percent,
+                    currency=result.currency,
+                )
+                for month in months
+            ],
+        }
+
+    @classmethod
+    def _monthly_chart_month(cls, month, *, max_absolute, positive_area_percent, negative_area_percent, currency):
+        return {
+            "label": month.period_start.strftime("%Y-%m"),
+            "month": month,
+            "revenue": cls._chart_bar(
+                "Revenue",
+                month.revenue,
+                max_absolute=max_absolute,
+                positive_area_percent=positive_area_percent,
+                negative_area_percent=negative_area_percent,
+                currency=currency,
+                css_class="financial-chart__bar--revenue",
+            ),
+            "cost": cls._chart_bar(
+                "Cost",
+                month.total_cost,
+                max_absolute=max_absolute,
+                positive_area_percent=positive_area_percent,
+                negative_area_percent=negative_area_percent,
+                currency=currency,
+                css_class="financial-chart__bar--cost",
+            ),
+            "result": cls._chart_bar(
+                "Result",
+                month.result,
+                max_absolute=max_absolute,
+                positive_area_percent=positive_area_percent,
+                negative_area_percent=negative_area_percent,
+                currency=currency,
+                css_class=(
+                    "financial-chart__bar--result-negative"
+                    if month.result < ZERO
+                    else "financial-chart__bar--result-positive"
+                ),
+            ),
+        }
+
+    @classmethod
+    def _chart_bar(cls, label, value, *, max_absolute, positive_area_percent, negative_area_percent, currency, css_class):
+        value = value or ZERO
+        is_negative = value < ZERO
+        area_percent = negative_area_percent if is_negative else positive_area_percent
+        height_percent = ZERO
+        if max_absolute:
+            height_percent = (abs(value) / max_absolute * area_percent).quantize(Decimal("0.01"))
+            if value != ZERO and height_percent < Decimal("2"):
+                height_percent = Decimal("2")
+        display = cls._money_with_currency(value, currency)
+        return {
+            "label": label,
+            "value": value,
+            "display": display,
+            "height_percent": height_percent,
+            "height_percent_display": f"{height_percent:.2f}",
+            "is_negative": is_negative,
+            "is_zero": value == ZERO,
+            "css_class": css_class,
+            "aria_label": f"{label} - {display}",
+        }
+
     @staticmethod
     def _warnings(result, include_overhead, currency):
         warnings = list(result.warnings)
@@ -360,6 +457,11 @@ class ProjectFinancialContextBuilder:
     @staticmethod
     def _money(value):
         return f"{Decimal(value or ZERO):.6f}"
+
+    @staticmethod
+    def _money_with_currency(value, currency):
+        amount = ProjectFinancialContextBuilder._money(value)
+        return f"{amount} {currency}" if currency else amount
 
     @staticmethod
     def _percent(value):
