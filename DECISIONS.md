@@ -435,3 +435,25 @@ Reason:
 - Reusing one proposal, review, approval, revision, and audit lifecycle keeps the feature understandable and avoids duplicate workflows.
 - Source identity and allocated-out reporting prevent source-project allocations from double-counting direct cost.
 - Keeping the source amount derived from the existing financial aggregation service preserves traceability and avoids new accounting logic in views or templates.
+
+## ADR-028: Financial Alerts Are Persisted Lifecycle Records
+
+Date: 2026-07-14
+
+Decision:
+
+- Financial alerts shall be persisted lifecycle records, not page-only calculations.
+- Financial facts shall come from existing financial services such as `ProjectFinancialAggregationService` and `ProjectManagementFinancialService`; alert detection must not duplicate financial formulas.
+- Alert policy is separate from financial fact.
+- Detection and evaluation are separate from notification and delivery.
+- The initial no-revenue alert means "No project revenue recorded for current month", not "No invoice issued".
+- Alerts are Organization-scoped and Project-scoped where applicable.
+- Historical alerts are retained and never hard-deleted.
+- Accounting and management bases remain explicit and traceable.
+
+Reason:
+
+- Alerts need lifecycle, deduplication, review, notification readiness, and operational accountability.
+- Financial reporting is high-risk, so formulas must remain centralized and auditable.
+- Invoice-issued assertions require future sales-invoice synchronization and must not be inferred from current GL revenue alone.
+- Notifications contain sensitive financial data and require explicit recipient policy before delivery.

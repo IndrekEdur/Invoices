@@ -32,6 +32,8 @@ Normal IMAP sync now uses incremental UID-based mailbox cursors. It resumes from
 
 `MANAGEMENT_COST_ALLOCATION_ARCHITECTURE.md` describes the internal management accounting layer for allocating indirect costs to projects without modifying Merit or synchronized GL cache data.
 
+`FINANCIAL_ALERT_ARCHITECTURE.md` describes how Workspace will persist, evaluate, review, resolve, and later distribute project financial alerts without duplicating financial calculation services.
+
 `FINANCIAL_GL_VERIFICATION_GUIDE.md` describes the safe manual workflow for verifying real Merit GL synchronization, idempotency, local cache quality, diagnostic totals, and project allocation links.
 
 `MERIT_VERIFICATION_GUIDE.md` describes the safe manual workflow for verifying real Merit credentials, connection checks, dimension sync, local cache updates, and project dimension creation.
@@ -81,6 +83,8 @@ Project Financial Overview UI at `/workspace/projects/<id>/financials/` shows mo
 Project Financial Overview includes a server-rendered vertical monthly revenue/cost/result chart. The chart uses already aggregated monthly values, keeps the numeric monthly table below it, and does not call Merit while rendering.
 
 Project Financials now formats monetary values with consistent two-decimal display, includes labeled Y-axis gridlines on the monthly chart, and keeps the Workspace sidebar visible while long desktop pages scroll.
+
+Financial Alert Architecture is planned for central `/workspace/alerts/`, Project-level alert visibility, and later weekly e-mail digests. Initial alerts will cover lifetime negative result, current-month negative result, and "No project revenue recorded for current month"; e-mail delivery is a later phase.
 
 Organization Financial Dashboard at `/workspace/financials/` compares selected-month project revenue, cost, result, margin and data quality from local synchronized GL allocations. Its project comparison chart renders Revenue, Cost and Result bars on one shared monetary scale, while margin remains a separate percentage indicator. It ranks projects by highest revenue by default, keeps completed and archived projects visible when they have financial activity, and avoids silently combining mixed-currency totals.
 
