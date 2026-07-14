@@ -8,6 +8,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from apps.communications.models import (
+    CommunicationIntelligenceCandidate,
     EmailAccount,
     EmailAnswerDraft,
     EmailAttachment,
@@ -3815,6 +3816,63 @@ class ProjectLinkReviewUITests(TestCase):
 
         link.refresh_from_db()
         self.assertEqual(link.status, EmailProjectLink.Status.SUGGESTED)
+
+
+class CommunicationCandidateReviewUITests(TestCase):
+    def _candidate(self):
+        organization = create_organization()
+        project = create_project(organization, code="27300", name="Candidate UI Project")
+        message = create_email_message(organization, subject="Candidate source email")
+        message.body_text = "This full body should not appear in candidate list rendering."
+        message.save(update_fields=["body_text"])
+        candidate = CommunicationIntelligenceCandidate.objects.create(
+            organization=organization,
+            project=project,
+            email_message=message,
+            email_thread=message.thread,
+            candidate_type=CommunicationIntelligenceCandidate.Type.TASK_REQUEST,
+            status=CommunicationIntelligenceCandidate.Status.PENDING_REVIEW,
+            title="Task request: Please provide drawings",
+            description="Please provide drawings",
+            confidence_score=Decimal("75.00"),
+            confidence_band=CommunicationIntelligenceCandidate.ConfidenceBand.HIGH,
+            extraction_method=CommunicationIntelligenceCandidate.ExtractionMethod.DETERMINISTIC_RULE,
+            source_evidence_summary="Please provide drawings",
+            evidence_excerpt="Please provide drawings",
+            evidence_fingerprint="f" * 64,
+            content_fingerprint="c" * 64,
+            extractor_version="communication-candidates-v1",
+            rule_version="deterministic-rules-v1",
+        )
+        return candidate
+
+    def test_candidate_list_route_returns_200(self):
+        candidate = self._candidate()
+
+        response = self.client.get(reverse("workspace:communication_candidates"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Candidate Review")
+        self.assertContains(response, candidate.title)
+        self.assertContains(response, candidate.project.code)
+        self.assertContains(response, "Please provide drawings")
+
+    def test_candidate_list_filters_by_type(self):
+        candidate = self._candidate()
+
+        response = self.client.get(
+            reverse("workspace:communication_candidates"),
+            {"type": CommunicationIntelligenceCandidate.Type.TASK_REQUEST},
+        )
+
+        self.assertContains(response, candidate.title)
+
+    def test_candidate_list_does_not_render_full_body(self):
+        self._candidate()
+
+        response = self.client.get(reverse("workspace:communication_candidates"))
+
+        self.assertNotContains(response, "This full body should not appear")
 
 
 class EmailReplyDraftUITests(TestCase):

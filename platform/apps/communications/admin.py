@@ -1,6 +1,7 @@
 from django.contrib import admin
 
 from .models import (
+    CommunicationIntelligenceCandidate,
     EmailAccount,
     EmailAnswerDraft,
     EmailAttachment,
@@ -10,6 +11,31 @@ from .models import (
     EmailQuestion,
     EmailThread,
 )
+
+
+@admin.register(CommunicationIntelligenceCandidate)
+class CommunicationIntelligenceCandidateAdmin(admin.ModelAdmin):
+    list_display = (
+        "title",
+        "project",
+        "email_message",
+        "candidate_type",
+        "status",
+        "confidence_band",
+        "extraction_method",
+        "created_at",
+        "reviewed_at",
+    )
+    list_filter = ("organization", "candidate_type", "status", "confidence_band", "extraction_method", "project")
+    search_fields = (
+        "title",
+        "description",
+        "source_evidence_summary",
+        "email_message__subject",
+        "project__code",
+        "project__name",
+    )
+    readonly_fields = ("created_at", "updated_at")
 
 
 @admin.register(EmailAccount)

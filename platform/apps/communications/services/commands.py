@@ -85,6 +85,23 @@ class CorrectCommunicationProjectLinkCommand:
 
 
 @dataclass(frozen=True)
+class ExtractCommunicationCandidatesCommand:
+    organization: object
+    email_message_ids: tuple | list | None = None
+    project_ids: tuple | list | None = None
+    date_from: object = None
+    date_to: object = None
+    candidate_types: tuple | list | None = None
+    include_thread_context: bool = True
+    dry_run: bool = False
+    force_reprocess: bool = False
+    provider: object = None
+    limit: int = 100
+    actor: object = None
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
 class DetectEmailQuestionsCommand:
     email_message: object
     actor: object = None

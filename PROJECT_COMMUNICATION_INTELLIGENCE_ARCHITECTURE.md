@@ -797,6 +797,14 @@ Implementation note for `EMAIL-PROJ-001`:
 - Suggested links remain reviewable; confirmed links feed Project Communications. Suggested or rejected links are not treated as operational Project communication.
 - AI, semantic similarity, task extraction, reminders, outbound delivery and automatic high-confidence confirmation remain future phases.
 
+Implementation note for `EMAIL-AI-001`:
+
+- The first extraction implementation introduces `CommunicationIntelligenceCandidate` as a pending-review suggestion record, separate from future operational Project Tasks, Questions, Decisions and Reminders.
+- Candidate extraction is eligible by default only for e-mails with confirmed `EmailProjectLink` context; suggested, rejected and superseded Project links do not become operational extraction context.
+- A provider-independent `CommunicationIntelligenceProvider` boundary accepts structured DTO context and returns immutable candidate DTOs. The initial provider is deterministic and local; no real AI/network provider is called.
+- Candidates store bounded evidence excerpts, fingerprints, extractor/rule metadata and review lifecycle fields. Full message bodies remain in `EmailMessage` and are not duplicated into candidate metadata.
+- `/workspace/communications/candidates/` provides read-only visibility for pending candidates. Approval, editing, operational task creation, reminders and reply resolution remain later phases.
+
 ## 39. Migration And Backwards Compatibility
 
 Preserve:

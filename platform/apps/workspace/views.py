@@ -93,6 +93,7 @@ from .services import (
     AccountingDimensionConflictContextBuilder,
     GLAccountClassificationContextBuilder,
     AccountingIntegrationSettingsContextBuilder,
+    CommunicationCandidateContextBuilder,
     DashboardContextBuilder,
     EmailAccountSettingsContextBuilder,
     FinancialAlertsContextBuilder,
@@ -1548,6 +1549,24 @@ class CommunicationProjectLinksView(WorkspacePageView):
                 confidence_band=self.request.GET.get("confidence", ""),
                 status=self.request.GET.get("status", ""),
                 conflict_only=self.request.GET.get("conflict") == "1",
+                query=self.request.GET.get("q", ""),
+            )
+        )
+        return context
+
+
+class CommunicationCandidatesView(WorkspacePageView):
+    template_name = "workspace/communication_candidates.html"
+    page_title = "Communication Candidates"
+    section = "reviews"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(
+            CommunicationCandidateContextBuilder.build(
+                project_id=self.request.GET.get("project", ""),
+                candidate_type=self.request.GET.get("type", ""),
+                confidence=self.request.GET.get("confidence", ""),
                 query=self.request.GET.get("q", ""),
             )
         )

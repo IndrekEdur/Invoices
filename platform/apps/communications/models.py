@@ -251,6 +251,122 @@ class EmailProjectLink(models.Model):
         return f"{self.email_message} -> {self.project.code}"
 
 
+class CommunicationIntelligenceCandidate(models.Model):
+    class Type(models.TextChoices):
+        QUESTION = "question", "Question"
+        TASK_REQUEST = "task_request", "Task request"
+        COMMITMENT = "commitment", "Commitment"
+        DECISION = "decision", "Decision"
+        RISK = "risk", "Risk"
+        BLOCKER = "blocker", "Blocker"
+        DEADLINE = "deadline", "Deadline"
+        INFORMATION_ONLY = "information_only", "Information only"
+        RESOLUTION_EVIDENCE = "resolution_evidence", "Resolution evidence"
+
+    class Status(models.TextChoices):
+        PENDING_REVIEW = "pending_review", "Pending review"
+        APPROVED = "approved", "Approved"
+        EDITED_AND_APPROVED = "edited_and_approved", "Edited and approved"
+        REJECTED = "rejected", "Rejected"
+        DUPLICATE = "duplicate", "Duplicate"
+        MERGED = "merged", "Merged"
+        EXPIRED = "expired", "Expired"
+
+    class ExtractionMethod(models.TextChoices):
+        DETERMINISTIC_RULE = "deterministic_rule", "Deterministic rule"
+        LANGUAGE_MODEL = "language_model", "Language model"
+        HYBRID = "hybrid", "Hybrid"
+
+    class ConfidenceBand(models.TextChoices):
+        HIGH = "high", "High"
+        MEDIUM = "medium", "Medium"
+        LOW = "low", "Low"
+
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name="communication_intelligence_candidates",
+    )
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="communication_candidates")
+    email_message = models.ForeignKey(
+        EmailMessage,
+        on_delete=models.CASCADE,
+        related_name="communication_candidates",
+    )
+    email_thread = models.ForeignKey(
+        EmailThread,
+        on_delete=models.SET_NULL,
+        related_name="communication_candidates",
+        blank=True,
+        null=True,
+    )
+    candidate_type = models.CharField(max_length=32, choices=Type.choices)
+    status = models.CharField(max_length=32, choices=Status.choices, default=Status.PENDING_REVIEW)
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    confidence_score = models.DecimalField(max_digits=5, decimal_places=2, blank=True, null=True)
+    confidence_band = models.CharField(max_length=16, choices=ConfidenceBand.choices, default=ConfidenceBand.MEDIUM)
+    extraction_method = models.CharField(
+        max_length=32,
+        choices=ExtractionMethod.choices,
+        default=ExtractionMethod.DETERMINISTIC_RULE,
+    )
+    suggested_responsible_party = models.CharField(max_length=255, blank=True)
+    suggested_responsible_email = models.EmailField(blank=True)
+    suggested_due_date = models.DateField(blank=True, null=True)
+    suggested_priority = models.CharField(max_length=32, blank=True)
+    source_evidence_summary = models.TextField(blank=True)
+    evidence_excerpt = models.TextField(blank=True)
+    evidence_fingerprint = models.CharField(max_length=64)
+    content_fingerprint = models.CharField(max_length=64)
+    extractor_version = models.CharField(max_length=64)
+    model_provider = models.CharField(max_length=64, blank=True)
+    model_name = models.CharField(max_length=128, blank=True)
+    model_version = models.CharField(max_length=64, blank=True)
+    prompt_version = models.CharField(max_length=64, blank=True)
+    rule_version = models.CharField(max_length=64, blank=True)
+    reviewed_at = models.DateTimeField(blank=True, null=True)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="reviewed_communication_candidates",
+        blank=True,
+        null=True,
+    )
+    rejection_reason = models.TextField(blank=True)
+    merged_into = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        related_name="merged_candidates",
+        blank=True,
+        null=True,
+    )
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["organization", "status"], name="comm_cand_org_status_idx"),
+            models.Index(fields=["project", "status"], name="comm_cand_proj_status_idx"),
+            models.Index(fields=["candidate_type", "status"], name="comm_cand_type_status_idx"),
+            models.Index(fields=["email_message", "status"], name="comm_cand_msg_status_idx"),
+            models.Index(fields=["confidence_band", "status"], name="comm_cand_conf_status_idx"),
+            models.Index(fields=["created_at"], name="comm_cand_created_idx"),
+            models.Index(fields=["suggested_due_date"], name="comm_cand_due_idx"),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "email_message", "project", "candidate_type", "evidence_fingerprint"],
+                name="unique_communication_candidate_evidence",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.candidate_type}: {self.title}"
+
+
 class EmailQuestion(models.Model):
     class Status(models.TextChoices):
         DETECTED = "detected", "Detected"

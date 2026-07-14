@@ -1,4 +1,5 @@
 from .dashboard import DashboardContextBuilder
+from .communication_candidates import CommunicationCandidateContextBuilder
 from .financial_dashboard import OrganizationFinancialDashboardContextBuilder
 from .financial_alerts import FinancialAlertsContextBuilder
 from .inbox import InboxContextBuilder
@@ -16,6 +17,7 @@ from .settings import (
 
 __all__ = [
     "DashboardContextBuilder",
+    "CommunicationCandidateContextBuilder",
     "FinancialAlertsContextBuilder",
     "OrganizationFinancialDashboardContextBuilder",
     "InboxContextBuilder",

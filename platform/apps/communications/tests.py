@@ -1,5 +1,6 @@
 import shutil
 import tempfile
+from datetime import datetime
 from io import StringIO
 from unittest.mock import patch
 
@@ -22,6 +23,7 @@ from apps.workflow.models import WorkflowDefinition, WorkflowInstance, WorkflowS
 from .connectors import IMAPEmailConnector
 from .dto import IMAPMailboxSnapshot, RawEmailMessage
 from .models import (
+    CommunicationIntelligenceCandidate,
     EmailAccount,
     EmailAnswerDraft,
     EmailAttachment,
@@ -41,6 +43,8 @@ from .services import (
     CorrectEmailProjectLinkCommand,
     DetectEmailQuestionsCommand,
     DeterministicEmailProjectLinkingService,
+    ExtractCommunicationCandidatesCommand,
+    CommunicationCandidateExtractionService,
     EmailAnswerDraftService,
     EmailAttachmentDocumentService,
     EmailImportService,
@@ -3562,3 +3566,175 @@ class DeterministicEmailProjectLinkingServiceTests(TestCase):
 
         with self.assertRaises(CommandError):
             call_command("evaluate_email_project_links", "--organization", str(organization.id))
+
+
+class CommunicationCandidateExtractionServiceTests(TestCase):
+    def _confirmed_project_message(self, *, subject="Question", body_text="Please confirm this by 2026-07-20."):
+        organization = create_organization()
+        project = create_project(organization=organization, code="27001", name="Candidate Project")
+        message = create_email_message(organization=organization, subject=subject, body_text=body_text)
+        message.sender_email = "sender@example.com"
+        message.received_at = datetime(2026, 7, 14, 9, 0, tzinfo=timezone.get_current_timezone())
+        message.save(update_fields=["sender_email", "received_at"])
+        EmailProjectLink.objects.create(
+            organization=organization,
+            email_message=message,
+            project=project,
+            status=EmailProjectLink.Status.CONFIRMED,
+            is_primary=True,
+        )
+        return organization, project, message
+
+    def test_candidate_can_be_created(self):
+        organization, project, message = self._confirmed_project_message()
+
+        result = CommunicationCandidateExtractionService.extract(
+            ExtractCommunicationCandidatesCommand(organization=organization, email_message_ids=(message.id,))
+        )
+
+        candidate = CommunicationIntelligenceCandidate.objects.order_by("id").first()
+        self.assertEqual(result.created_count, 2)
+        self.assertEqual(candidate.organization, organization)
+        self.assertEqual(candidate.project, project)
+        self.assertEqual(candidate.email_message, message)
+        self.assertEqual(candidate.status, CommunicationIntelligenceCandidate.Status.PENDING_REVIEW)
+        self.assertLessEqual(len(candidate.evidence_excerpt), 240)
+
+    def test_suggested_only_project_link_is_excluded(self):
+        organization = create_organization()
+        project = create_project(organization=organization, code="27002", name="Suggested only")
+        message = create_email_message(organization=organization, subject="Can you confirm?")
+        EmailProjectLink.objects.create(
+            organization=organization,
+            email_message=message,
+            project=project,
+            status=EmailProjectLink.Status.SUGGESTED,
+        )
+
+        result = CommunicationCandidateExtractionService.extract(
+            ExtractCommunicationCandidatesCommand(organization=organization, email_message_ids=(message.id,))
+        )
+
+        self.assertEqual(result.eligible_messages, 0)
+        self.assertEqual(CommunicationIntelligenceCandidate.objects.count(), 0)
+
+    def test_deterministic_question_and_task_are_extracted(self):
+        organization, _project, message = self._confirmed_project_message(
+            subject="Kas saate kinnitada?",
+            body_text="Palun saatke joonised homme.",
+        )
+
+        CommunicationCandidateExtractionService.extract(
+            ExtractCommunicationCandidatesCommand(organization=organization, email_message_ids=(message.id,))
+        )
+
+        candidate_types = set(CommunicationIntelligenceCandidate.objects.values_list("candidate_type", flat=True))
+        self.assertIn(CommunicationIntelligenceCandidate.Type.QUESTION, candidate_types)
+        self.assertIn(CommunicationIntelligenceCandidate.Type.TASK_REQUEST, candidate_types)
+        self.assertIn(CommunicationIntelligenceCandidate.Type.DEADLINE, candidate_types)
+
+    def test_commitment_assigns_sender_and_due_date(self):
+        organization, _project, message = self._confirmed_project_message(
+            subject="Update",
+            body_text="I will send the report tomorrow.",
+        )
+
+        CommunicationCandidateExtractionService.extract(
+            ExtractCommunicationCandidatesCommand(organization=organization, email_message_ids=(message.id,))
+        )
+
+        commitment = CommunicationIntelligenceCandidate.objects.get(
+            candidate_type=CommunicationIntelligenceCandidate.Type.COMMITMENT
+        )
+        self.assertEqual(commitment.suggested_responsible_email, "sender@example.com")
+        self.assertEqual(str(commitment.suggested_due_date), "2026-07-15")
+
+    def test_decision_risk_blocker_and_resolution_are_extracted(self):
+        organization, _project, message = self._confirmed_project_message(
+            subject="Status",
+            body_text="Approved. There is delay risk. Work is blocked. Issue resolved.",
+        )
+
+        CommunicationCandidateExtractionService.extract(
+            ExtractCommunicationCandidatesCommand(organization=organization, email_message_ids=(message.id,))
+        )
+
+        candidate_types = set(CommunicationIntelligenceCandidate.objects.values_list("candidate_type", flat=True))
+        self.assertIn(CommunicationIntelligenceCandidate.Type.DECISION, candidate_types)
+        self.assertIn(CommunicationIntelligenceCandidate.Type.RISK, candidate_types)
+        self.assertIn(CommunicationIntelligenceCandidate.Type.BLOCKER, candidate_types)
+        self.assertIn(CommunicationIntelligenceCandidate.Type.RESOLUTION_EVIDENCE, candidate_types)
+
+    def test_repeated_extraction_creates_no_duplicate(self):
+        organization, _project, message = self._confirmed_project_message()
+
+        CommunicationCandidateExtractionService.extract(
+            ExtractCommunicationCandidatesCommand(organization=organization, email_message_ids=(message.id,))
+        )
+        result = CommunicationCandidateExtractionService.extract(
+            ExtractCommunicationCandidatesCommand(organization=organization, email_message_ids=(message.id,))
+        )
+
+        self.assertEqual(result.skipped_count, 1)
+        self.assertEqual(CommunicationIntelligenceCandidate.objects.count(), 2)
+
+    def test_dry_run_creates_no_candidates(self):
+        organization, _project, message = self._confirmed_project_message()
+
+        result = CommunicationCandidateExtractionService.extract(
+            ExtractCommunicationCandidatesCommand(organization=organization, email_message_ids=(message.id,), dry_run=True)
+        )
+
+        self.assertTrue(result.dry_run)
+        self.assertGreaterEqual(result.candidate_count_by_type["question"], 1)
+        self.assertEqual(CommunicationIntelligenceCandidate.objects.count(), 0)
+
+    def test_does_not_mutate_message_or_metadata(self):
+        organization, _project, message = self._confirmed_project_message(body_text="Can you confirm?")
+        metadata = {"source": "test"}
+        original_body = message.body_text
+
+        CommunicationCandidateExtractionService.extract(
+            ExtractCommunicationCandidatesCommand(
+                organization=organization,
+                email_message_ids=(message.id,),
+                metadata=metadata,
+            )
+        )
+        metadata["source"] = "changed"
+        message.refresh_from_db()
+
+        self.assertEqual(message.body_text, original_body)
+        self.assertEqual(CommunicationIntelligenceCandidate.objects.get().metadata["source"], "test")
+
+    def test_management_command_dry_run(self):
+        organization, _project, message = self._confirmed_project_message()
+        output = StringIO()
+
+        call_command(
+            "extract_email_candidates",
+            "--organization",
+            str(organization.id),
+            "--message",
+            str(message.id),
+            "--dry-run",
+            stdout=output,
+        )
+
+        self.assertIn("eligible=1", output.getvalue())
+        self.assertIn("dry_run=True", output.getvalue())
+        self.assertEqual(CommunicationIntelligenceCandidate.objects.count(), 0)
+
+    def test_management_command_invalid_type(self):
+        organization, _project, message = self._confirmed_project_message()
+
+        with self.assertRaises(CommandError):
+            call_command(
+                "extract_email_candidates",
+                "--organization",
+                str(organization.id),
+                "--message",
+                str(message.id),
+                "--candidate-type",
+                "unsupported",
+            )

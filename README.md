@@ -22,6 +22,8 @@ This repository is evolving from a local invoice automation prototype into an Op
 
 The communications app now includes deterministic e-mail-to-Project linking on top of the existing `EmailProjectLink` relation. Exact Project code, thread, attachment/document, and supporting participant evidence can create auditable suggestions; users still confirm, reject, or correct links before they become Project Communications. No semantic AI, task extraction, reminders, or e-mail sending is part of this step.
 
+The communications app also includes first-pass communication intelligence candidate extraction for confirmed Project-linked e-mails. It stores pending review candidates for questions, task requests, commitments, decisions, risks, blockers, deadlines, information-only notes, and possible resolution evidence. Candidates are suggestions only: no operational Project Tasks, reminders, status changes, AI actions, or e-mail sending are created.
+
 The communications app includes persistent mailbox sync state so each EmailAccount mailbox can later track resumable cursor progress, UIDVALIDITY, import status, safe errors, and observable counters.
 
 Normal IMAP sync now uses incremental UID-based mailbox cursors. It resumes from the last successfully processed UID, preserves bounded latest-message behavior for first/no-cursor syncs, and still leaves historical full-mailbox backfill for a later implementation.

@@ -11,6 +11,7 @@ from .commands import (
     CorrectEmailProjectLinkCommand,
     DetectEmailQuestionsCommand,
     EvaluateEmailProjectLinksCommand,
+    ExtractCommunicationCandidatesCommand,
     GetOrCreateMailboxStateCommand,
     MarkMailboxSyncCompletedCommand,
     MarkMailboxSyncFailedCommand,
@@ -23,6 +24,14 @@ from .commands import (
     SuggestEmailProjectLinksCommand,
     SyncEmailAccountCommand,
     UpdateMailboxSyncProgressCommand,
+)
+from .candidate_extraction import (
+    CommunicationCandidateExtractionService,
+    CommunicationExtractionContext,
+    CommunicationIntelligenceProvider,
+    DeterministicCommunicationIntelligenceProvider,
+    ExtractCommunicationCandidatesResult,
+    ExtractedCommunicationCandidate,
 )
 from .context import ConversationContextBuilder
 from .imports import EmailImportService
@@ -43,6 +52,9 @@ __all__ = [
     "ApproveEmailAnswerDraftCommand",
     "BuildConversationContextCommand",
     "CommunicationProjectLinkReviewService",
+    "CommunicationCandidateExtractionService",
+    "CommunicationExtractionContext",
+    "CommunicationIntelligenceProvider",
     "ConfirmCommunicationProjectLinkCommand",
     "ConfirmEmailProjectLinkCommand",
     "ConversationContextBuilder",
@@ -51,6 +63,7 @@ __all__ = [
     "ConvertEmailAttachmentToDocumentCommand",
     "CorrectEmailProjectLinkCommand",
     "DeterministicEmailProjectLinkingService",
+    "DeterministicCommunicationIntelligenceProvider",
     "DetectEmailQuestionsCommand",
     "EmailAttachmentDocumentService",
     "EmailAnswerDraftService",
@@ -63,6 +76,9 @@ __all__ = [
     "EmailQuestionDetectionService",
     "EvaluateEmailProjectLinksCommand",
     "EvaluateEmailProjectLinksResult",
+    "ExtractCommunicationCandidatesCommand",
+    "ExtractCommunicationCandidatesResult",
+    "ExtractedCommunicationCandidate",
     "GetOrCreateMailboxStateCommand",
     "MailboxUIDValidityChangedError",
     "MarkMailboxSyncCompletedCommand",
