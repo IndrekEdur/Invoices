@@ -44,6 +44,15 @@ from apps.accounting.models import (
     AllocationSourceAmountBasis,
     AllocationSourceType,
     AllocationStrategy,
+    FinancialAlert,
+    FinancialAlertBasis,
+    FinancialAlertCandidateScope,
+    FinancialAlertEvaluationRun,
+    FinancialAlertEvaluationRunStatus,
+    FinancialAlertRule,
+    FinancialAlertSeverity,
+    FinancialAlertStatus,
+    FinancialAlertType,
     ManagementAllocationEntry,
     ManagementAllocationPeriod,
     ManagementAllocationRule,
@@ -69,7 +78,13 @@ from apps.accounting.services import (
     CreateManagementAllocationVersionCommand,
     CreateManagementCostPoolCommand,
     CompleteAccountingSyncRunCommand,
+    EvaluateFinancialAlertsCommand,
     FailAccountingSyncRunCommand,
+    FinancialAlertCandidateService,
+    FinancialAlertEvaluationService,
+    FinancialAlertFactBuilder,
+    FinancialAlertFingerprintService,
+    FinancialAlertRuleService,
     GeneralLedgerVerificationResult,
     GenerateManagementAllocationProposalCommand,
     GeneralLedgerCacheService,
@@ -1282,6 +1297,426 @@ class ProjectFinancialAggregationServiceTests(TestCase):
                 AccountingAccountClassification.objects.count(),
             ),
         )
+
+
+class FinancialAlertTests(TestCase):
+    def _setup(self, code="26124", status=Project.Status.ACTIVE):
+        integration = create_merit_integration()
+        project = Project.objects.create(
+            organization=integration.organization,
+            code=code,
+            name="Kanarbiku",
+            status=status,
+            start_date=date(2026, 1, 1),
+        )
+        return integration, project
+
+    def _rule(
+        self,
+        organization,
+        alert_type=FinancialAlertType.PROJECT_CURRENT_MONTH_NEGATIVE,
+        *,
+        basis=FinancialAlertBasis.MANAGEMENT,
+        severity=FinancialAlertSeverity.WARNING,
+        candidate_scope=FinancialAlertCandidateScope.ACTIVE_PROJECTS_WITH_MONTH_ACTIVITY,
+        threshold=Decimal("0"),
+        grace_day=None,
+        currency="",
+    ):
+        return FinancialAlertRule.objects.create(
+            organization=organization,
+            alert_type=alert_type,
+            name=f"{alert_type}-{FinancialAlertRule.objects.count()}",
+            financial_basis=basis,
+            severity=severity,
+            threshold_amount=threshold,
+            candidate_scope=candidate_scope,
+            grace_day=grace_day,
+            currency=currency,
+        )
+
+    def _classify(self, organization, integration, account_code, category, sign=Decimal("1")):
+        return AccountingAccountClassification.objects.create(
+            organization=organization,
+            integration=integration,
+            account_code=account_code,
+            account_name=f"Account {account_code}",
+            category=category,
+            reporting_sign=sign,
+            include_in_project_result=True,
+        )
+
+    def _allocation(
+        self,
+        project,
+        integration,
+        *,
+        batch_date=date(2026, 6, 15),
+        currency="EUR",
+        account_code="5000",
+        amount=Decimal("100.000000"),
+        suffix="1",
+    ):
+        batch = AccountingGLBatch.objects.create(
+            organization=project.organization,
+            integration=integration,
+            external_id=f"alert-batch-{project.code}-{suffix}",
+            batch_date=batch_date,
+            currency_code=currency,
+        )
+        entry = AccountingGLEntry.objects.create(
+            organization=project.organization,
+            integration=integration,
+            batch=batch,
+            external_id=f"alert-entry-{project.code}-{suffix}",
+            account_code=account_code,
+            account_name=f"Account {account_code}",
+        )
+        return AccountingGLAllocation.objects.create(
+            organization=project.organization,
+            integration=integration,
+            entry=entry,
+            external_id=f"alert-allocation-{project.code}-{suffix}",
+            dimension_code=project.code,
+            dimension_name=project.name,
+            amount=amount,
+            project=project,
+        )
+
+    def _negative_project(self):
+        integration, project = self._setup()
+        self._classify(project.organization, integration, "3000", AccountingAccountClassification.Category.REVENUE, sign=Decimal("-1"))
+        self._classify(project.organization, integration, "5000", AccountingAccountClassification.Category.MATERIAL_COST)
+        self._allocation(project, integration, account_code="3000", amount=Decimal("-100.000000"), suffix="rev")
+        self._allocation(project, integration, account_code="5000", amount=Decimal("150.000000"), suffix="cost")
+        return integration, project
+
+    def test_rule_model_defaults_uniqueness_grace_day_and_str(self):
+        organization = create_organization()
+        rule = self._rule(organization, grace_day=5)
+
+        self.assertTrue(rule.is_active)
+        self.assertEqual(rule.threshold_amount, Decimal("0"))
+        self.assertIn(rule.alert_type, str(rule))
+        with self.assertRaises(ValidationError):
+            self._rule(organization, FinancialAlertType.PROJECT_LIFETIME_NEGATIVE, grace_day=32)
+        with self.assertRaises(ValidationError):
+            self._rule(organization)
+
+    def test_alert_model_fingerprint_uniqueness_status_helper_and_str(self):
+        _integration, project = self._setup()
+        rule = self._rule(project.organization)
+        fingerprint = FinancialAlertFingerprintService.build_current_month_negative(
+            organization=project.organization,
+            project=project,
+            basis=rule.financial_basis,
+            evaluation_date=date(2026, 6, 20),
+            rule=rule,
+        )
+
+        alert = FinancialAlert.objects.create(
+            organization=project.organization,
+            project=project,
+            rule=rule,
+            alert_type=rule.alert_type,
+            financial_basis=rule.financial_basis,
+            severity=rule.severity,
+            fingerprint=fingerprint,
+            title="Project current-month result is negative",
+        )
+
+        self.assertTrue(alert.is_active_status)
+        self.assertEqual(alert.lifecycle_label, "Open")
+        self.assertIn(project.code, str(alert))
+        with self.assertRaises(IntegrityError):
+            FinancialAlert.objects.create(
+                organization=project.organization,
+                project=project,
+                rule=rule,
+                alert_type=rule.alert_type,
+                financial_basis=rule.financial_basis,
+                severity=rule.severity,
+                fingerprint=fingerprint,
+                title="Duplicate",
+            )
+
+    def test_evaluation_run_model_str_and_status(self):
+        organization = create_organization()
+        run = FinancialAlertEvaluationRun.objects.create(
+            organization=organization,
+            evaluation_date=date(2026, 6, 20),
+            status=FinancialAlertEvaluationRunStatus.RUNNING,
+        )
+
+        self.assertIn("financial alerts", str(run))
+        self.assertEqual(run.opened_count, 0)
+
+    def test_fingerprints_are_stable_and_distinct(self):
+        _integration, project = self._setup()
+        rule = self._rule(project.organization)
+
+        first = FinancialAlertFingerprintService.build_current_month_negative(
+            organization=project.organization,
+            project=project,
+            basis=rule.financial_basis,
+            evaluation_date=date(2026, 6, 1),
+            rule=rule,
+        )
+        second = FinancialAlertFingerprintService.build_current_month_negative(
+            organization=project.organization,
+            project=project,
+            basis=rule.financial_basis,
+            evaluation_date=date(2026, 6, 30),
+            rule=rule,
+        )
+        different_month = FinancialAlertFingerprintService.build_current_month_negative(
+            organization=project.organization,
+            project=project,
+            basis=rule.financial_basis,
+            evaluation_date=date(2026, 7, 1),
+            rule=rule,
+        )
+        different_basis = FinancialAlertFingerprintService.build_current_month_negative(
+            organization=project.organization,
+            project=project,
+            basis=FinancialAlertBasis.ACCOUNTING,
+            evaluation_date=date(2026, 6, 1),
+            rule=rule,
+        )
+
+        self.assertEqual(first, second)
+        self.assertNotEqual(first, different_month)
+        self.assertNotEqual(first, different_basis)
+        self.assertEqual(len(first), 64)
+
+    def test_candidate_selection_scopes_and_organization_isolation(self):
+        integration, active = self._setup(code="26124")
+        _other_integration, other_org_project = self._setup(code="99999")
+        completed = Project.objects.create(organization=integration.organization, code="26125", name="Done", status=Project.Status.COMPLETED)
+        archived = Project.objects.create(organization=integration.organization, code="26126", name="Archived", status=Project.Status.ARCHIVED)
+        self._allocation(active, integration, suffix="active")
+        self._allocation(completed, integration, suffix="completed")
+        self._allocation(archived, integration, suffix="archived")
+        self._allocation(other_org_project, create_merit_integration(other_org_project.organization), suffix="other")
+
+        active_rule = self._rule(integration.organization, candidate_scope=FinancialAlertCandidateScope.ACTIVE_PROJECTS)
+        monthly_rule = self._rule(
+            integration.organization,
+            FinancialAlertType.PROJECT_CURRENT_MONTH_NO_REVENUE,
+            basis=FinancialAlertBasis.ACCOUNTING,
+            candidate_scope=FinancialAlertCandidateScope.ACTIVE_PROJECTS_WITH_MONTH_ACTIVITY,
+        )
+        lifetime_rule = self._rule(
+            integration.organization,
+            FinancialAlertType.PROJECT_LIFETIME_NEGATIVE,
+            candidate_scope=FinancialAlertCandidateScope.ALL_WITH_ACTIVITY,
+        )
+        selected_rule = FinancialAlertRule.objects.create(
+            organization=integration.organization,
+            alert_type=FinancialAlertType.PROJECT_CURRENT_MONTH_NEGATIVE,
+            name="Selected scope candidate test",
+            is_active=False,
+            financial_basis=FinancialAlertBasis.MANAGEMENT,
+            severity=FinancialAlertSeverity.WARNING,
+            threshold_amount=Decimal("0"),
+            candidate_scope=FinancialAlertCandidateScope.SELECTED_PROJECTS,
+        )
+
+        self.assertEqual(FinancialAlertCandidateService.select_candidates(organization=integration.organization, rule=active_rule, evaluation_date=date(2026, 6, 20)), [active])
+        self.assertEqual(FinancialAlertCandidateService.select_candidates(organization=integration.organization, rule=monthly_rule, evaluation_date=date(2026, 6, 20)), [active])
+        self.assertEqual(
+            {project.id for project in FinancialAlertCandidateService.select_candidates(organization=integration.organization, rule=lifetime_rule, evaluation_date=date(2026, 6, 20))},
+            {active.id, completed.id, archived.id},
+        )
+        self.assertEqual(FinancialAlertCandidateService.select_candidates(organization=integration.organization, rule=selected_rule, evaluation_date=date(2026, 6, 20)), [])
+        self.assertEqual(
+            FinancialAlertCandidateService.select_candidates(
+                organization=integration.organization,
+                rule=selected_rule,
+                evaluation_date=date(2026, 6, 20),
+                project_ids=[completed.id],
+            ),
+            [completed],
+        )
+
+    def test_fact_builder_lifetime_current_month_no_revenue_grace_and_mixed_currency(self):
+        integration, project = self._negative_project()
+        lifetime_rule = self._rule(
+            project.organization,
+            FinancialAlertType.PROJECT_LIFETIME_NEGATIVE,
+            severity=FinancialAlertSeverity.CRITICAL,
+            candidate_scope=FinancialAlertCandidateScope.ALL_WITH_ACTIVITY,
+        )
+        current_rule = self._rule(project.organization, FinancialAlertType.PROJECT_CURRENT_MONTH_NEGATIVE, grace_day=10)
+        no_revenue_rule = self._rule(
+            project.organization,
+            FinancialAlertType.PROJECT_CURRENT_MONTH_NO_REVENUE,
+            basis=FinancialAlertBasis.ACCOUNTING,
+        )
+        builder = FinancialAlertFactBuilder()
+
+        lifetime = builder.build_fact(project=project, rule=lifetime_rule, evaluation_date=date(2026, 6, 20))
+        current_grace = builder.build_fact(project=project, rule=current_rule, evaluation_date=date(2026, 6, 5))
+        no_revenue = builder.build_fact(project=project, rule=no_revenue_rule, evaluation_date=date(2026, 6, 20))
+
+        self.assertEqual(lifetime.period_start, date(2026, 6, 15))
+        self.assertTrue(lifetime.condition_met)
+        self.assertEqual(lifetime.accounting_amount, Decimal("-50.000000"))
+        self.assertEqual(lifetime.management_amount, Decimal("-50.000000"))
+        self.assertFalse(current_grace.condition_met)
+        self.assertIn("grace_day_active:10", current_grace.warnings)
+        self.assertFalse(no_revenue.condition_met)
+
+        cost_only = Project.objects.create(organization=project.organization, code="26127", name="Cost only")
+        self._allocation(cost_only, integration, account_code="5000", amount=Decimal("25.000000"), suffix="cost-only")
+        no_revenue_cost = builder.build_fact(project=cost_only, rule=no_revenue_rule, evaluation_date=date(2026, 6, 20))
+        self.assertTrue(no_revenue_cost.condition_met)
+        self.assertIn("does not prove", no_revenue_cost.message)
+
+        self._allocation(project, integration, batch_date=date(2026, 6, 16), currency="USD", account_code="5000", amount=Decimal("5.000000"), suffix="usd")
+        mixed = builder.build_fact(project=project, rule=lifetime_rule, evaluation_date=date(2026, 6, 20))
+        self.assertFalse(mixed.condition_met)
+        self.assertIn("skipped_mixed_currency", mixed.warnings)
+
+    def test_rule_service_default_rules_are_explicit_and_idempotent(self):
+        organization = create_organization()
+
+        self.assertEqual(FinancialAlertRuleService.get_applicable_rules(organization), [])
+        first = FinancialAlertRuleService.create_default_rules(organization)
+        second = FinancialAlertRuleService.create_default_rules(organization)
+
+        self.assertEqual(len(first), 3)
+        self.assertEqual([rule.id for rule in first], [rule.id for rule in second])
+        self.assertEqual(FinancialAlertRule.objects.filter(organization=organization).count(), 3)
+
+    def test_evaluation_opens_updates_resolves_reopens_and_dismissed_stays_dismissed(self):
+        _integration, project = self._negative_project()
+        self._rule(project.organization)
+        service = FinancialAlertEvaluationService()
+
+        first = service.evaluate(EvaluateFinancialAlertsCommand(organization=project.organization, evaluation_date=date(2026, 6, 20)))
+        second = service.evaluate(EvaluateFinancialAlertsCommand(organization=project.organization, evaluation_date=date(2026, 6, 20)))
+        alert = FinancialAlert.objects.get()
+        alert.status = FinancialAlertStatus.ACKNOWLEDGED
+        alert.acknowledged_at = timezone.now()
+        alert.save()
+        acknowledged = service.evaluate(EvaluateFinancialAlertsCommand(organization=project.organization, evaluation_date=date(2026, 6, 20)))
+        alert.refresh_from_db()
+
+        self.assertEqual(first.opened_count, 1)
+        self.assertEqual(second.unchanged_count, 1)
+        self.assertEqual(acknowledged.unchanged_count, 1)
+        self.assertEqual(alert.status, FinancialAlertStatus.ACKNOWLEDGED)
+        self.assertEqual(FinancialAlert.objects.count(), 1)
+        self.assertEqual(AuditEvent.objects.filter(event_type="financial_alert_opened").count(), 1)
+
+        AccountingGLAllocation.objects.filter(project=project, entry__account_code="3000").update(amount=Decimal("-500.000000"))
+        resolved = service.evaluate(EvaluateFinancialAlertsCommand(organization=project.organization, evaluation_date=date(2026, 6, 20)))
+        alert.refresh_from_db()
+        self.assertEqual(resolved.resolved_count, 1)
+        self.assertEqual(alert.status, FinancialAlertStatus.RESOLVED)
+        self.assertEqual(alert.resolution_reason, "condition_cleared")
+
+        AccountingGLAllocation.objects.filter(project=project, entry__account_code="3000").update(amount=Decimal("-100.000000"))
+        reopened = service.evaluate(EvaluateFinancialAlertsCommand(organization=project.organization, evaluation_date=date(2026, 6, 20)))
+        alert.refresh_from_db()
+        self.assertEqual(reopened.reopened_count, 1)
+        self.assertEqual(alert.status, FinancialAlertStatus.OPEN)
+
+        alert.status = FinancialAlertStatus.DISMISSED
+        alert.dismissed_at = timezone.now()
+        alert.save()
+        dismissed = service.evaluate(EvaluateFinancialAlertsCommand(organization=project.organization, evaluation_date=date(2026, 6, 20)))
+        alert.refresh_from_db()
+        self.assertEqual(dismissed.unchanged_count, 1)
+        self.assertEqual(alert.status, FinancialAlertStatus.DISMISSED)
+
+    def test_evaluation_filters_dry_run_partial_safe_errors_metadata_and_no_api(self):
+        integration, project = self._negative_project()
+        other = Project.objects.create(organization=project.organization, code="26125", name="Other")
+        self._allocation(other, integration, suffix="other")
+        rule = self._rule(project.organization)
+        metadata = {"source": {"job": "test"}}
+
+        with patch.object(MeritAPIClient, "request") as request_mock:
+            dry = FinancialAlertEvaluationService().evaluate(
+                EvaluateFinancialAlertsCommand(
+                    organization=project.organization,
+                    evaluation_date=date(2026, 6, 20),
+                    project_ids=[project.id],
+                    alert_types=[FinancialAlertType.PROJECT_CURRENT_MONTH_NEGATIVE],
+                    dry_run=True,
+                    metadata=metadata,
+                )
+            )
+
+        request_mock.assert_not_called()
+        self.assertEqual(dry.opened_count, 1)
+        self.assertIsNone(dry.evaluation_run)
+        self.assertFalse(FinancialAlert.objects.exists())
+        self.assertFalse(FinancialAlertEvaluationRun.objects.exists())
+        self.assertEqual(metadata, {"source": {"job": "test"}})
+
+        class FailingFactBuilder:
+            calls = 0
+
+            def build_fact(self, *, project, rule, evaluation_date):
+                self.calls += 1
+                if self.calls == 1:
+                    return FinancialAlertFactBuilder().build_fact(project=project, rule=rule, evaluation_date=evaluation_date)
+                raise RuntimeError("safe test failure")
+
+        partial = FinancialAlertEvaluationService(fact_builder=FailingFactBuilder()).evaluate(
+            EvaluateFinancialAlertsCommand(organization=project.organization, evaluation_date=date(2026, 6, 20))
+        )
+        run = partial.evaluation_run
+
+        self.assertEqual(partial.opened_count, 1)
+        self.assertEqual(partial.failed_count, 1)
+        self.assertEqual(run.status, FinancialAlertEvaluationRunStatus.PARTIAL)
+        self.assertIn("RuntimeError", run.safe_error)
+        self.assertEqual(AccountingGLAllocation.objects.count(), 3)
+        self.assertEqual(Project.objects.count(), 2)
+        self.assertEqual(rule.alert_type, FinancialAlertType.PROJECT_CURRENT_MONTH_NEGATIVE)
+
+    def test_management_commands_create_defaults_evaluate_and_validate_inputs(self):
+        integration, project = self._negative_project()
+        output = StringIO()
+
+        call_command("create_default_financial_alert_rules", "--organization", integration.organization.id, stdout=output)
+        call_command("create_default_financial_alert_rules", "--organization", integration.organization.id, stdout=StringIO())
+        self.assertEqual(FinancialAlertRule.objects.filter(organization=integration.organization).count(), 3)
+        self.assertIn("rule_count: 3", output.getvalue())
+
+        eval_output = StringIO()
+        call_command(
+            "evaluate_financial_alerts",
+            "--organization",
+            integration.organization.id,
+            "--date",
+            "2026-06-20",
+            "--project",
+            project.id,
+            "--alert-type",
+            FinancialAlertType.PROJECT_CURRENT_MONTH_NEGATIVE,
+            stdout=eval_output,
+        )
+
+        self.assertIn("opened: 1", eval_output.getvalue())
+        self.assertIn("projects: 1", eval_output.getvalue())
+        with self.assertRaises(CommandError):
+            call_command("evaluate_financial_alerts", "--organization", "999999", stdout=StringIO())
+        with self.assertRaises(CommandError):
+            call_command("evaluate_financial_alerts", "--organization", integration.organization.id, "--date", "bad-date", stdout=StringIO())
+        with self.assertRaises(CommandError):
+            call_command(
+                "evaluate_financial_alerts",
+                "--organization",
+                integration.organization.id,
+                "--project",
+                "999999",
+                stdout=StringIO(),
+            )
 
 
 class ProjectManagementFinancialServiceTests(TestCase):

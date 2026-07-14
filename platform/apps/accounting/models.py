@@ -10,6 +10,45 @@ from apps.core.models import Organization
 from apps.projects.models import Project
 
 
+class FinancialAlertType(models.TextChoices):
+    PROJECT_LIFETIME_NEGATIVE = "project_lifetime_negative", "Project lifetime negative"
+    PROJECT_CURRENT_MONTH_NEGATIVE = "project_current_month_negative", "Project current-month negative"
+    PROJECT_CURRENT_MONTH_NO_REVENUE = "project_current_month_no_revenue", "Project current-month no revenue"
+
+
+class FinancialAlertBasis(models.TextChoices):
+    ACCOUNTING = "accounting", "Accounting"
+    MANAGEMENT = "management", "Management"
+
+
+class FinancialAlertSeverity(models.TextChoices):
+    INFO = "info", "Info"
+    WARNING = "warning", "Warning"
+    CRITICAL = "critical", "Critical"
+
+
+class FinancialAlertStatus(models.TextChoices):
+    OPEN = "open", "Open"
+    ACKNOWLEDGED = "acknowledged", "Acknowledged"
+    RESOLVED = "resolved", "Resolved"
+    DISMISSED = "dismissed", "Dismissed"
+
+
+class FinancialAlertCandidateScope(models.TextChoices):
+    ACTIVE_PROJECTS = "active_projects", "Active projects"
+    ACTIVE_PROJECTS_WITH_MONTH_ACTIVITY = "active_projects_with_month_activity", "Active projects with month activity"
+    ALL_WITH_ACTIVITY = "all_with_activity", "All with activity"
+    SELECTED_PROJECTS = "selected_projects", "Selected projects"
+
+
+class FinancialAlertEvaluationRunStatus(models.TextChoices):
+    RUNNING = "running", "Running"
+    COMPLETED = "completed", "Completed"
+    PARTIAL = "partial", "Partial"
+    FAILED = "failed", "Failed"
+    CANCELLED = "cancelled", "Cancelled"
+
+
 class AccountingIntegration(models.Model):
     class Provider(models.TextChoices):
         MERIT = "merit", "Merit"
@@ -304,6 +343,174 @@ class AccountingSyncRun(models.Model):
 
     def __str__(self) -> str:
         return f"{self.integration} {self.source_type} {self.status} {self.started_at}"
+
+
+class FinancialAlertRule(models.Model):
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="financial_alert_rules")
+    alert_type = models.CharField(max_length=64, choices=FinancialAlertType.choices)
+    name = models.CharField(max_length=255)
+    is_active = models.BooleanField(default=True)
+    financial_basis = models.CharField(
+        max_length=32,
+        choices=FinancialAlertBasis.choices,
+        default=FinancialAlertBasis.MANAGEMENT,
+    )
+    severity = models.CharField(
+        max_length=32,
+        choices=FinancialAlertSeverity.choices,
+        default=FinancialAlertSeverity.WARNING,
+    )
+    threshold_amount = models.DecimalField(max_digits=20, decimal_places=6, blank=True, null=True)
+    threshold_percentage = models.DecimalField(max_digits=10, decimal_places=4, blank=True, null=True)
+    grace_day = models.PositiveSmallIntegerField(blank=True, null=True)
+    project_status_scope = models.JSONField(default=list, blank=True)
+    candidate_scope = models.CharField(
+        max_length=64,
+        choices=FinancialAlertCandidateScope.choices,
+        default=FinancialAlertCandidateScope.ACTIVE_PROJECTS,
+    )
+    currency = models.CharField(max_length=8, blank=True, default="")
+    configuration = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["organization__name", "alert_type", "name", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["organization", "name"], name="unique_financial_alert_rule_name"),
+            models.UniqueConstraint(
+                fields=["organization", "alert_type"],
+                condition=Q(is_active=True),
+                name="unique_active_financial_alert_rule_type",
+            ),
+            models.CheckConstraint(
+                check=Q(grace_day__isnull=True) | Q(grace_day__gte=1, grace_day__lte=31),
+                name="financial_alert_rule_grace_day_range",
+            ),
+        ]
+
+    def clean(self):
+        super().clean()
+        if self.grace_day is not None and not 1 <= self.grace_day <= 31:
+            raise ValidationError("Financial alert rule grace_day must be between 1 and 31.")
+        if self.configuration is None or not isinstance(self.configuration, dict):
+            raise ValidationError("Financial alert rule configuration must be an object.")
+        if self.project_status_scope is None or not isinstance(self.project_status_scope, list):
+            raise ValidationError("Financial alert rule project_status_scope must be a list.")
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        return f"{self.name} ({self.alert_type})"
+
+
+class FinancialAlert(models.Model):
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="financial_alerts")
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="financial_alerts")
+    rule = models.ForeignKey(FinancialAlertRule, on_delete=models.SET_NULL, related_name="alerts", blank=True, null=True)
+    alert_type = models.CharField(max_length=64, choices=FinancialAlertType.choices)
+    financial_basis = models.CharField(max_length=32, choices=FinancialAlertBasis.choices)
+    severity = models.CharField(max_length=32, choices=FinancialAlertSeverity.choices)
+    status = models.CharField(max_length=32, choices=FinancialAlertStatus.choices, default=FinancialAlertStatus.OPEN)
+    fingerprint = models.CharField(max_length=64)
+    fingerprint_version = models.PositiveSmallIntegerField(default=1)
+    title = models.CharField(max_length=255)
+    message = models.TextField(blank=True, default="")
+    period_start = models.DateField(blank=True, null=True)
+    period_end = models.DateField(blank=True, null=True)
+    currency = models.CharField(max_length=8, blank=True, default="")
+    accounting_amount = models.DecimalField(max_digits=20, decimal_places=6, blank=True, null=True)
+    management_amount = models.DecimalField(max_digits=20, decimal_places=6, blank=True, null=True)
+    evaluated_amount = models.DecimalField(max_digits=20, decimal_places=6, blank=True, null=True)
+    threshold_amount = models.DecimalField(max_digits=20, decimal_places=6, blank=True, null=True)
+    data_quality_status = models.CharField(max_length=64, blank=True, default="")
+    first_detected_at = models.DateTimeField(default=timezone.now)
+    last_detected_at = models.DateTimeField(default=timezone.now)
+    last_evaluated_at = models.DateTimeField(default=timezone.now)
+    acknowledged_at = models.DateTimeField(blank=True, null=True)
+    acknowledged_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="acknowledged_financial_alerts",
+        blank=True,
+        null=True,
+    )
+    resolved_at = models.DateTimeField(blank=True, null=True)
+    dismissed_at = models.DateTimeField(blank=True, null=True)
+    dismissed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        related_name="dismissed_financial_alerts",
+        blank=True,
+        null=True,
+    )
+    resolution_reason = models.CharField(max_length=255, blank=True, default="")
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-last_detected_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(fields=["organization", "fingerprint"], name="unique_financial_alert_fingerprint"),
+        ]
+        indexes = [
+            models.Index(fields=["organization", "status"], name="idx_fin_alert_org_status"),
+            models.Index(fields=["project", "status"], name="idx_fin_alert_project_status"),
+            models.Index(fields=["alert_type", "status"], name="idx_fin_alert_type_status"),
+            models.Index(fields=["period_start", "period_end"], name="idx_fin_alert_period"),
+            models.Index(fields=["severity", "status"], name="idx_fin_alert_severity_status"),
+            models.Index(fields=["last_detected_at"], name="idx_fin_alert_last_detected"),
+        ]
+
+    @property
+    def is_active_status(self) -> bool:
+        return self.status in {FinancialAlertStatus.OPEN, FinancialAlertStatus.ACKNOWLEDGED}
+
+    @property
+    def lifecycle_label(self) -> str:
+        return self.get_status_display()
+
+    def __str__(self) -> str:
+        return f"{self.project.code} {self.alert_type} ({self.status})"
+
+
+class FinancialAlertEvaluationRun(models.Model):
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name="financial_alert_evaluation_runs",
+    )
+    status = models.CharField(
+        max_length=32,
+        choices=FinancialAlertEvaluationRunStatus.choices,
+        default=FinancialAlertEvaluationRunStatus.RUNNING,
+    )
+    evaluation_date = models.DateField()
+    started_at = models.DateTimeField(default=timezone.now)
+    completed_at = models.DateTimeField(blank=True, null=True)
+    requested_project_count = models.PositiveIntegerField(default=0)
+    evaluated_project_count = models.PositiveIntegerField(default=0)
+    evaluated_rule_count = models.PositiveIntegerField(default=0)
+    opened_count = models.PositiveIntegerField(default=0)
+    updated_count = models.PositiveIntegerField(default=0)
+    reopened_count = models.PositiveIntegerField(default=0)
+    resolved_count = models.PositiveIntegerField(default=0)
+    unchanged_count = models.PositiveIntegerField(default=0)
+    skipped_count = models.PositiveIntegerField(default=0)
+    failed_count = models.PositiveIntegerField(default=0)
+    safe_error = models.TextField(blank=True, default="")
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-started_at", "-id"]
+
+    def __str__(self) -> str:
+        return f"{self.organization} financial alerts {self.evaluation_date} ({self.status})"
 
 
 class AccountingGLBatch(models.Model):

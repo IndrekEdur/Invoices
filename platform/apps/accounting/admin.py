@@ -9,6 +9,9 @@ from .models import (
     AccountingIntegration,
     AccountingSyncRun,
     AccountingSyncState,
+    FinancialAlert,
+    FinancialAlertEvaluationRun,
+    FinancialAlertRule,
     ManagementAllocationEntry,
     ManagementAllocationPeriod,
     ManagementAllocationRule,
@@ -89,6 +92,53 @@ class AccountingSyncRunAdmin(admin.ModelAdmin):
     )
     list_filter = ("source_type", "status", "mode")
     search_fields = ("integration__display_name", "organization__name", "source_type", "cursor_before", "cursor_after")
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(FinancialAlertRule)
+class FinancialAlertRuleAdmin(admin.ModelAdmin):
+    list_display = ("name", "organization", "alert_type", "financial_basis", "severity", "is_active", "candidate_scope")
+    list_filter = ("alert_type", "financial_basis", "severity", "is_active", "candidate_scope")
+    search_fields = ("name", "organization__name")
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(FinancialAlert)
+class FinancialAlertAdmin(admin.ModelAdmin):
+    list_display = (
+        "project",
+        "alert_type",
+        "financial_basis",
+        "severity",
+        "status",
+        "period_start",
+        "period_end",
+        "evaluated_amount",
+        "first_detected_at",
+        "last_detected_at",
+        "resolved_at",
+    )
+    list_filter = ("status", "alert_type", "severity", "financial_basis", "organization")
+    search_fields = ("project__code", "project__name", "title", "fingerprint")
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(FinancialAlertEvaluationRun)
+class FinancialAlertEvaluationRunAdmin(admin.ModelAdmin):
+    list_display = (
+        "organization",
+        "evaluation_date",
+        "status",
+        "started_at",
+        "completed_at",
+        "opened_count",
+        "updated_count",
+        "reopened_count",
+        "resolved_count",
+        "failed_count",
+    )
+    list_filter = ("status", "evaluation_date", "organization")
+    search_fields = ("organization__name", "safe_error")
     readonly_fields = ("created_at", "updated_at")
 
 

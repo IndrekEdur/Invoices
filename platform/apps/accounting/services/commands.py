@@ -2,6 +2,56 @@ from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
+class EvaluateFinancialAlertsCommand:
+    organization: object
+    evaluation_date: object
+    project_ids: list | None = None
+    alert_types: list | None = None
+    dry_run: bool = False
+    actor: object = None
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class FinancialAlertEvaluationResult:
+    evaluation_run: object
+    evaluated_projects: int
+    evaluated_rules: int
+    opened_count: int
+    updated_count: int
+    reopened_count: int
+    resolved_count: int
+    unchanged_count: int
+    skipped_count: int
+    failed_count: int
+    warnings: list[str]
+    alert_ids: list[int]
+    dry_run: bool
+    metadata: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class FinancialAlertFact:
+    project: object
+    alert_type: str
+    basis: str
+    period_start: object
+    period_end: object
+    currency: str
+    accounting_amount: object
+    management_amount: object
+    evaluated_amount: object
+    threshold_amount: object
+    condition_met: bool
+    title: str
+    message: str
+    severity: str
+    data_quality_status: str
+    warnings: list[str]
+    metadata: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class SuggestNextProjectCodeCommand:
     organization: object
     prefix: str = ""

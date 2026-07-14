@@ -60,7 +60,7 @@ The accounting app includes a normalized general-ledger cache for batches, entri
 
 The accounting app includes a GL transaction synchronization service and `sync_general_ledger` management command for bounded 31-day Merit GL periods.
 
-The accounting app includes exact-code account classification configuration and a read-only project financial aggregation service. Project totals are calculated from local GL allocation rows, unclassified amounts stay visible and excluded from trusted result totals, and no financial UI or alert rules exist yet.
+The accounting app includes exact-code account classification configuration and a read-only project financial aggregation service. Project totals are calculated from local GL allocation rows, unclassified amounts stay visible and excluded from trusted result totals, and financial alert detection consumes these existing aggregation results instead of recalculating project financial truth.
 
 The accounting app includes Management Cost Pool and Allocation Rule models for the future management accounting layer. Cost pools, GL account mappings, monthly periods, versioned allocation entries and rule configuration are stored separately from synchronized Merit GL cache data.
 
@@ -85,6 +85,8 @@ Project Financial Overview includes a server-rendered vertical monthly revenue/c
 Project Financials now formats monetary values with consistent two-decimal display, includes labeled Y-axis gridlines on the monthly chart, and keeps the Workspace sidebar visible while long desktop pages scroll.
 
 Financial Alert Architecture is planned for central `/workspace/alerts/`, Project-level alert visibility, and later weekly e-mail digests. Initial alerts will cover lifetime negative result, current-month negative result, and "No project revenue recorded for current month"; e-mail delivery is a later phase.
+
+The accounting app includes persisted Financial Alert models, default rule bootstrap support, and a manual `evaluate_financial_alerts` management command with `--dry-run`. The first detection engine supports lifetime negative result, current-month negative result, and "No project revenue recorded for current month"; Alerts UI, scheduling, and e-mail delivery are still planned.
 
 Organization Financial Dashboard at `/workspace/financials/` compares selected-month project revenue, cost, result, margin and data quality from local synchronized GL allocations. Its project comparison chart renders Revenue, Cost and Result bars on one shared monetary scale, while margin remains a separate percentage indicator. It ranks projects by highest revenue by default, keeps completed and archived projects visible when they have financial activity, and avoids silently combining mixed-currency totals.
 
