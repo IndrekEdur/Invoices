@@ -6,6 +6,8 @@ This roadmap describes the intended direction for the invoice automation project
 
 Current architecture phase: Project Communication Intelligence Architecture.
 
+Latest architecture review completed: Cross-Architecture Consistency Review.
+
 Current product phase: Operations Workspace MVP.
 
 Current engineering phase: Engineering Standards.

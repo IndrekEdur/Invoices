@@ -36,6 +36,8 @@ Normal IMAP sync now uses incremental UID-based mailbox cursors. It resumes from
 
 `FINANCIAL_ALERT_ARCHITECTURE.md` describes how Workspace will persist, evaluate, review, resolve, and later distribute project financial alerts without duplicating financial calculation services.
 
+`ARCHITECTURE_CONSISTENCY_REVIEW.md` reviews all architecture documents as one platform and records naming, lifecycle, source-of-truth, service ownership, roadmap and future integration recommendations.
+
 `FINANCIAL_GL_VERIFICATION_GUIDE.md` describes the safe manual workflow for verifying real Merit GL synchronization, idempotency, local cache quality, diagnostic totals, and project allocation links.
 
 `MERIT_VERIFICATION_GUIDE.md` describes the safe manual workflow for verifying real Merit credentials, connection checks, dimension sync, local cache updates, and project dimension creation.
