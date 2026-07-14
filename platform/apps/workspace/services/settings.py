@@ -83,6 +83,12 @@ class SettingsContextBuilder:
                 "body": "Map imported GL account codes into project financial reporting categories.",
                 "status": "ready",
             },
+            {
+                "slug": "financial-alert-rules",
+                "title": "Financial Alert Rules",
+                "body": "Configure profitability and revenue alert rules, thresholds and manual re-evaluation.",
+                "status": "ready",
+            },
             {"slug": "project-numbering", "title": "Project Numbering", "body": "Suggested project codes and collision awareness.", "status": "ready"},
             {"slug": "knowledge", "title": "Knowledge", "body": "Future memory, evidence and AI context configuration.", "status": "planned"},
             {"slug": "documents", "title": "Documents", "body": "Future storage, OCR and document workflow settings.", "status": "planned"},

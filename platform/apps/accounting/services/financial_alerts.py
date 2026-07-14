@@ -33,6 +33,7 @@ from .commands import (
     FinancialAlertActionResult,
     FinancialAlertEvaluationResult,
     FinancialAlertFact,
+    UpdateFinancialAlertRuleCommand,
 )
 from .financial_aggregation import ProjectFinancialAggregationService
 from .management_financials import ProjectManagementFinancialService
@@ -72,6 +73,17 @@ class FinancialAlertFingerprintService:
             project=project,
             alert_type=FinancialAlertType.PROJECT_CURRENT_MONTH_NO_REVENUE,
             basis=FinancialAlertBasis.ACCOUNTING,
+            rule=rule,
+            period_key=cls._month_key(evaluation_date),
+        )
+
+    @classmethod
+    def build_project_margin_below_threshold(cls, *, organization, project, basis, evaluation_date, rule=None):
+        return cls.build(
+            organization=organization,
+            project=project,
+            alert_type=FinancialAlertType.PROJECT_MARGIN_BELOW_THRESHOLD,
+            basis=basis,
             rule=rule,
             period_key=cls._month_key(evaluation_date),
         )
@@ -122,6 +134,14 @@ class FinancialAlertRuleService:
             "threshold_amount": ZERO,
             "candidate_scope": FinancialAlertCandidateScope.ACTIVE_PROJECTS_WITH_MONTH_ACTIVITY,
         },
+        {
+            "alert_type": FinancialAlertType.PROJECT_MARGIN_BELOW_THRESHOLD,
+            "name": "Project margin below threshold",
+            "financial_basis": FinancialAlertBasis.MANAGEMENT,
+            "severity": FinancialAlertSeverity.WARNING,
+            "threshold_percentage": Decimal("10.00"),
+            "candidate_scope": FinancialAlertCandidateScope.ACTIVE_PROJECTS_WITH_MONTH_ACTIVITY,
+        },
     ]
 
     @classmethod
@@ -157,6 +177,50 @@ class FinancialAlertRuleService:
                 metadata={"rule_count": len(rules)},
             )
         return rules
+
+    @classmethod
+    @transaction.atomic
+    def update_rule(cls, command: UpdateFinancialAlertRuleCommand):
+        metadata = deepcopy(command.metadata or {})
+        rule = FinancialAlertRule.objects.select_for_update().get(pk=command.rule.pk)
+        previous = {
+            "name": rule.name,
+            "is_active": rule.is_active,
+            "financial_basis": rule.financial_basis,
+            "severity": rule.severity,
+            "threshold_amount": str(rule.threshold_amount) if rule.threshold_amount is not None else "",
+            "threshold_percentage": str(rule.threshold_percentage) if rule.threshold_percentage is not None else "",
+            "grace_day": rule.grace_day,
+            "candidate_scope": rule.candidate_scope,
+            "configuration": deepcopy(rule.configuration or {}),
+        }
+        rule.name = command.name
+        rule.is_active = bool(command.is_active)
+        rule.financial_basis = command.financial_basis
+        rule.severity = command.severity
+        rule.threshold_amount = command.threshold_amount
+        rule.threshold_percentage = command.threshold_percentage
+        rule.grace_day = command.grace_day
+        rule.candidate_scope = command.candidate_scope
+        rule.configuration = deepcopy(command.configuration or {})
+        rule.save()
+        AuditService.record(
+            organization=rule.organization,
+            actor=command.actor,
+            event_type="financial_alert_rule_updated",
+            object_type="FinancialAlertRule",
+            object_id=str(rule.id),
+            message=f"Financial alert rule updated: {rule.name}",
+            metadata={
+                **metadata,
+                "alert_type": rule.alert_type,
+                "previous": previous,
+                "current_threshold_percentage": str(rule.threshold_percentage)
+                if rule.threshold_percentage is not None
+                else "",
+            },
+        )
+        return rule
 
 
 class FinancialAlertCandidateService:
@@ -217,6 +281,8 @@ class FinancialAlertFactBuilder:
             return self.build_current_month_negative_fact(project=project, rule=rule, evaluation_date=evaluation_date)
         if rule.alert_type == FinancialAlertType.PROJECT_CURRENT_MONTH_NO_REVENUE:
             return self.build_current_month_no_revenue_fact(project=project, rule=rule, evaluation_date=evaluation_date)
+        if rule.alert_type == FinancialAlertType.PROJECT_MARGIN_BELOW_THRESHOLD:
+            return self.build_project_margin_below_threshold_fact(project=project, rule=rule, evaluation_date=evaluation_date)
         raise ValueError(f"Unsupported financial alert type: {rule.alert_type}")
 
     def build_lifetime_negative_fact(self, *, project, rule, evaluation_date):
@@ -295,6 +361,84 @@ class FinancialAlertFactBuilder:
             },
         )
 
+    def build_project_margin_below_threshold_fact(self, *, project, rule, evaluation_date):
+        evaluation_date = self.coerce_date(evaluation_date, "evaluation_date")
+        period_start, period_end = self.month_bounds(evaluation_date)
+        period_end = min(period_end, evaluation_date)
+        warnings = []
+        if rule.grace_day and evaluation_date.day < rule.grace_day:
+            warnings.append(f"grace_day_active:{rule.grace_day}")
+            return self._skipped_fact(project, rule, period_start, period_end, warnings)
+
+        accounting = self._aggregate(project, rule, period_start, period_end)
+        warnings = list(accounting.warnings)
+        threshold = self._percentage_threshold(rule)
+        if accounting.data_quality_status == "mixed_currency":
+            warnings.append("skipped_mixed_currency")
+            return self._skipped_fact(project, rule, period_start, period_end, warnings, accounting=accounting)
+        if accounting.data_quality_status == "no_data":
+            warnings.append("skipped_no_data")
+            return self._skipped_fact(project, rule, period_start, period_end, warnings, accounting=accounting)
+        if accounting.revenue <= ZERO:
+            warnings.append("skipped_margin_revenue_not_positive")
+            fact = self._skipped_fact(project, rule, period_start, period_end, warnings, accounting=accounting)
+            metadata = dict(fact.metadata)
+            metadata.update(
+                {
+                    "accounting_revenue": str(accounting.revenue),
+                    "margin_undefined": True,
+                    "margin_undefined_reason": "accounting_revenue_not_positive",
+                    "threshold_percentage": str(threshold),
+                }
+            )
+            return self._replace_fact(fact, threshold_amount=threshold, metadata=metadata)
+
+        management = self.management_service.build(BuildManagementFinancialsCommand(accounting_result=accounting))
+        accounting_margin = self._margin(accounting.result, accounting.revenue)
+        management_margin = self._margin(management.management_result, accounting.revenue)
+        evaluated_margin = (
+            management_margin if rule.financial_basis == FinancialAlertBasis.MANAGEMENT else accounting_margin
+        )
+        basis_label = "management" if rule.financial_basis == FinancialAlertBasis.MANAGEMENT else "accounting"
+        month_label = f"{period_start:%B %Y}"
+        return FinancialAlertFact(
+            project=project,
+            alert_type=rule.alert_type,
+            basis=rule.financial_basis,
+            period_start=period_start,
+            period_end=period_end,
+            currency="%",
+            accounting_amount=accounting_margin,
+            management_amount=management_margin,
+            evaluated_amount=evaluated_margin,
+            threshold_amount=threshold,
+            condition_met=evaluated_margin < threshold,
+            title="Project margin below threshold",
+            message=(
+                f"Project {project.code} {basis_label} margin is {self._format_percent(evaluated_margin)}, "
+                f"below threshold {self._format_percent(threshold)} for {month_label}."
+            ),
+            severity=rule.severity,
+            data_quality_status=accounting.data_quality_status,
+            warnings=warnings + list(management.warnings),
+            metadata={
+                "accounting_revenue": str(accounting.revenue),
+                "accounting_result": str(accounting.result),
+                "accounting_total_cost": str(accounting.total_cost),
+                "accounting_margin": str(accounting_margin),
+                "management_total_cost": str(management.management_total_cost),
+                "management_result": str(management.management_result),
+                "management_margin": str(management_margin),
+                "evaluated_margin": str(evaluated_margin),
+                "threshold_percentage": str(threshold),
+                "margin_basis": rule.financial_basis,
+                "allocation_count": accounting.allocation_count,
+                "is_partial_month": period_end.day < calendar.monthrange(period_end.year, period_end.month)[1],
+                "evaluation_day": evaluation_date.day,
+                "month_end": self.month_bounds(evaluation_date)[1].isoformat(),
+            },
+        )
+
     def _negative_fact(self, project, rule, accounting, period_start, period_end, *, lifetime):
         warnings = list(accounting.warnings)
         if accounting.data_quality_status == "mixed_currency":
@@ -349,6 +493,18 @@ class FinancialAlertFactBuilder:
     @staticmethod
     def _threshold(rule):
         return rule.threshold_amount if rule.threshold_amount is not None else ZERO
+
+    @staticmethod
+    def _percentage_threshold(rule):
+        return rule.threshold_percentage if rule.threshold_percentage is not None else ZERO
+
+    @staticmethod
+    def _margin(result, revenue):
+        return ((result / revenue) * Decimal("100")).quantize(Decimal("0.01"))
+
+    @staticmethod
+    def _format_percent(value):
+        return f"{value.quantize(Decimal('0.01'))}%"
 
     @staticmethod
     def _skipped_fact(project, rule, period_start, period_end, warnings, accounting=None):
@@ -507,6 +663,14 @@ class FinancialAlertLifecycleService:
             )
         if fact.alert_type == FinancialAlertType.PROJECT_CURRENT_MONTH_NEGATIVE:
             return self.fingerprint_service.build_current_month_negative(
+                organization=fact.project.organization,
+                project=fact.project,
+                basis=fact.basis,
+                evaluation_date=fact.period_start,
+                rule=rule,
+            )
+        if fact.alert_type == FinancialAlertType.PROJECT_MARGIN_BELOW_THRESHOLD:
+            return self.fingerprint_service.build_project_margin_below_threshold(
                 organization=fact.project.organization,
                 project=fact.project,
                 basis=fact.basis,

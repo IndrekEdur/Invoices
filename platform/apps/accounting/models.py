@@ -14,6 +14,7 @@ class FinancialAlertType(models.TextChoices):
     PROJECT_LIFETIME_NEGATIVE = "project_lifetime_negative", "Project lifetime negative"
     PROJECT_CURRENT_MONTH_NEGATIVE = "project_current_month_negative", "Project current-month negative"
     PROJECT_CURRENT_MONTH_NO_REVENUE = "project_current_month_no_revenue", "Project current-month no revenue"
+    PROJECT_MARGIN_BELOW_THRESHOLD = "project_margin_below_threshold", "Project margin below threshold"
 
 
 class FinancialAlertBasis(models.TextChoices):
@@ -393,6 +394,8 @@ class FinancialAlertRule(models.Model):
         super().clean()
         if self.grace_day is not None and not 1 <= self.grace_day <= 31:
             raise ValidationError("Financial alert rule grace_day must be between 1 and 31.")
+        if self.threshold_percentage is not None and not Decimal("0") <= self.threshold_percentage <= Decimal("100"):
+            raise ValidationError("Financial alert rule threshold_percentage must be between 0 and 100.")
         if self.configuration is None or not isinstance(self.configuration, dict):
             raise ValidationError("Financial alert rule configuration must be an object.")
         if self.project_status_scope is None or not isinstance(self.project_status_scope, list):

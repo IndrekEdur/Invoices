@@ -1,7 +1,10 @@
+import json
+from decimal import Decimal
+
 from django import forms
 from datetime import date, timedelta
 
-from apps.accounting.models import AccountingAccountClassification, AccountingIntegration
+from apps.accounting.models import AccountingAccountClassification, AccountingIntegration, FinancialAlertRule
 from apps.communications.models import EmailAccount
 from apps.projects.models import Project
 from apps.projects.services import ProjectStatusService
@@ -236,6 +239,66 @@ class AccountClassificationForm(forms.Form):
         else:
             self.fields["category"].initial = AccountingAccountClassification.Category.UNCLASSIFIED
             self.fields["reporting_sign"].initial = "1"
+
+
+class FinancialAlertRuleForm(forms.ModelForm):
+    configuration_text = forms.CharField(
+        label="Configuration JSON",
+        required=False,
+        widget=forms.Textarea(attrs={"class": FIELD_CLASS, "rows": 6}),
+        help_text="Extensible JSON object for future rule options. Leave empty for {}.",
+    )
+
+    class Meta:
+        model = FinancialAlertRule
+        fields = [
+            "name",
+            "is_active",
+            "financial_basis",
+            "severity",
+            "threshold_amount",
+            "threshold_percentage",
+            "grace_day",
+            "candidate_scope",
+        ]
+        widgets = {
+            "name": forms.TextInput(attrs={"class": FIELD_CLASS}),
+            "is_active": forms.CheckboxInput(attrs={"class": CHECKBOX_CLASS}),
+            "financial_basis": forms.Select(attrs={"class": FIELD_CLASS}),
+            "severity": forms.Select(attrs={"class": FIELD_CLASS}),
+            "threshold_amount": forms.NumberInput(attrs={"class": FIELD_CLASS, "step": "0.000001"}),
+            "threshold_percentage": forms.NumberInput(attrs={"class": FIELD_CLASS, "step": "0.01", "min": "0", "max": "100"}),
+            "grace_day": forms.NumberInput(attrs={"class": FIELD_CLASS, "min": "1", "max": "31"}),
+            "candidate_scope": forms.Select(attrs={"class": FIELD_CLASS}),
+        }
+        help_texts = {
+            "threshold_percentage": "For margin alerts, 10.00 means minimum 10.00% margin.",
+            "threshold_amount": "Used by amount-based alert rules.",
+            "grace_day": "Optional day of month before which monthly rules are skipped.",
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        configuration = self.instance.configuration if self.instance and self.instance.pk else {}
+        self.fields["configuration_text"].initial = json.dumps(configuration or {}, indent=2, sort_keys=True)
+
+    def clean_threshold_percentage(self):
+        value = self.cleaned_data.get("threshold_percentage")
+        if value is not None and not Decimal("0") <= value <= Decimal("100"):
+            raise forms.ValidationError("Percentage must be between 0 and 100.")
+        return value
+
+    def clean_configuration_text(self):
+        raw = (self.cleaned_data.get("configuration_text") or "").strip()
+        if not raw:
+            return {}
+        try:
+            value = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise forms.ValidationError("Configuration must be valid JSON.") from exc
+        if not isinstance(value, dict):
+            raise forms.ValidationError("Configuration must be a JSON object.")
+        return value
 
 
 class ProjectEditForm(forms.ModelForm):

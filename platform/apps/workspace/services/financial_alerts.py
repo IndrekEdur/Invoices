@@ -1,5 +1,6 @@
 import calendar
 from dataclasses import dataclass
+from decimal import Decimal
 
 from django.core.paginator import Paginator
 from django.db.models import Case, Count, IntegerField, Q, Value, When
@@ -24,6 +25,7 @@ ACTIVE_STATUSES = [FinancialAlertStatus.OPEN, FinancialAlertStatus.ACKNOWLEDGED]
 SAFE_METADATA_KEYS = {
     "accounting_amount",
     "accounting_result",
+    "accounting_margin",
     "accounting_revenue",
     "accounting_total_cost",
     "activity_allocation_count",
@@ -35,9 +37,16 @@ SAFE_METADATA_KEYS = {
     "evaluation_day",
     "is_partial_month",
     "management_amount",
+    "management_margin",
+    "management_result",
     "management_total_cost",
+    "margin_basis",
+    "margin_undefined",
+    "margin_undefined_reason",
     "month_end",
     "sync_freshness_status",
+    "evaluated_margin",
+    "threshold_percentage",
     "unclassified_amount",
     "warnings",
     "wording_limitation",
@@ -316,6 +325,8 @@ class FinancialAlertsContextBuilder:
     @staticmethod
     def _row(alert):
         currency = alert.currency or "EUR"
+        is_percentage = alert.alert_type == FinancialAlertType.PROJECT_MARGIN_BELOW_THRESHOLD or alert.currency == "%"
+        formatter = FinancialAlertsContextBuilder._format_percent if is_percentage else lambda value: format_money(value, currency)
         return {
             "alert": alert,
             "type_label": alert.get_alert_type_display(),
@@ -323,11 +334,12 @@ class FinancialAlertsContextBuilder:
             "severity_label": alert.get_severity_display(),
             "status_label": alert.get_status_display(),
             "period_label": FinancialAlertsContextBuilder._period_label(alert),
-            "accounting_display": format_money(alert.accounting_amount, currency) if alert.accounting_amount is not None else "-",
-            "management_display": format_money(alert.management_amount, currency) if alert.management_amount is not None else "-",
-            "evaluated_display": format_money(alert.evaluated_amount, currency) if alert.evaluated_amount is not None else "-",
-            "threshold_display": format_money(alert.threshold_amount, currency) if alert.threshold_amount is not None else "-",
+            "accounting_display": formatter(alert.accounting_amount) if alert.accounting_amount is not None else "-",
+            "management_display": formatter(alert.management_amount) if alert.management_amount is not None else "-",
+            "evaluated_display": formatter(alert.evaluated_amount) if alert.evaluated_amount is not None else "-",
+            "threshold_display": formatter(alert.threshold_amount) if alert.threshold_amount is not None else "-",
             "currency": currency,
+            "is_percentage": is_percentage,
             "warnings": list((alert.metadata or {}).get("warnings") or []),
             "detail_url": reverse("workspace:financial_alert_detail", kwargs={"alert_id": alert.id}),
             "project_url": reverse("workspace:project_detail", kwargs={"project_id": alert.project_id}),
@@ -336,6 +348,10 @@ class FinancialAlertsContextBuilder:
             "can_acknowledge": alert.status == FinancialAlertStatus.OPEN,
             "can_dismiss": alert.status in ACTIVE_STATUSES,
         }
+
+    @staticmethod
+    def _format_percent(value):
+        return f"{value.quantize(Decimal('0.01'))}%"
 
     @staticmethod
     def _period_label(alert):

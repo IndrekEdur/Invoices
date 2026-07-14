@@ -13,6 +13,22 @@ class EvaluateFinancialAlertsCommand:
 
 
 @dataclass(frozen=True)
+class UpdateFinancialAlertRuleCommand:
+    rule: object
+    name: str
+    is_active: bool
+    financial_basis: str
+    severity: str
+    threshold_amount: object = None
+    threshold_percentage: object = None
+    grace_day: object = None
+    candidate_scope: str = ""
+    configuration: dict | None = None
+    actor: object = None
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
 class FinancialAlertEvaluationResult:
     evaluation_run: object
     evaluated_projects: int

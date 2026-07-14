@@ -55,7 +55,14 @@
                             <span class="font-semibold text-slate-950">{{ row.alert.title }}</span>
                             <span>{% include "workspace/partials/components/status_badge.html" with status=row.alert.severity label=row.severity_label %}</span>
                         </div>
-                        <div class="mt-1 text-slate-600">{{ row.period_label }} · {{ row.evaluated_display }}</div>
+                        <div class="mt-1 text-slate-600">
+                            {{ row.period_label }} ·
+                            {% if row.is_percentage %}
+                                Margin {{ row.evaluated_display }} · Required {{ row.threshold_display }}
+                            {% else %}
+                                {{ row.evaluated_display }}
+                            {% endif %}
+                        </div>
                     </a>
                 {% endfor %}
             </div>

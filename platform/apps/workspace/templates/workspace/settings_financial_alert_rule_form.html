@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Edit Financial Alert Rule | Operations Workspace Platform{% endblock %}
+{% block actions %}
+<a href="{% url 'workspace:settings_financial_alert_rules' %}" class="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 shadow-sm transition hover:bg-slate-50">Back to Rules</a>
+{% endblock %}
+{% block content %}
+<div class="space-y-8">
+    {% include "workspace/partials/components/page_header.html" with eyebrow="Settings" title=rule.name body="Edit the rule configuration. Existing alert rows are not changed directly; use re-evaluation after saving." %}
+
+    <section class="rounded-2xl border border-blue-200 bg-blue-50 p-5 text-sm leading-6 text-blue-950">
+        <div class="font-semibold">Margin threshold help</div>
+        <p class="mt-2">For Project margin below threshold, threshold percentage is the minimum acceptable margin. Accounting basis uses Accounting Result / Accounting Revenue. Management basis uses Management Result / Accounting Revenue.</p>
+    </section>
+
+    <form method="post" class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        {% csrf_token %}
+        {% if form.non_field_errors %}
+            <div class="mb-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">{{ form.non_field_errors }}</div>
+        {% endif %}
+        <div class="grid gap-5 md:grid-cols-2">
+            {% for field in form %}
+                <label class="{% if field.field.widget.input_type == 'checkbox' %}flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm font-semibold text-slate-800{% else %}block text-sm font-semibold text-slate-700{% endif %}">
+                    {% if field.field.widget.input_type == 'checkbox' %}
+                        {{ field }} {{ field.label }}
+                    {% else %}
+                        {{ field.label }}
+                        {{ field }}
+                    {% endif %}
+                    {% if field.help_text %}<span class="mt-1 block text-xs font-normal leading-5 text-slate-500">{{ field.help_text }}</span>{% endif %}
+                    {% for error in field.errors %}<span class="mt-1 block text-xs font-semibold text-red-700">{{ error }}</span>{% endfor %}
+                </label>
+            {% endfor %}
+        </div>
+        <div class="mt-6 flex flex-wrap gap-3">
+            <button type="submit" class="rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800">Save Rule</button>
+            <a href="{% url 'workspace:settings_financial_alert_rules' %}" class="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50">Cancel</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

@@ -107,6 +107,7 @@ from apps.accounting.services import (
     SyncAccountingDimensionsResult,
     SyncGeneralLedgerCommand,
     SyncGeneralLedgerResult,
+    UpdateFinancialAlertRuleCommand,
     UpdateAccountingSyncProgressCommand,
     UpsertGLAllocationCommand,
     UpsertGLBatchCommand,
@@ -1320,16 +1321,20 @@ class FinancialAlertTests(TestCase):
         severity=FinancialAlertSeverity.WARNING,
         candidate_scope=FinancialAlertCandidateScope.ACTIVE_PROJECTS_WITH_MONTH_ACTIVITY,
         threshold=Decimal("0"),
+        threshold_percentage=None,
         grace_day=None,
         currency="",
+        is_active=True,
     ):
         return FinancialAlertRule.objects.create(
             organization=organization,
             alert_type=alert_type,
             name=f"{alert_type}-{FinancialAlertRule.objects.count()}",
+            is_active=is_active,
             financial_basis=basis,
             severity=severity,
             threshold_amount=threshold,
+            threshold_percentage=threshold_percentage,
             candidate_scope=candidate_scope,
             grace_day=grace_day,
             currency=currency,
@@ -1391,6 +1396,36 @@ class FinancialAlertTests(TestCase):
         self._allocation(project, integration, account_code="5000", amount=Decimal("150.000000"), suffix="cost")
         return integration, project
 
+    def _margin_project(self, cost=Decimal("92.000000")):
+        integration, project = self._setup(code="26140")
+        self._classify(project.organization, integration, "3000", AccountingAccountClassification.Category.REVENUE, sign=Decimal("-1"))
+        self._classify(project.organization, integration, "5000", AccountingAccountClassification.Category.MATERIAL_COST)
+        self._allocation(project, integration, account_code="3000", amount=Decimal("-100.000000"), suffix="margin-rev")
+        self._allocation(project, integration, account_code="5000", amount=cost, suffix="margin-cost")
+        return integration, project
+
+    def _management_entry(self, project, amount, *, status=VersionStatus.APPROVED, year=2026, month=6):
+        period, _created = ManagementAllocationPeriod.objects.get_or_create(
+            organization=project.organization,
+            year=year,
+            month=month,
+        )
+        pool = ManagementCostPool.objects.create(organization=project.organization, name=f"Pool {amount}")
+        version = ManagementAllocationVersion.objects.create(
+            period=period,
+            pool=pool,
+            version_number=ManagementAllocationVersion.objects.count() + 1,
+            status=status,
+            approved_at=timezone.now() if status == VersionStatus.APPROVED else None,
+            metadata={"source_amount": str(amount)},
+        )
+        return ManagementAllocationEntry.objects.create(
+            version=version,
+            project=project,
+            percentage=Decimal("100.0000"),
+            amount=Decimal(amount),
+        )
+
     def test_rule_model_defaults_uniqueness_grace_day_and_str(self):
         organization = create_organization()
         rule = self._rule(organization, grace_day=5)
@@ -1400,6 +1435,12 @@ class FinancialAlertTests(TestCase):
         self.assertIn(rule.alert_type, str(rule))
         with self.assertRaises(ValidationError):
             self._rule(organization, FinancialAlertType.PROJECT_LIFETIME_NEGATIVE, grace_day=32)
+        with self.assertRaises(ValidationError):
+            self._rule(
+                organization,
+                FinancialAlertType.PROJECT_MARGIN_BELOW_THRESHOLD,
+                threshold_percentage=Decimal("101.00"),
+            )
         with self.assertRaises(ValidationError):
             self._rule(organization)
 
@@ -1488,6 +1529,29 @@ class FinancialAlertTests(TestCase):
         self.assertNotEqual(first, different_month)
         self.assertNotEqual(first, different_basis)
         self.assertEqual(len(first), 64)
+
+        margin_rule = self._rule(
+            project.organization,
+            FinancialAlertType.PROJECT_MARGIN_BELOW_THRESHOLD,
+            threshold_percentage=Decimal("10.00"),
+        )
+        margin_first = FinancialAlertFingerprintService.build_project_margin_below_threshold(
+            organization=project.organization,
+            project=project,
+            basis=margin_rule.financial_basis,
+            evaluation_date=date(2026, 6, 1),
+            rule=margin_rule,
+        )
+        margin_rule.threshold_percentage = Decimal("15.00")
+        margin_rule.save()
+        margin_second = FinancialAlertFingerprintService.build_project_margin_below_threshold(
+            organization=project.organization,
+            project=project,
+            basis=margin_rule.financial_basis,
+            evaluation_date=date(2026, 6, 30),
+            rule=margin_rule,
+        )
+        self.assertEqual(margin_first, margin_second)
 
     def test_candidate_selection_scopes_and_organization_isolation(self):
         integration, active = self._setup(code="26124")
@@ -1578,6 +1642,43 @@ class FinancialAlertTests(TestCase):
         self.assertFalse(mixed.condition_met)
         self.assertIn("skipped_mixed_currency", mixed.warnings)
 
+    def test_margin_fact_uses_accounting_and_management_basis_and_skips_undefined_revenue(self):
+        integration, project = self._margin_project(cost=Decimal("92.000000"))
+        accounting_rule = self._rule(
+            project.organization,
+            FinancialAlertType.PROJECT_MARGIN_BELOW_THRESHOLD,
+            basis=FinancialAlertBasis.ACCOUNTING,
+            threshold_percentage=Decimal("10.00"),
+            is_active=False,
+        )
+        management_rule = self._rule(
+            project.organization,
+            FinancialAlertType.PROJECT_MARGIN_BELOW_THRESHOLD,
+            basis=FinancialAlertBasis.MANAGEMENT,
+            threshold_percentage=Decimal("10.00"),
+        )
+        self._management_entry(project, "5.000000")
+        builder = FinancialAlertFactBuilder()
+
+        accounting_fact = builder.build_fact(project=project, rule=accounting_rule, evaluation_date=date(2026, 6, 20))
+        management_fact = builder.build_fact(project=project, rule=management_rule, evaluation_date=date(2026, 6, 20))
+
+        self.assertEqual(accounting_fact.accounting_amount, Decimal("8.00"))
+        self.assertEqual(accounting_fact.management_amount, Decimal("3.00"))
+        self.assertEqual(accounting_fact.evaluated_amount, Decimal("8.00"))
+        self.assertTrue(accounting_fact.condition_met)
+        self.assertEqual(management_fact.evaluated_amount, Decimal("3.00"))
+        self.assertTrue(management_fact.condition_met)
+        self.assertEqual(management_fact.threshold_amount, Decimal("10.00"))
+        self.assertEqual(management_fact.metadata["threshold_percentage"], "10.00")
+
+        no_revenue_project = Project.objects.create(organization=project.organization, code="26141", name="No revenue")
+        self._allocation(no_revenue_project, integration, account_code="5000", amount=Decimal("10.000000"), suffix="margin-no-revenue")
+        skipped = builder.build_fact(project=no_revenue_project, rule=management_rule, evaluation_date=date(2026, 6, 20))
+        self.assertFalse(skipped.condition_met)
+        self.assertIn("skipped_margin_revenue_not_positive", skipped.warnings)
+        self.assertTrue(skipped.metadata["margin_undefined"])
+
     def test_rule_service_default_rules_are_explicit_and_idempotent(self):
         organization = create_organization()
 
@@ -1585,9 +1686,15 @@ class FinancialAlertTests(TestCase):
         first = FinancialAlertRuleService.create_default_rules(organization)
         second = FinancialAlertRuleService.create_default_rules(organization)
 
-        self.assertEqual(len(first), 3)
+        self.assertEqual(len(first), 4)
         self.assertEqual([rule.id for rule in first], [rule.id for rule in second])
-        self.assertEqual(FinancialAlertRule.objects.filter(organization=organization).count(), 3)
+        self.assertEqual(FinancialAlertRule.objects.filter(organization=organization).count(), 4)
+        margin_rule = FinancialAlertRule.objects.get(
+            organization=organization,
+            alert_type=FinancialAlertType.PROJECT_MARGIN_BELOW_THRESHOLD,
+        )
+        self.assertEqual(margin_rule.threshold_percentage, Decimal("10.00"))
+        self.assertEqual(margin_rule.financial_basis, FinancialAlertBasis.MANAGEMENT)
 
     def test_evaluation_opens_updates_resolves_reopens_and_dismissed_stays_dismissed(self):
         _integration, project = self._negative_project()
@@ -1679,14 +1786,90 @@ class FinancialAlertTests(TestCase):
         self.assertEqual(Project.objects.count(), 2)
         self.assertEqual(rule.alert_type, FinancialAlertType.PROJECT_CURRENT_MONTH_NEGATIVE)
 
+    def test_margin_evaluation_updates_same_alert_after_threshold_changes(self):
+        _integration, project = self._margin_project(cost=Decimal("92.000000"))
+        rule = self._rule(
+            project.organization,
+            FinancialAlertType.PROJECT_MARGIN_BELOW_THRESHOLD,
+            threshold_percentage=Decimal("10.00"),
+        )
+        service = FinancialAlertEvaluationService()
+
+        opened = service.evaluate(
+            EvaluateFinancialAlertsCommand(
+                organization=project.organization,
+                evaluation_date=date(2026, 6, 20),
+                alert_types=[FinancialAlertType.PROJECT_MARGIN_BELOW_THRESHOLD],
+            )
+        )
+        alert = FinancialAlert.objects.get(alert_type=FinancialAlertType.PROJECT_MARGIN_BELOW_THRESHOLD)
+        first_id = alert.id
+        first_fingerprint = alert.fingerprint
+        self.assertEqual(opened.opened_count, 1)
+        self.assertEqual(alert.evaluated_amount, Decimal("8.00"))
+        self.assertEqual(alert.threshold_amount, Decimal("10.000000"))
+
+        FinancialAlertRuleService.update_rule(
+            UpdateFinancialAlertRuleCommand(
+                rule=rule,
+                name=rule.name,
+                is_active=True,
+                financial_basis=rule.financial_basis,
+                severity=rule.severity,
+                threshold_amount=rule.threshold_amount,
+                threshold_percentage=Decimal("15.00"),
+                grace_day=rule.grace_day,
+                candidate_scope=rule.candidate_scope,
+                configuration=rule.configuration,
+            )
+        )
+        updated = service.evaluate(
+            EvaluateFinancialAlertsCommand(
+                organization=project.organization,
+                evaluation_date=date(2026, 6, 20),
+                alert_types=[FinancialAlertType.PROJECT_MARGIN_BELOW_THRESHOLD],
+            )
+        )
+        alert.refresh_from_db()
+        self.assertEqual(updated.updated_count, 1)
+        self.assertEqual(alert.id, first_id)
+        self.assertEqual(alert.fingerprint, first_fingerprint)
+        self.assertEqual(FinancialAlert.objects.count(), 1)
+        self.assertEqual(alert.threshold_amount, Decimal("15.000000"))
+
+        FinancialAlertRuleService.update_rule(
+            UpdateFinancialAlertRuleCommand(
+                rule=rule,
+                name=rule.name,
+                is_active=True,
+                financial_basis=rule.financial_basis,
+                severity=rule.severity,
+                threshold_amount=rule.threshold_amount,
+                threshold_percentage=Decimal("5.00"),
+                grace_day=rule.grace_day,
+                candidate_scope=rule.candidate_scope,
+                configuration=rule.configuration,
+            )
+        )
+        resolved = service.evaluate(
+            EvaluateFinancialAlertsCommand(
+                organization=project.organization,
+                evaluation_date=date(2026, 6, 20),
+                alert_types=[FinancialAlertType.PROJECT_MARGIN_BELOW_THRESHOLD],
+            )
+        )
+        alert.refresh_from_db()
+        self.assertEqual(resolved.resolved_count, 1)
+        self.assertEqual(alert.status, FinancialAlertStatus.RESOLVED)
+
     def test_management_commands_create_defaults_evaluate_and_validate_inputs(self):
         integration, project = self._negative_project()
         output = StringIO()
 
         call_command("create_default_financial_alert_rules", "--organization", integration.organization.id, stdout=output)
         call_command("create_default_financial_alert_rules", "--organization", integration.organization.id, stdout=StringIO())
-        self.assertEqual(FinancialAlertRule.objects.filter(organization=integration.organization).count(), 3)
-        self.assertIn("rule_count: 3", output.getvalue())
+        self.assertEqual(FinancialAlertRule.objects.filter(organization=integration.organization).count(), 4)
+        self.assertIn("rule_count: 4", output.getvalue())
 
         eval_output = StringIO()
         call_command(

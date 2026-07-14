@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}Financial Alert Rules | Operations Workspace Platform{% endblock %}
+{% block actions %}
+<form method="post" action="{% url 'workspace:settings_financial_alert_rules_evaluate' %}" onsubmit="return confirm('This recalculates alerts using current rules. No accounting data will be modified.');">
+    {% csrf_token %}
+    <button type="submit" class="inline-flex items-center justify-center rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800">Re-evaluate Financial Alerts</button>
+</form>
+{% endblock %}
+{% block content %}
+<div class="space-y-8">
+    {% include "workspace/partials/components/page_header.html" with eyebrow="Settings" title="Financial Alert Rules" body="Configure organization-level financial alert rules. Rule edits do not directly modify existing alert records; the evaluation service applies changes during re-evaluation." %}
+
+    <section class="rounded-2xl border border-blue-200 bg-blue-50 p-5 text-sm leading-6 text-blue-950">
+        <div class="font-semibold">Margin rule</div>
+        <p class="mt-2">Accounting margin is Result / Revenue. Management margin is Management Result / Accounting Revenue. Revenue always comes from accounting data; approved management allocations affect cost and result, not revenue.</p>
+    </section>
+
+    {% if latest_run %}
+        <section class="grid gap-4 md:grid-cols-4">
+            <article class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div class="text-xs font-semibold uppercase text-slate-500">Latest evaluation</div><div class="mt-2 text-sm font-semibold text-slate-950">{{ latest_run.started_at|date:"Y-m-d H:i" }}</div></article>
+            <article class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div class="text-xs font-semibold uppercase text-slate-500">Projects</div><div class="mt-2 text-2xl font-semibold text-slate-950">{{ latest_run.evaluated_project_count }}</div></article>
+            <article class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div class="text-xs font-semibold uppercase text-slate-500">Rules</div><div class="mt-2 text-2xl font-semibold text-slate-950">{{ latest_run.evaluated_rule_count }}</div></article>
+            <article class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div class="text-xs font-semibold uppercase text-slate-500">Changed</div><div class="mt-2 text-sm font-semibold text-slate-950">Opened {{ latest_run.opened_count }}, Updated {{ latest_run.updated_count }}, Resolved {{ latest_run.resolved_count }}</div></article>
+        </section>
+    {% endif %}
+
+    <section class="grid gap-5 lg:grid-cols-3">
+        <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Profitability</div>
+            <h2 class="mt-2 text-lg font-semibold text-slate-950">Result and margin rules</h2>
+            <ul class="mt-4 space-y-2 text-sm text-slate-700">
+                {% for rule in profitability_rules %}<li>{{ rule.name }}</li>{% empty %}<li>No profitability rules configured.</li>{% endfor %}
+            </ul>
+        </article>
+        <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Revenue</div>
+            <h2 class="mt-2 text-lg font-semibold text-slate-950">Revenue coverage rules</h2>
+            <ul class="mt-4 space-y-2 text-sm text-slate-700">
+                {% for rule in revenue_rules %}<li>{{ rule.name }}</li>{% empty %}<li>No revenue rules configured.</li>{% endfor %}
+            </ul>
+        </article>
+        <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Future</div>
+            <h2 class="mt-2 text-lg font-semibold text-slate-950">Planned alert families</h2>
+            <p class="mt-4 text-sm leading-6 text-slate-700">Budget, forecast, invoice and digest alerts will be added after the core lifecycle and settings flow are stable.</p>
+        </article>
+    </section>
+
+    <section class="space-y-4">
+        {% include "workspace/partials/components/section_header.html" with title="Configured Rules" body="Threshold percentage is used by margin alerts. Threshold amount is used by amount-based alerts." %}
+        {% if rules %}
+            <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-slate-200 text-sm">
+                        <thead class="bg-slate-50">
+                            <tr>
+                                <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Rule</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Active</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Basis</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Severity</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Threshold</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Grace</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Candidate scope</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Last updated</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-100">
+                            {% for rule in rules %}
+                                <tr class="odd:bg-white even:bg-slate-50/50">
+                                    <td class="px-4 py-3">
+                                        <div class="font-semibold text-slate-950">{{ rule.name }}</div>
+                                        <div class="text-xs text-slate-500">{{ rule.get_alert_type_display }}</div>
+                                    </td>
+                                    <td class="px-4 py-3">{% if rule.is_active %}{% include "workspace/partials/components/status_badge.html" with status="success" label="active" %}{% else %}{% include "workspace/partials/components/status_badge.html" with status="neutral" label="inactive" %}{% endif %}</td>
+                                    <td class="px-4 py-3">{{ rule.get_financial_basis_display }}</td>
+                                    <td class="px-4 py-3">{% include "workspace/partials/components/status_badge.html" with status=rule.severity label=rule.get_severity_display %}</td>
+                                    <td class="px-4 py-3">{% if rule.threshold_percentage != None %}{{ rule.threshold_percentage|stringformat:".2f" }}%{% elif rule.threshold_amount != None %}{{ rule.threshold_amount }}{% else %}-{% endif %}</td>
+                                    <td class="px-4 py-3">{{ rule.grace_day|default:"-" }}</td>
+                                    <td class="px-4 py-3">{{ rule.get_candidate_scope_display }}</td>
+                                    <td class="px-4 py-3">{{ rule.updated_at|date:"Y-m-d H:i" }}</td>
+                                    <td class="px-4 py-3"><a href="{% url 'workspace:settings_financial_alert_rule_edit' rule.id %}" class="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50">Edit</a></td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        {% else %}
+            {% include "workspace/partials/components/empty_state.html" with title="No financial alert rules configured" body="Run the default-rule bootstrap command to create the standard profitability and revenue alert rules." %}
+        {% endif %}
+    </section>
+</div>
+{% endblock %}

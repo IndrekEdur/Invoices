@@ -1,4 +1,5 @@
 from unittest.mock import patch
+from types import SimpleNamespace
 from decimal import Decimal
 
 from django.contrib.messages import get_messages
@@ -205,6 +206,7 @@ class WorkspaceRouteTests(TestCase):
         ("workspace:design_system", "/workspace/design-system/"),
         ("workspace:accounting_dimension_conflicts", "/workspace/accounting/dimensions/conflicts/"),
         ("workspace:settings_account_classifications", "/workspace/settings/account-classifications/"),
+        ("workspace:settings_financial_alert_rules", "/workspace/settings/financial-alert-rules/"),
     ]
 
     def test_every_workspace_route_returns_http_200(self):
@@ -4553,6 +4555,31 @@ class FinancialAlertWorkspaceUITests(TestCase):
         self.assertContains(response, dismissed.title)
         self.assertNotContains(response, self.alert.title)
 
+    def test_margin_alert_list_displays_percentage_and_filter_choice(self):
+        margin_alert = create_financial_alert(
+            self.project,
+            alert_type=FinancialAlertType.PROJECT_MARGIN_BELOW_THRESHOLD,
+            fingerprint="margin-alert",
+            title="Project margin below threshold",
+            currency="%",
+            accounting_amount=Decimal("11.80"),
+            management_amount=Decimal("8.40"),
+            evaluated_amount=Decimal("8.40"),
+            threshold_amount=Decimal("10.00"),
+            metadata={"threshold_percentage": "10.00", "evaluated_margin": "8.40"},
+        )
+
+        response = self.client.get(
+            reverse("workspace:financial_alerts"),
+            {"alert_type": FinancialAlertType.PROJECT_MARGIN_BELOW_THRESHOLD},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, margin_alert.title)
+        self.assertContains(response, "8.40%")
+        self.assertContains(response, "10.00%")
+        self.assertContains(response, "Project margin below threshold")
+
     def test_project_alert_route_is_project_scoped(self):
         other_project = create_project(self.organization, code="26901", name="Other Project")
         other_alert = create_financial_alert(other_project, fingerprint="other-alert", title="Other project alert")
@@ -4636,6 +4663,29 @@ class FinancialAlertWorkspaceUITests(TestCase):
         self.assertContains(response, month_alert.title)
         self.assertNotContains(response, resolved_alert.title)
 
+    def test_project_financials_banner_shows_margin_required_copy(self):
+        margin_alert = create_financial_alert(
+            self.project,
+            alert_type=FinancialAlertType.PROJECT_MARGIN_BELOW_THRESHOLD,
+            fingerprint="project-margin-banner",
+            title="Project margin below threshold",
+            period_start=timezone.datetime(2026, 6, 1).date(),
+            period_end=timezone.datetime(2026, 6, 30).date(),
+            currency="%",
+            evaluated_amount=Decimal("8.40"),
+            threshold_amount=Decimal("10.00"),
+        )
+
+        response = self.client.get(
+            reverse("workspace:project_financials", args=[self.project.id]),
+            {"period": "custom", "start": "2026-06-01", "end": "2026-06-30"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, margin_alert.title)
+        self.assertContains(response, "Margin 8.40%")
+        self.assertContains(response, "Required 10.00%")
+
     def test_financial_dashboard_shows_project_alert_count(self):
         response = self.client.get(reverse("workspace:financial_dashboard"), {"show_no_data": "1"})
 
@@ -4648,3 +4698,88 @@ class FinancialAlertWorkspaceUITests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         evaluate_mock.assert_not_called()
+
+    def test_financial_alert_rule_settings_page_and_edit(self):
+        rule = FinancialAlertRule.objects.create(
+            organization=self.organization,
+            alert_type=FinancialAlertType.PROJECT_MARGIN_BELOW_THRESHOLD,
+            name="Project margin below threshold",
+            financial_basis=FinancialAlertBasis.MANAGEMENT,
+            severity=FinancialAlertSeverity.WARNING,
+            threshold_percentage=Decimal("10.00"),
+        )
+
+        response = self.client.get(reverse("workspace:settings_financial_alert_rules"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Financial Alert Rules")
+        self.assertContains(response, "Project margin below threshold")
+        self.assertContains(response, "10.00%")
+
+        edit_response = self.client.get(reverse("workspace:settings_financial_alert_rule_edit", args=[rule.id]))
+        self.assertEqual(edit_response.status_code, 200)
+        self.assertContains(edit_response, "Margin threshold help")
+
+        post_response = self.client.post(
+            reverse("workspace:settings_financial_alert_rule_edit", args=[rule.id]),
+            {
+                "name": "Margin warning",
+                "is_active": "on",
+                "financial_basis": FinancialAlertBasis.ACCOUNTING,
+                "severity": FinancialAlertSeverity.CRITICAL,
+                "threshold_amount": "",
+                "threshold_percentage": "15.00",
+                "grace_day": "5",
+                "candidate_scope": "active_projects_with_month_activity",
+                "configuration_text": '{"owner": "finance"}',
+            },
+        )
+        rule.refresh_from_db()
+        self.assertRedirects(post_response, reverse("workspace:settings_financial_alert_rules"))
+        self.assertEqual(rule.name, "Margin warning")
+        self.assertEqual(rule.financial_basis, FinancialAlertBasis.ACCOUNTING)
+        self.assertEqual(rule.threshold_percentage, Decimal("15.00"))
+        self.assertEqual(rule.configuration, {"owner": "finance"})
+        self.assertTrue(AuditEvent.objects.filter(event_type="financial_alert_rule_updated").exists())
+
+    def test_financial_alert_rule_settings_validation_and_reevaluate_post_only(self):
+        rule = FinancialAlertRule.objects.create(
+            organization=self.organization,
+            alert_type=FinancialAlertType.PROJECT_MARGIN_BELOW_THRESHOLD,
+            name="Project margin below threshold",
+            threshold_percentage=Decimal("10.00"),
+        )
+        invalid = self.client.post(
+            reverse("workspace:settings_financial_alert_rule_edit", args=[rule.id]),
+            {
+                "name": "Bad margin",
+                "is_active": "on",
+                "financial_basis": FinancialAlertBasis.MANAGEMENT,
+                "severity": FinancialAlertSeverity.WARNING,
+                "threshold_amount": "",
+                "threshold_percentage": "101",
+                "grace_day": "",
+                "candidate_scope": "active_projects_with_month_activity",
+                "configuration_text": "{}",
+            },
+        )
+        self.assertEqual(invalid.status_code, 200)
+        self.assertContains(invalid, "Percentage must be between 0 and 100")
+
+        get_response = self.client.get(reverse("workspace:settings_financial_alert_rules_evaluate"))
+        self.assertEqual(get_response.status_code, 405)
+
+        result = SimpleNamespace(
+            evaluated_projects=2,
+            evaluated_rules=1,
+            opened_count=1,
+            updated_count=2,
+            reopened_count=0,
+            resolved_count=1,
+            unchanged_count=3,
+            failed_count=0,
+        )
+        with patch("apps.workspace.views.FinancialAlertEvaluationService.evaluate", return_value=result) as evaluate_mock:
+            post_response = self.client.post(reverse("workspace:settings_financial_alert_rules_evaluate"))
+
+        self.assertRedirects(post_response, reverse("workspace:settings_financial_alert_rules"))
+        evaluate_mock.assert_called_once()

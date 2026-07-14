@@ -1,6 +1,7 @@
 from django.contrib import messages
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
+from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views import View
 from django.views.generic import TemplateView
@@ -35,6 +36,7 @@ from apps.accounting.models import (
     AllocationSourceType,
     AllocationStrategy,
     FinancialAlert,
+    FinancialAlertRule,
     ManagementAllocationVersion,
     ManagementCostPool,
     VersionStatus,
@@ -51,6 +53,8 @@ from apps.accounting.services import (
     CreateAccountingDimensionValueCommand,
     DismissFinancialAlertCommand,
     FinancialAlertActionService,
+    FinancialAlertEvaluationService,
+    FinancialAlertRuleService,
     GenerateManagementAllocationProposalCommand,
     GeneralLedgerSyncService,
     ManagementAllocationDraftService,
@@ -59,6 +63,8 @@ from apps.accounting.services import (
     SaveAccountingAccountClassificationCommand,
     SyncGeneralLedgerCommand,
     SyncAccountingDimensionsCommand,
+    EvaluateFinancialAlertsCommand,
+    UpdateFinancialAlertRuleCommand,
     UpdateManagementAllocationDraftCommand,
 )
 from apps.core.models import Organization
@@ -78,6 +84,7 @@ from .forms import (
     AccountClassificationForm,
     AccountingIntegrationForm,
     EmailAccountForm,
+    FinancialAlertRuleForm,
     MonthlyGLSyncForm,
     ProjectEditForm,
     ProjectStatusChangeForm,
@@ -1558,6 +1565,107 @@ class SettingsSectionView(WorkspacePageView):
         context = super().get_context_data(**kwargs)
         context["settings_section"] = self.kwargs["section_slug"]
         return context
+
+
+class FinancialAlertRuleSettingsMixin:
+    section = "settings"
+
+    def _actor(self):
+        return self.request.user if self.request.user.is_authenticated else None
+
+    def _organization(self):
+        return Organization.objects.order_by("id").first()
+
+
+class FinancialAlertRuleListView(FinancialAlertRuleSettingsMixin, WorkspacePageView):
+    template_name = "workspace/settings_financial_alert_rules.html"
+    page_title = "Financial Alert Rules"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        organization = self._organization()
+        rules = FinancialAlertRule.objects.none()
+        latest_run = None
+        if organization:
+            rules = FinancialAlertRule.objects.filter(organization=organization).order_by("alert_type", "name")
+            latest_run = organization.financial_alert_evaluation_runs.order_by("-started_at", "-id").first()
+        context.update(
+            {
+                "organization": organization,
+                "rules": list(rules),
+                "latest_run": latest_run,
+                "profitability_rules": [rule for rule in rules if "negative" in rule.alert_type or "margin" in rule.alert_type],
+                "revenue_rules": [rule for rule in rules if "revenue" in rule.alert_type],
+            }
+        )
+        return context
+
+
+class FinancialAlertRuleEditView(FinancialAlertRuleSettingsMixin, WorkspacePageView):
+    template_name = "workspace/settings_financial_alert_rule_form.html"
+    page_title = "Edit Financial Alert Rule"
+
+    def _rule(self):
+        return get_object_or_404(FinancialAlertRule, id=self.kwargs["rule_id"])
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        rule = kwargs.get("rule") or self._rule()
+        context["rule"] = rule
+        context["form"] = kwargs.get("form") or FinancialAlertRuleForm(instance=rule)
+        return context
+
+    def post(self, request, rule_id, *args, **kwargs):
+        rule = self._rule()
+        form = FinancialAlertRuleForm(request.POST, instance=rule)
+        if not form.is_valid():
+            messages.error(request, "Financial alert rule could not be saved. Check the highlighted fields.")
+            return self.render_to_response(self.get_context_data(rule=rule, form=form))
+        FinancialAlertRuleService.update_rule(
+            UpdateFinancialAlertRuleCommand(
+                rule=rule,
+                name=form.cleaned_data["name"],
+                is_active=form.cleaned_data["is_active"],
+                financial_basis=form.cleaned_data["financial_basis"],
+                severity=form.cleaned_data["severity"],
+                threshold_amount=form.cleaned_data["threshold_amount"],
+                threshold_percentage=form.cleaned_data["threshold_percentage"],
+                grace_day=form.cleaned_data["grace_day"],
+                candidate_scope=form.cleaned_data["candidate_scope"],
+                configuration=form.cleaned_data["configuration_text"],
+                actor=self._actor(),
+                metadata={"source": "workspace_financial_alert_rule_settings"},
+            )
+        )
+        messages.success(request, "Financial alert rule saved. Re-evaluate alerts to apply the rule to current data.")
+        return redirect("workspace:settings_financial_alert_rules")
+
+
+class FinancialAlertRuleReevaluateView(FinancialAlertRuleSettingsMixin, View):
+    def post(self, request, *args, **kwargs):
+        organization = self._organization()
+        if not organization:
+            messages.error(request, "No organization is available for financial alert evaluation.")
+            return redirect("workspace:settings_financial_alert_rules")
+        result = FinancialAlertEvaluationService().evaluate(
+            EvaluateFinancialAlertsCommand(
+                organization=organization,
+                evaluation_date=timezone.localdate(),
+                actor=self._actor(),
+                metadata={"source": "workspace_financial_alert_rule_settings"},
+            )
+        )
+        messages.success(
+            request,
+            (
+                "Financial alerts re-evaluated: "
+                f"projects {result.evaluated_projects}, rules {result.evaluated_rules}, "
+                f"opened {result.opened_count}, updated {result.updated_count}, "
+                f"reopened {result.reopened_count}, resolved {result.resolved_count}, "
+                f"unchanged {result.unchanged_count}, failed {result.failed_count}."
+            ),
+        )
+        return redirect("workspace:settings_financial_alert_rules")
 
 
 class AccountClassificationSettingsMixin:
