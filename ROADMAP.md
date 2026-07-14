@@ -12,9 +12,9 @@ Current engineering phase: Engineering Standards.
 
 Current implementation phase: Platform Core.
 
-Current implementation: Financial Alert Models and Detection Engine.
+Current implementation: Financial Alerts List and Project UI.
 
-Planned financial follow-ups: MVP-FIN-004 Financial Alerts List and Project UI, FIN-ALERT-002 Scheduled Evaluation, FIN-ALERT-003 Weekly Alert Email Digest, true no-sales-invoice alert after sales invoice import, saved allocation templates, source freshness warnings, scheduled monthly proposal creation, multi-month historical GL backfill UI, background financial sync execution, scheduled GL synchronization, sync progress UI, COST-ALLOC-005 Allocation Revision/Audit Enhancements, management allocation reporting, financial report drafts, scheduled report distribution, and invoice/payment reconciliation.
+Planned financial follow-ups: FIN-ALERT-002 Scheduled Evaluation, FIN-ALERT-003 Weekly Alert Email Digest, true no-sales-invoice alert after sales invoice import, saved allocation templates, source freshness warnings, scheduled monthly proposal creation, multi-month historical GL backfill UI, background financial sync execution, scheduled GL synchronization, sync progress UI, COST-ALLOC-005 Allocation Revision/Audit Enhancements, management allocation reporting, financial report drafts, scheduled report distribution, and invoice/payment reconciliation.
 
 Planned follow-up: MERIT-014 should define explicit Merit dimension close/reopen behavior after Workspace project completion or archival. Current status changes are local, audited Workspace actions only.
 

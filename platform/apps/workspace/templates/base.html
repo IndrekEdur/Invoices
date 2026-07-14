@@ -25,6 +25,7 @@
                     {% include "workspace/partials/sidebar_link.html" with section="inbox" label="Inbox" icon="inbox" url_name="workspace:inbox" %}
                     {% include "workspace/partials/sidebar_link.html" with section="projects" label="Projects" icon="projects" url_name="workspace:projects" %}
                     {% include "workspace/partials/sidebar_link.html" with section="financials" label="Financials" icon="financials" url_name="workspace:financial_dashboard" %}
+                    {% include "workspace/partials/sidebar_link.html" with section="alerts" label="Alerts" icon="alerts" url_name="workspace:financial_alerts" badge_count=active_financial_alert_count %}
                     {% include "workspace/partials/sidebar_link.html" with section="management_allocations" label="Management Allocations" icon="financials" url_name="workspace:management_allocations" %}
                     {% include "workspace/partials/sidebar_link.html" with section="documents" label="Documents" icon="documents" url_name="workspace:documents" %}
                     {% include "workspace/partials/sidebar_link.html" with section="reviews" label="Reviews" icon="reviews" url_name="workspace:reviews" %}

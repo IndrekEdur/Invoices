@@ -34,6 +34,7 @@ from apps.accounting.models import (
     AccountingSyncState,
     AllocationSourceType,
     AllocationStrategy,
+    FinancialAlert,
     ManagementAllocationVersion,
     ManagementCostPool,
     VersionStatus,
@@ -44,9 +45,12 @@ from apps.accounting.services import (
     AccountingDimensionSyncService,
     AccountingDimensionValueService,
     AccountingAccountClassificationManagementService,
+    AcknowledgeFinancialAlertCommand,
     ApproveManagementAllocationVersionCommand,
     CreateManagementAllocationRevisionCommand,
     CreateAccountingDimensionValueCommand,
+    DismissFinancialAlertCommand,
+    FinancialAlertActionService,
     GenerateManagementAllocationProposalCommand,
     GeneralLedgerSyncService,
     ManagementAllocationDraftService,
@@ -84,6 +88,7 @@ from .services import (
     AccountingIntegrationSettingsContextBuilder,
     DashboardContextBuilder,
     EmailAccountSettingsContextBuilder,
+    FinancialAlertsContextBuilder,
     InboxContextBuilder,
     OrganizationFinancialDashboardContextBuilder,
     ProjectLinkReviewContextBuilder,
@@ -105,6 +110,7 @@ class WorkspacePageView(TemplateView):
         context = super().get_context_data(**kwargs)
         context["page_title"] = self.page_title
         context["current_section"] = self.section
+        context["active_financial_alert_count"] = FinancialAlertsContextBuilder.active_count()
         return context
 
 
@@ -1273,6 +1279,7 @@ class ProjectDetailView(WorkspacePageView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context.update(ProjectsContextBuilder.build_detail(project_id=self.kwargs["project_id"]))
+        context["financial_alert_summary"] = FinancialAlertsContextBuilder.project_summary(context["project"])
         return context
 
 
@@ -1289,7 +1296,101 @@ class ProjectFinancialsView(WorkspacePageView):
                 params=self.request.GET,
             )
         )
+        context["financial_alert_banner"] = FinancialAlertsContextBuilder.project_financial_banner(
+            project=context["project"],
+            period_start=context["period"]["start"],
+            period_end=context["period"]["end"],
+        )
         return context
+
+
+class FinancialAlertsView(WorkspacePageView):
+    template_name = "workspace/financial_alerts.html"
+    page_title = "Financial Alerts"
+    section = "alerts"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        organization = Organization.objects.order_by("id").first()
+        context.update(FinancialAlertsContextBuilder.build(self.request.GET, organization=organization))
+        return context
+
+
+class ProjectAlertsView(WorkspacePageView):
+    template_name = "workspace/financial_alerts.html"
+    page_title = "Project Financial Alerts"
+    section = "projects"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        project = get_object_or_404(Project, id=self.kwargs["project_id"])
+        context.update(FinancialAlertsContextBuilder.build(self.request.GET, project=project, organization=project.organization))
+        return context
+
+
+class FinancialAlertDetailView(WorkspacePageView):
+    template_name = "workspace/financial_alert_detail.html"
+    page_title = "Financial Alert"
+    section = "alerts"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        alert = get_object_or_404(FinancialAlert, id=self.kwargs["alert_id"])
+        context.update(FinancialAlertsContextBuilder.build_detail(alert))
+        return context
+
+
+class FinancialAlertActionMixin:
+    def _alert(self):
+        return get_object_or_404(FinancialAlert, id=self.kwargs["alert_id"])
+
+    def _actor(self, request):
+        return request.user if request.user.is_authenticated else None
+
+    def _safe_redirect(self, request, alert):
+        fallback = reverse("workspace:financial_alert_detail", kwargs={"alert_id": alert.id})
+        target = request.POST.get("next") or request.META.get("HTTP_REFERER") or fallback
+        if url_has_allowed_host_and_scheme(target, allowed_hosts={request.get_host()}):
+            return target
+        return fallback
+
+
+class FinancialAlertAcknowledgeView(FinancialAlertActionMixin, View):
+    def post(self, request, *args, **kwargs):
+        alert = self._alert()
+        try:
+            result = FinancialAlertActionService.acknowledge(
+                AcknowledgeFinancialAlertCommand(
+                    alert=alert,
+                    actor=self._actor(request),
+                    metadata={"source": "workspace_financial_alerts"},
+                )
+            )
+            if result.changed:
+                messages.success(request, "Financial alert acknowledged.")
+            else:
+                messages.info(request, result.message)
+        except Exception as exc:
+            messages.error(request, f"Financial alert could not be acknowledged: {exc}")
+        return redirect(self._safe_redirect(request, alert))
+
+
+class FinancialAlertDismissView(FinancialAlertActionMixin, View):
+    def post(self, request, *args, **kwargs):
+        alert = self._alert()
+        try:
+            FinancialAlertActionService.dismiss(
+                DismissFinancialAlertCommand(
+                    alert=alert,
+                    actor=self._actor(request),
+                    reason=request.POST.get("reason", ""),
+                    metadata={"source": "workspace_financial_alerts"},
+                )
+            )
+            messages.success(request, "Financial alert dismissed.")
+        except Exception as exc:
+            messages.error(request, f"Financial alert could not be dismissed: {exc}")
+        return redirect(self._safe_redirect(request, alert))
 
 
 class ProjectFinancialAllocationsView(WorkspacePageView):

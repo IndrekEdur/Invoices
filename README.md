@@ -84,9 +84,11 @@ Project Financial Overview includes a server-rendered vertical monthly revenue/c
 
 Project Financials now formats monetary values with consistent two-decimal display, includes labeled Y-axis gridlines on the monthly chart, and keeps the Workspace sidebar visible while long desktop pages scroll.
 
-Financial Alert Architecture is planned for central `/workspace/alerts/`, Project-level alert visibility, and later weekly e-mail digests. Initial alerts will cover lifetime negative result, current-month negative result, and "No project revenue recorded for current month"; e-mail delivery is a later phase.
+Financial Alert Architecture covers central `/workspace/alerts/`, Project-level alert visibility, and later weekly e-mail digests. Initial alerts cover lifetime negative result, current-month negative result, and "No project revenue recorded for current month"; e-mail delivery is a later phase.
 
-The accounting app includes persisted Financial Alert models, default rule bootstrap support, and a manual `evaluate_financial_alerts` management command with `--dry-run`. The first detection engine supports lifetime negative result, current-month negative result, and "No project revenue recorded for current month"; Alerts UI, scheduling, and e-mail delivery are still planned.
+The accounting app includes persisted Financial Alert models, default rule bootstrap support, and a manual `evaluate_financial_alerts` management command with `--dry-run`. The first detection engine supports lifetime negative result, current-month negative result, and "No project revenue recorded for current month"; scheduling and e-mail delivery are still planned.
+
+Workspace Financial Alerts at `/workspace/alerts/` provide a persisted alert list, detail page, project-scoped alert pages, Project Workspace alert summaries, Project Financials alert banners, and auditable acknowledge/dismiss actions. The UI does not recalculate financials, call Merit, send e-mail, or run alert evaluation while rendering.
 
 Organization Financial Dashboard at `/workspace/financials/` compares selected-month project revenue, cost, result, margin and data quality from local synchronized GL allocations. Its project comparison chart renders Revenue, Cost and Result bars on one shared monetary scale, while margin remains a separate percentage indicator. It ranks projects by highest revenue by default, keeps completed and archived projects visible when they have financial activity, and avoids silently combining mixed-currency totals.
 

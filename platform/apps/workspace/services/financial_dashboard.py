@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from decimal import Decimal
 from urllib.parse import urlencode
@@ -18,6 +18,7 @@ from apps.accounting.services import (
 from apps.core.models import Organization
 from apps.projects.models import Project
 from apps.workspace.services.formatting import format_money, format_percent
+from apps.workspace.services.financial_alerts import FinancialAlertsContextBuilder
 
 
 ZERO = Decimal("0")
@@ -58,6 +59,9 @@ class ProjectFinancialDashboardRow:
     allocations_url: str
     project_url: str
     warnings: list[str]
+    active_alert_count: int = 0
+    highest_alert_severity: str = ""
+    alerts_url: str = ""
     metadata: dict = field(default_factory=dict)
 
     @property
@@ -105,6 +109,7 @@ class OrganizationFinancialDashboardContextBuilder:
             rows = cls._rows(organization, filters)
             rows = cls._apply_filters(rows, filters)
             rows = cls._sort_rows(rows, filters["sort"], filters["direction"])
+            rows = cls._attach_alert_summaries(rows)
 
         paginator = Paginator(rows, 25)
         page = paginator.get_page(params.get("page") or 1)
@@ -129,6 +134,22 @@ class OrganizationFinancialDashboardContextBuilder:
             "show_no_data": filters["show_no_data"],
             "view_mode": filters["view_mode"],
         }
+
+    @staticmethod
+    def _attach_alert_summaries(rows):
+        alert_map = FinancialAlertsContextBuilder.dashboard_alert_map([row.project_id for row in rows])
+        annotated = []
+        for row in rows:
+            summary = alert_map.get(row.project_id, {})
+            annotated.append(
+                replace(
+                    row,
+                    active_alert_count=summary.get("active_count", 0),
+                    highest_alert_severity=summary.get("highest_severity", ""),
+                    alerts_url=reverse("workspace:project_alerts", kwargs={"project_id": row.project_id}),
+                )
+            )
+        return annotated
 
     @classmethod
     def _filters(cls, params):

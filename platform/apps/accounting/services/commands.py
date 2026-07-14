@@ -31,6 +31,31 @@ class FinancialAlertEvaluationResult:
 
 
 @dataclass(frozen=True)
+class AcknowledgeFinancialAlertCommand:
+    alert: object
+    actor: object = None
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class DismissFinancialAlertCommand:
+    alert: object
+    actor: object = None
+    reason: str = ""
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class FinancialAlertActionResult:
+    alert: object
+    previous_status: str
+    new_status: str
+    changed: bool
+    message: str
+    metadata: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class FinancialAlertFact:
     project: object
     alert_type: str

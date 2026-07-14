@@ -5,5 +5,8 @@
     <span class="flex h-9 w-9 items-center justify-center rounded-lg transition {% if current_section == section %}bg-slate-950/10 text-slate-950{% else %}bg-white/5 text-slate-300 group-hover:bg-white/10 group-hover:text-white{% endif %}">
         {% include "workspace/partials/icon.html" with name=icon class="h-5 w-5" %}
     </span>
-    <span>{{ label }}</span>
+    <span class="min-w-0 flex-1">{{ label }}</span>
+    {% if badge_count %}
+        <span class="rounded-full px-2 py-0.5 text-xs font-semibold {% if current_section == section %}bg-slate-950/10 text-slate-950{% else %}bg-red-500 text-white{% endif %}">{{ badge_count }}</span>
+    {% endif %}
 </a>

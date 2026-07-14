@@ -25,6 +25,14 @@ from apps.accounting.models import (
     AccountingSyncState,
     AllocationSourceType,
     AllocationStrategy,
+    FinancialAlert,
+    FinancialAlertBasis,
+    FinancialAlertEvaluationRun,
+    FinancialAlertEvaluationRunStatus,
+    FinancialAlertRule,
+    FinancialAlertSeverity,
+    FinancialAlertStatus,
+    FinancialAlertType,
     ManagementAllocationEntry,
     ManagementAllocationPeriod,
     ManagementAllocationVersion,
@@ -96,6 +104,46 @@ def create_email_message(organization, subject="Workspace email"):
 
 def create_project(organization, code="26070", name="Workspace Project"):
     return Project.objects.create(organization=organization, code=code, name=name)
+
+
+def create_financial_alert(project, **kwargs):
+    alert_type = kwargs.get("alert_type", FinancialAlertType.PROJECT_LIFETIME_NEGATIVE)
+    rule = kwargs.pop("rule", None) or FinancialAlertRule.objects.filter(
+        organization=project.organization,
+        alert_type=alert_type,
+        is_active=True,
+    ).first()
+    if rule is None:
+        rule = FinancialAlertRule.objects.create(
+            organization=project.organization,
+            alert_type=alert_type,
+            name=f"Rule {alert_type}",
+            financial_basis=kwargs.get("financial_basis", FinancialAlertBasis.MANAGEMENT),
+            severity=kwargs.get("severity", FinancialAlertSeverity.WARNING),
+        )
+    defaults = {
+        "organization": project.organization,
+        "project": project,
+        "rule": rule,
+        "alert_type": FinancialAlertType.PROJECT_LIFETIME_NEGATIVE,
+        "financial_basis": FinancialAlertBasis.MANAGEMENT,
+        "severity": FinancialAlertSeverity.WARNING,
+        "status": FinancialAlertStatus.OPEN,
+        "fingerprint": f"alert-{project.id}-{timezone.now().timestamp()}",
+        "title": f"{project.code} negative result",
+        "message": "Project result is below threshold.",
+        "period_start": None,
+        "period_end": None,
+        "currency": "EUR",
+        "accounting_amount": Decimal("-100.00"),
+        "management_amount": Decimal("-120.00"),
+        "evaluated_amount": Decimal("-120.00"),
+        "threshold_amount": Decimal("0.00"),
+        "data_quality_status": "complete",
+        "metadata": {"warnings": ["review result"], "api_secret": "never-render", "signature": "never-render"},
+    }
+    defaults.update(kwargs)
+    return FinancialAlert.objects.create(**defaults)
 
 
 def create_merit_integration(organization, metadata=None):
@@ -4466,3 +4514,137 @@ class ManagementAllocationWorkspaceTests(TestCase):
 
         self.assertEqual(before.revenue, after.revenue)
         self.assertEqual(before.total_cost, after.total_cost)
+
+
+class FinancialAlertWorkspaceUITests(TestCase):
+    def setUp(self):
+        self.organization = create_organization()
+        self.project = create_project(self.organization, code="26900", name="Alert Project")
+        self.alert = create_financial_alert(self.project)
+
+    def test_alert_list_returns_200_and_shows_active_alert(self):
+        FinancialAlertEvaluationRun.objects.create(
+            organization=self.organization,
+            status=FinancialAlertEvaluationRunStatus.COMPLETED,
+            evaluation_date=timezone.datetime(2026, 6, 30).date(),
+            opened_count=1,
+        )
+
+        with patch("apps.accounting.connectors.MeritAPIClient.request") as request_mock:
+            response = self.client.get(reverse("workspace:financial_alerts"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Financial Alerts")
+        self.assertContains(response, self.alert.title)
+        self.assertContains(response, "Latest evaluation run")
+        request_mock.assert_not_called()
+
+    def test_alert_list_filters_by_status_and_search(self):
+        dismissed = create_financial_alert(
+            self.project,
+            status=FinancialAlertStatus.DISMISSED,
+            fingerprint="dismissed-alert",
+            title="Dismissed old alert",
+        )
+
+        response = self.client.get(reverse("workspace:financial_alerts"), {"status": "dismissed", "q": "old"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, dismissed.title)
+        self.assertNotContains(response, self.alert.title)
+
+    def test_project_alert_route_is_project_scoped(self):
+        other_project = create_project(self.organization, code="26901", name="Other Project")
+        other_alert = create_financial_alert(other_project, fingerprint="other-alert", title="Other project alert")
+
+        response = self.client.get(reverse("workspace:project_alerts", args=[self.project.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, self.alert.title)
+        self.assertNotContains(response, other_alert.title)
+
+    def test_alert_detail_shows_safe_metadata_without_secret(self):
+        response = self.client.get(reverse("workspace:financial_alert_detail", args=[self.alert.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Safe Diagnostics")
+        self.assertContains(response, "review result")
+        self.assertNotContains(response, "never-render")
+        self.assertNotContains(response, "api_secret")
+        self.assertNotContains(response, "signature")
+
+    def test_acknowledge_requires_post_and_creates_audit_event(self):
+        get_response = self.client.get(reverse("workspace:financial_alert_acknowledge", args=[self.alert.id]))
+        post_response = self.client.post(reverse("workspace:financial_alert_acknowledge", args=[self.alert.id]))
+        self.alert.refresh_from_db()
+
+        self.assertEqual(get_response.status_code, 405)
+        self.assertRedirects(post_response, reverse("workspace:financial_alert_detail", args=[self.alert.id]))
+        self.assertEqual(self.alert.status, FinancialAlertStatus.ACKNOWLEDGED)
+        self.assertIsNotNone(self.alert.acknowledged_at)
+        self.assertTrue(AuditEvent.objects.filter(event_type="financial_alert_acknowledged").exists())
+
+    def test_dismiss_requires_post_reason_and_creates_audit_event(self):
+        missing_reason = self.client.post(reverse("workspace:financial_alert_dismiss", args=[self.alert.id]), {"reason": ""})
+        self.alert.refresh_from_db()
+        self.assertEqual(self.alert.status, FinancialAlertStatus.OPEN)
+        self.assertRedirects(missing_reason, reverse("workspace:financial_alert_detail", args=[self.alert.id]))
+
+        response = self.client.post(reverse("workspace:financial_alert_dismiss", args=[self.alert.id]), {"reason": "Reviewed"})
+        self.alert.refresh_from_db()
+
+        self.assertRedirects(response, reverse("workspace:financial_alert_detail", args=[self.alert.id]))
+        self.assertEqual(self.alert.status, FinancialAlertStatus.DISMISSED)
+        self.assertEqual(self.alert.resolution_reason, "Reviewed")
+        self.assertTrue(AuditEvent.objects.filter(event_type="financial_alert_dismissed").exists())
+
+    def test_project_workspace_shows_alert_summary(self):
+        response = self.client.get(reverse("workspace:project_detail", args=[self.project.id]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Financial Alerts")
+        self.assertContains(response, "Active alerts")
+        self.assertContains(response, self.alert.title)
+
+    def test_project_financials_banner_includes_lifetime_and_month_alerts(self):
+        month_alert = create_financial_alert(
+            self.project,
+            alert_type=FinancialAlertType.PROJECT_CURRENT_MONTH_NEGATIVE,
+            fingerprint="month-alert",
+            title="June month alert",
+            period_start=timezone.datetime(2026, 6, 1).date(),
+            period_end=timezone.datetime(2026, 6, 30).date(),
+        )
+        resolved_alert = create_financial_alert(
+            self.project,
+            alert_type=FinancialAlertType.PROJECT_CURRENT_MONTH_NEGATIVE,
+            fingerprint="resolved-month-alert",
+            title="Resolved month alert",
+            period_start=timezone.datetime(2026, 6, 1).date(),
+            period_end=timezone.datetime(2026, 6, 30).date(),
+            status=FinancialAlertStatus.RESOLVED,
+        )
+
+        response = self.client.get(
+            reverse("workspace:project_financials", args=[self.project.id]),
+            {"period": "custom", "start": "2026-06-01", "end": "2026-06-30"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Financial alerts for this view")
+        self.assertContains(response, self.alert.title)
+        self.assertContains(response, month_alert.title)
+        self.assertNotContains(response, resolved_alert.title)
+
+    def test_financial_dashboard_shows_project_alert_count(self):
+        response = self.client.get(reverse("workspace:financial_dashboard"), {"show_no_data": "1"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "1 active")
+
+    def test_alert_read_pages_do_not_evaluate_alerts(self):
+        with patch("apps.accounting.services.financial_alerts.FinancialAlertEvaluationService.evaluate") as evaluate_mock:
+            response = self.client.get(reverse("workspace:financial_alert_detail", args=[self.alert.id]))
+
+        self.assertEqual(response.status_code, 200)
+        evaluate_mock.assert_not_called()

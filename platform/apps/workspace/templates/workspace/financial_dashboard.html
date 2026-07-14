@@ -168,6 +168,7 @@
                                     <div class="text-sm text-slate-600">{{ chart.row.project_name }}</div>
                                     <div class="mt-2 flex flex-wrap gap-2">
                                         {% include "workspace/partials/components/status_badge.html" with status=chart.row.data_quality_status label=chart.row.data_quality_status %}
+                                        {% if chart.row.active_alert_count %}<a href="{{ chart.row.alerts_url }}" class="rounded-full bg-red-50 px-2 py-1 text-xs font-semibold text-red-700 ring-1 ring-red-200">{{ chart.row.active_alert_count }} alerts</a>{% endif %}
                                         {% if chart.row.warnings %}<span class="text-xs font-semibold text-orange-700">{{ chart.row.warnings|join:", " }}</span>{% endif %}
                                     </div>
                                 </div>
@@ -215,6 +216,7 @@
                                     <th class="px-4 py-3 text-left"><a href="?{{ sort_links.unclassified_amount }}">Unclassified</a></th>
                                     <th class="px-4 py-3 text-left"><a href="?{{ sort_links.allocation_count }}">Allocations</a></th>
                                     <th class="px-4 py-3 text-left"><a href="?{{ sort_links.data_quality }}">Data quality</a></th>
+                                    <th class="px-4 py-3 text-left">Alerts</th>
                                     <th class="px-4 py-3 text-left">Actions</th>
                                 </tr>
                             </thead>
@@ -230,6 +232,13 @@
                                         <td class="px-4 py-3">{{ row.unclassified_amount_display }}</td>
                                         <td class="px-4 py-3">{{ row.allocation_count }}</td>
                                         <td class="px-4 py-3">{% include "workspace/partials/components/status_badge.html" with status=row.data_quality_status label=row.data_quality_status %}{% if row.warnings %}<div class="mt-1 text-xs text-orange-700">{{ row.warnings|join:", " }}</div>{% endif %}</td>
+                                        <td class="px-4 py-3">
+                                            {% if row.active_alert_count %}
+                                                <a href="{{ row.alerts_url }}" class="inline-flex items-center rounded-full bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-700 ring-1 ring-red-200">{{ row.active_alert_count }} active · {{ row.highest_alert_severity }}</a>
+                                            {% else %}
+                                                <span class="text-xs text-slate-500">none</span>
+                                            {% endif %}
+                                        </td>
                                         <td class="px-4 py-3"><div class="flex flex-wrap gap-2"><a class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50" href="{{ row.financials_url }}">Open Financials</a><a class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50" href="{{ row.allocations_url }}">Allocation Drill-down</a><a class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50" href="{{ row.project_url }}">Open Project</a></div></td>
                                     </tr>
                                 {% endfor %}

@@ -25,9 +25,12 @@ from apps.core.services import AuditService
 from apps.projects.models import Project
 
 from .commands import (
+    AcknowledgeFinancialAlertCommand,
     AggregateProjectFinancialsCommand,
     BuildManagementFinancialsCommand,
+    DismissFinancialAlertCommand,
     EvaluateFinancialAlertsCommand,
+    FinancialAlertActionResult,
     FinancialAlertEvaluationResult,
     FinancialAlertFact,
 )
@@ -701,3 +704,121 @@ class FinancialAlertEvaluationService:
     @staticmethod
     def _safe_error(exc):
         return f"{exc.__class__.__name__}: {str(exc)[:200]}"
+
+
+class FinancialAlertActionService:
+    """Controlled user lifecycle actions for persisted financial alerts.
+
+    This service does not evaluate alerts, call Merit, or recalculate project
+    financials. It only records explicit human review decisions against already
+    persisted alert rows.
+    """
+
+    @classmethod
+    @transaction.atomic
+    def acknowledge(cls, command: AcknowledgeFinancialAlertCommand) -> FinancialAlertActionResult:
+        metadata = deepcopy(command.metadata or {})
+        alert = FinancialAlert.objects.select_for_update().get(pk=command.alert.pk)
+        previous_status = alert.status
+
+        if alert.status == FinancialAlertStatus.ACKNOWLEDGED:
+            return FinancialAlertActionResult(
+                alert=alert,
+                previous_status=previous_status,
+                new_status=alert.status,
+                changed=False,
+                message="Financial alert was already acknowledged.",
+                metadata=metadata,
+            )
+        if alert.status != FinancialAlertStatus.OPEN:
+            raise ValueError("Only open financial alerts can be acknowledged.")
+
+        alert.status = FinancialAlertStatus.ACKNOWLEDGED
+        alert.acknowledged_at = timezone.now()
+        alert.acknowledged_by = command.actor
+        alert.save(update_fields=["status", "acknowledged_at", "acknowledged_by", "updated_at"])
+
+        cls._audit(
+            alert=alert,
+            actor=command.actor,
+            event_type="financial_alert_acknowledged",
+            message="Financial alert acknowledged.",
+            metadata={**metadata, "previous_status": previous_status, "new_status": alert.status},
+        )
+        return FinancialAlertActionResult(
+            alert=alert,
+            previous_status=previous_status,
+            new_status=alert.status,
+            changed=True,
+            message="Financial alert acknowledged.",
+            metadata=metadata,
+        )
+
+    @classmethod
+    @transaction.atomic
+    def dismiss(cls, command: DismissFinancialAlertCommand) -> FinancialAlertActionResult:
+        reason = (command.reason or "").strip()
+        if not reason:
+            raise ValueError("Dismissal reason is required.")
+
+        metadata = deepcopy(command.metadata or {})
+        alert = FinancialAlert.objects.select_for_update().get(pk=command.alert.pk)
+        previous_status = alert.status
+
+        if alert.status == FinancialAlertStatus.DISMISSED:
+            return FinancialAlertActionResult(
+                alert=alert,
+                previous_status=previous_status,
+                new_status=alert.status,
+                changed=False,
+                message="Financial alert was already dismissed.",
+                metadata=metadata,
+            )
+        if alert.status not in {FinancialAlertStatus.OPEN, FinancialAlertStatus.ACKNOWLEDGED}:
+            raise ValueError("Only open or acknowledged financial alerts can be dismissed.")
+
+        alert.status = FinancialAlertStatus.DISMISSED
+        alert.dismissed_at = timezone.now()
+        alert.dismissed_by = command.actor
+        alert.resolution_reason = reason[:255]
+        alert.save(update_fields=["status", "dismissed_at", "dismissed_by", "resolution_reason", "updated_at"])
+
+        cls._audit(
+            alert=alert,
+            actor=command.actor,
+            event_type="financial_alert_dismissed",
+            message="Financial alert dismissed.",
+            metadata={
+                **metadata,
+                "previous_status": previous_status,
+                "new_status": alert.status,
+                "reason": alert.resolution_reason,
+            },
+        )
+        return FinancialAlertActionResult(
+            alert=alert,
+            previous_status=previous_status,
+            new_status=alert.status,
+            changed=True,
+            message="Financial alert dismissed.",
+            metadata=metadata,
+        )
+
+    @staticmethod
+    def _audit(*, alert, actor, event_type, message, metadata):
+        AuditService.record(
+            event_type=event_type,
+            message=message,
+            organization=alert.organization,
+            actor=actor,
+            object_type="FinancialAlert",
+            object_id=str(alert.id),
+            metadata={
+                **metadata,
+                "alert_id": alert.id,
+                "project_id": alert.project_id,
+                "project_code": alert.project.code,
+                "alert_type": alert.alert_type,
+                "severity": alert.severity,
+            },
+        )

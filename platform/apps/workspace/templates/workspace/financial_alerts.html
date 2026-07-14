@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+{% block title %}{% if fixed_project %}{{ fixed_project.code }} Alerts{% else %}Financial Alerts{% endif %} | Operations Workspace Platform{% endblock %}
+{% block actions %}
+<div class="flex flex-wrap gap-3">
+    {% if fixed_project %}
+        <a href="{% url 'workspace:project_detail' fixed_project.id %}" class="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50">Project Overview</a>
+        <a href="{% url 'workspace:project_financials' fixed_project.id %}" class="rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">Financials</a>
+    {% else %}
+        <a href="{% url 'workspace:financial_dashboard' %}" class="rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">Financial Dashboard</a>
+    {% endif %}
+</div>
+{% endblock %}
+{% block content %}
+<div class="space-y-8">
+    {% if fixed_project %}
+        {% include "workspace/partials/components/page_header.html" with eyebrow="Financial Alerts" title=fixed_project.name body="Persisted financial alerts for this project. No evaluation, aggregation or Merit API calls are made while rendering this page." %}
+    {% else %}
+        {% include "workspace/partials/components/page_header.html" with eyebrow="Financial Alerts" title="Financial Alerts" body="Review persisted project financial alerts, acknowledge known issues and dismiss reviewed alerts with an auditable reason." %}
+    {% endif %}
+
+    <section class="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
+        <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Active</div><div class="mt-2 text-3xl font-semibold text-slate-950">{{ summary.active }}</div></article>
+        <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Critical</div><div class="mt-2 text-3xl font-semibold text-red-700">{{ summary.critical }}</div></article>
+        <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Warning</div><div class="mt-2 text-3xl font-semibold text-orange-700">{{ summary.warning }}</div></article>
+        <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Open</div><div class="mt-2 text-3xl font-semibold text-slate-950">{{ summary.open }}</div></article>
+        <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Acknowledged</div><div class="mt-2 text-3xl font-semibold text-slate-950">{{ summary.acknowledged }}</div></article>
+        <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Total</div><div class="mt-2 text-3xl font-semibold text-slate-950">{{ summary.total }}</div></article>
+    </section>
+
+    <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div class="flex flex-wrap items-center justify-between gap-4">
+            <div>
+                <h2 class="text-lg font-semibold text-slate-950">Latest evaluation run</h2>
+                {% if latest_run %}
+                    <p class="mt-1 text-sm text-slate-600">{{ latest_run.evaluation_date|date:"Y-m-d" }} · {{ latest_run.status }} · opened {{ latest_run.opened_count }}, updated {{ latest_run.updated_count }}, resolved {{ latest_run.resolved_count }}</p>
+                {% else %}
+                    <p class="mt-1 text-sm text-slate-600">No financial alert evaluation run has been recorded yet.</p>
+                {% endif %}
+            </div>
+            <div class="flex flex-wrap gap-2">
+                <a href="?filter=active" class="rounded-xl border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Active</a>
+                <a href="?filter=critical" class="rounded-xl border border-red-200 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50">Critical</a>
+                <a href="?filter=warning" class="rounded-xl border border-orange-200 px-3 py-2 text-sm font-semibold text-orange-700 hover:bg-orange-50">Warning</a>
+                <a href="?filter=all" class="rounded-xl border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">All</a>
+            </div>
+        </div>
+    </section>
+
+    <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <form method="get" class="grid gap-4 lg:grid-cols-6">
+            <input type="hidden" name="filter" value="{{ filters.quick_filter }}">
+            {% if not fixed_project %}
+                <div>
+                    <label class="text-xs font-semibold uppercase tracking-wide text-slate-500">Project</label>
+                    <select name="project" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm">
+                        <option value="">All projects</option>
+                        {% for project in projects %}<option value="{{ project.id }}" {% if filters.project == project.id|stringformat:"s" %}selected{% endif %}>{{ project.code }} {{ project.name }}</option>{% endfor %}
+                    </select>
+                </div>
+            {% endif %}
+            <div>
+                <label class="text-xs font-semibold uppercase tracking-wide text-slate-500">Month</label>
+                <input type="month" name="month" value="{{ filters.month }}" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm">
+            </div>
+            <div>
+                <label class="text-xs font-semibold uppercase tracking-wide text-slate-500">Severity</label>
+                <select name="severity" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm">
+                    <option value="all">All</option>
+                    {% for value,label in severity_choices %}<option value="{{ value }}" {% if filters.severity == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="text-xs font-semibold uppercase tracking-wide text-slate-500">Status</label>
+                <select name="status" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm">
+                    <option value="">Default active</option>
+                    <option value="active" {% if filters.status == "active" %}selected{% endif %}>Active</option>
+                    {% for value,label in status_choices %}<option value="{{ value }}" {% if filters.status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="text-xs font-semibold uppercase tracking-wide text-slate-500">Type</label>
+                <select name="alert_type" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm">
+                    <option value="all">All</option>
+                    {% for value,label in alert_type_choices %}<option value="{{ value }}" {% if filters.alert_type == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="text-xs font-semibold uppercase tracking-wide text-slate-500">Search</label>
+                <input type="search" name="q" value="{{ filters.search }}" placeholder="Project, title, fingerprint" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm">
+            </div>
+            <div>
+                <label class="text-xs font-semibold uppercase tracking-wide text-slate-500">Basis</label>
+                <select name="basis" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm">
+                    <option value="all">All</option>
+                    {% for value,label in basis_choices %}<option value="{{ value }}" {% if filters.basis == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="text-xs font-semibold uppercase tracking-wide text-slate-500">Project status</label>
+                <select name="project_status" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm">
+                    <option value="all">All</option>
+                    {% for value,label in project_status_choices %}<option value="{{ value }}" {% if filters.project_status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="text-xs font-semibold uppercase tracking-wide text-slate-500">Data quality</label>
+                <input type="text" name="data_quality" value="{{ filters.data_quality }}" placeholder="all, complete..." class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm">
+            </div>
+            <div>
+                <label class="text-xs font-semibold uppercase tracking-wide text-slate-500">Rule</label>
+                <select name="rule" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm">
+                    <option value="all">All</option>
+                    {% for rule in rules %}<option value="{{ rule.id }}" {% if filters.rule == rule.id|stringformat:"s" %}selected{% endif %}>{{ rule.name }}</option>{% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="text-xs font-semibold uppercase tracking-wide text-slate-500">Sort</label>
+                <select name="sort" class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm">
+                    <option value="">Default</option>
+                    <option value="project" {% if filters.sort == "project" %}selected{% endif %}>Project</option>
+                    <option value="severity" {% if filters.sort == "severity" %}selected{% endif %}>Severity</option>
+                    <option value="status" {% if filters.sort == "status" %}selected{% endif %}>Status</option>
+                    <option value="last_detected" {% if filters.sort == "last_detected" %}selected{% endif %}>Last detected</option>
+                    <option value="evaluated" {% if filters.sort == "evaluated" %}selected{% endif %}>Evaluated amount</option>
+                </select>
+            </div>
+            <div class="flex items-end gap-3">
+                <select name="direction" class="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm">
+                    <option value="desc" {% if filters.direction == "desc" %}selected{% endif %}>Descending</option>
+                    <option value="asc" {% if filters.direction == "asc" %}selected{% endif %}>Ascending</option>
+                </select>
+                <button type="submit" class="rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white">Apply</button>
+            </div>
+        </form>
+    </section>
+
+    <section class="space-y-4">
+        {% if alerts %}
+            <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-slate-200 text-sm">
+                        <thead class="bg-slate-50">
+                            <tr>
+                                <th class="px-4 py-3 text-left">Alert</th>
+                                <th class="px-4 py-3 text-left">Project</th>
+                                <th class="px-4 py-3 text-left">Severity</th>
+                                <th class="px-4 py-3 text-left">Status</th>
+                                <th class="px-4 py-3 text-left">Basis</th>
+                                <th class="px-4 py-3 text-left">Period</th>
+                                <th class="px-4 py-3 text-left">Evaluated</th>
+                                <th class="px-4 py-3 text-left">Detected</th>
+                                <th class="px-4 py-3 text-left">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-100">
+                            {% for row in alerts %}
+                                <tr class="hover:bg-blue-50/60">
+                                    <td class="px-4 py-3">
+                                        <a href="{{ row.detail_url }}" class="font-semibold text-slate-950 hover:underline">{{ row.alert.title }}</a>
+                                        <div class="mt-1 text-xs text-slate-500">{{ row.type_label }}</div>
+                                        {% if row.warnings %}<div class="mt-1 text-xs text-orange-700">{{ row.warnings|join:", " }}</div>{% endif %}
+                                    </td>
+                                    <td class="px-4 py-3"><a href="{{ row.project_url }}" class="font-semibold text-blue-700 hover:underline">{{ row.alert.project.code }}</a><div class="text-xs text-slate-500">{{ row.alert.project.name }}</div></td>
+                                    <td class="px-4 py-3">{% include "workspace/partials/components/status_badge.html" with status=row.alert.severity label=row.severity_label %}</td>
+                                    <td class="px-4 py-3">{% include "workspace/partials/components/status_badge.html" with status=row.alert.status label=row.status_label %}</td>
+                                    <td class="px-4 py-3">{{ row.basis_label }}</td>
+                                    <td class="px-4 py-3">{{ row.period_label }}</td>
+                                    <td class="px-4 py-3 font-semibold">{{ row.evaluated_display }}<div class="text-xs text-slate-500">threshold {{ row.threshold_display }}</div></td>
+                                    <td class="px-4 py-3">{{ row.alert.last_detected_at|date:"Y-m-d H:i" }}</td>
+                                    <td class="px-4 py-3">
+                                        <div class="flex flex-wrap gap-2">
+                                            <a href="{{ row.detail_url }}" class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">Open</a>
+                                            {% if row.can_acknowledge %}
+                                                <form method="post" action="{% url 'workspace:financial_alert_acknowledge' row.alert.id %}">
+                                                    {% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}">
+                                                    <button type="submit" class="rounded-lg border border-blue-200 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-50">Acknowledge</button>
+                                                </form>
+                                            {% endif %}
+                                        </div>
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="flex items-center justify-between text-sm text-slate-600">
+                <div>Page {{ page_obj.number }} of {{ paginator.num_pages }}</div>
+                <div class="flex gap-2">
+                    {% if page_obj.has_previous %}<a class="rounded-xl border border-slate-300 bg-white px-3 py-2 font-semibold" href="?{{ query_without_page }}&page={{ page_obj.previous_page_number }}">Previous</a>{% endif %}
+                    {% if page_obj.has_next %}<a class="rounded-xl border border-slate-300 bg-white px-3 py-2 font-semibold" href="?{{ query_without_page }}&page={{ page_obj.next_page_number }}">Next</a>{% endif %}
+                </div>
+            </div>
+        {% else %}
+            {% include "workspace/partials/components/empty_state.html" with title="No financial alerts found" body="Alert rows appear here after the Financial Alert Evaluation Engine detects persisted conditions." %}
+        {% endif %}
+    </section>
+</div>
+{% endblock %}
