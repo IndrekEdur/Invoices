@@ -4,7 +4,7 @@ This roadmap describes the intended direction for the invoice automation project
 
 `MASTER_ARCHITECTURE.md` is the main architecture reference for aligning roadmap tasks with the broader AI Business Operating System vision.
 
-Current architecture phase: Financial Alert Architecture.
+Current architecture phase: Project Communication Intelligence Architecture.
 
 Current product phase: Operations Workspace MVP.
 
@@ -15,6 +15,8 @@ Current implementation phase: Platform Core.
 Current implementation: Configurable Margin Alert and Financial Alert Rules UI.
 
 Planned financial follow-ups: FIN-ALERT-002 Scheduled Evaluation, FIN-ALERT-003 Weekly Alert Email Digest, role-specific notifications, true no-sales-invoice alert after sales invoice import, saved allocation templates, source freshness warnings, scheduled monthly proposal creation, multi-month historical GL backfill UI, background financial sync execution, scheduled GL synchronization, sync progress UI, COST-ALLOC-005 Allocation Revision/Audit Enhancements, management allocation reporting, financial report drafts, scheduled report distribution, and invoice/payment reconciliation.
+
+Planned communication intelligence follow-ups: EMAIL-PROJ-001 deterministic e-mail-to-Project linking extensions on existing EmailProjectLink, EMAIL-THREAD-001 thread normalization only if current EmailThread behavior is insufficient, EMAIL-INTEL-001 read-only communication candidate extraction, MVP-COMM-REVIEW-001 communication candidate review queue, TASK-001 Project task/question/decision operational records, REMINDER-001 reminder candidate engine without delivery, REMINDER-002 approved outbound delivery, EMAIL-REPLY-001 reply/resolution assessment, and AI-FEEDBACK-001 structured feedback and quality dashboard.
 
 Planned follow-up: MERIT-014 should define explicit Merit dimension close/reopen behavior after Workspace project completion or archival. Current status changes are local, audited Workspace actions only.
 

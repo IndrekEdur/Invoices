@@ -457,3 +457,25 @@ Reason:
 - Financial reporting is high-risk, so formulas must remain centralized and auditable.
 - Invoice-issued assertions require future sales-invoice synchronization and must not be inferred from current GL revenue alone.
 - Notifications contain sensitive financial data and require explicit recipient policy before delivery.
+
+## ADR-029: Project Communication Intelligence Extends Existing Email Storage
+
+Date: 2026-07-14
+
+Decision:
+
+- Existing synchronized e-mail storage remains the authoritative source evidence for communication intelligence.
+- Communication intelligence shall be a separate layer above sync/import, not embedded inside mailbox synchronization transactions.
+- `EmailMessage`, `EmailThread`, `EmailAttachment`, `EmailMailboxState`, `EmailProjectLink`, `EmailQuestion`, `EmailAnswerDraft`, and existing Workspace review flows shall be reused and extended rather than duplicated.
+- AI and deterministic rules may create suggestions, but AI output is not operational truth.
+- Operational Project tasks, questions, decisions, reminders and outbound messages require human approval initially.
+- Reminder candidate generation and reminder delivery are separate responsibilities.
+- Continuous improvement shall use versioned rules, prompts, evaluated examples and structured human feedback.
+- Uncontrolled online learning from unverified AI guesses is not allowed.
+
+Reason:
+
+- The platform already has working e-mail account configuration, IMAP sync, UID cursor state, import idempotency, e-mail-to-project suggestions, question detection, answer drafts, Inbox UI, review actions and Project knowledge aggregation.
+- Replacing those pieces would create duplicate identities and break auditability.
+- Communication intelligence needs source evidence, review, responsibility, reminder policy and delivery boundaries because e-mail content is untrusted and business follow-up can affect customers, suppliers and project outcomes.
+- Keeping AI outside sync transactions preserves mailbox reliability and makes expensive or fallible reasoning independently retryable.

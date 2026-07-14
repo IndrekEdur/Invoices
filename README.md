@@ -18,6 +18,8 @@ This repository is evolving from a local invoice automation prototype into an Op
 
 `EMAIL_STORAGE_ARCHITECTURE.md` describes how large mailboxes are imported as searchable message and attachment indexes with lazy attachment download, resumable sync, remote deletion protection, and future external binary storage.
 
+`PROJECT_COMMUNICATION_INTELLIGENCE_ARCHITECTURE.md` describes the human-in-the-loop communication intelligence layer above synchronized e-mail storage. Existing e-mail records remain source evidence, AI and rules create suggestions, humans validate operational records, and reminders are generated separately from any future delivery.
+
 The communications app includes persistent mailbox sync state so each EmailAccount mailbox can later track resumable cursor progress, UIDVALIDITY, import status, safe errors, and observable counters.
 
 Normal IMAP sync now uses incremental UID-based mailbox cursors. It resumes from the last successfully processed UID, preserves bounded latest-message behavior for first/no-cursor syncs, and still leaves historical full-mailbox backfill for a later implementation.
