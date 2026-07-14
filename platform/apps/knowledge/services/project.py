@@ -70,7 +70,11 @@ class ProjectKnowledgeBuilder:
             return tuple()
 
         return tuple(
-            EmailProjectLink.objects.filter(organization=project.organization, project=project)
+            EmailProjectLink.objects.filter(
+                organization=project.organization,
+                project=project,
+                status=EmailProjectLink.Status.CONFIRMED,
+            )
             .select_related("email_message", "email_message__thread")
             .order_by("email_message__received_at", "email_message__sent_at", "email_message__created_at", "id")
         )

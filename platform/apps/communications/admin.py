@@ -84,10 +84,21 @@ class EmailAttachmentAdmin(admin.ModelAdmin):
 
 @admin.register(EmailProjectLink)
 class EmailProjectLinkAdmin(admin.ModelAdmin):
-    list_display = ("email_message", "project", "organization", "status", "confidence", "confirmed_by", "confirmed_at")
-    list_filter = ("organization", "status", "project")
+    list_display = (
+        "email_message",
+        "project",
+        "organization",
+        "status",
+        "source",
+        "confidence_band",
+        "confidence",
+        "is_primary",
+        "confirmed_by",
+        "confirmed_at",
+    )
+    list_filter = ("organization", "status", "source", "confidence_band", "is_primary", "project")
     search_fields = ("email_message__subject", "email_message__external_message_id", "project__code", "project__name")
-    readonly_fields = ("created_at", "updated_at")
+    readonly_fields = ("created_at", "updated_at", "last_evaluated_at")
 
 
 @admin.register(EmailQuestion)

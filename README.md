@@ -20,6 +20,8 @@ This repository is evolving from a local invoice automation prototype into an Op
 
 `PROJECT_COMMUNICATION_INTELLIGENCE_ARCHITECTURE.md` describes the human-in-the-loop communication intelligence layer above synchronized e-mail storage. Existing e-mail records remain source evidence, AI and rules create suggestions, humans validate operational records, and reminders are generated separately from any future delivery.
 
+The communications app now includes deterministic e-mail-to-Project linking on top of the existing `EmailProjectLink` relation. Exact Project code, thread, attachment/document, and supporting participant evidence can create auditable suggestions; users still confirm, reject, or correct links before they become Project Communications. No semantic AI, task extraction, reminders, or e-mail sending is part of this step.
+
 The communications app includes persistent mailbox sync state so each EmailAccount mailbox can later track resumable cursor progress, UIDVALIDITY, import status, safe errors, and observable counters.
 
 Normal IMAP sync now uses incremental UID-based mailbox cursors. It resumes from the last successfully processed UID, preserves bounded latest-message behavior for first/no-cursor syncs, and still leaves historical full-mailbox backfill for a later implementation.

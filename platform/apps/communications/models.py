@@ -189,12 +189,37 @@ class EmailProjectLink(models.Model):
         CONFIRMED = "confirmed", "Confirmed"
         REJECTED = "rejected", "Rejected"
         CORRECTED = "corrected", "Corrected"
+        SUPERSEDED = "superseded", "Superseded"
+
+    class Source(models.TextChoices):
+        EXACT_PROJECT_CODE_SUBJECT = "exact_project_code_subject", "Exact project code in subject"
+        EXACT_PROJECT_CODE_BODY = "exact_project_code_body", "Exact project code in body"
+        CONFIRMED_THREAD_LINK = "confirmed_thread_link", "Confirmed thread link"
+        EXPLICIT_USER_LINK = "explicit_user_link", "Explicit user link"
+        EXISTING_LEGACY_LINK = "existing_legacy_link", "Existing legacy link"
+        ATTACHMENT_DOCUMENT_LINK = "attachment_document_link", "Attachment document link"
+        PROJECT_ALIAS = "project_alias", "Project alias"
+        PARTICIPANT_PLUS_EVIDENCE = "participant_plus_evidence", "Participant plus evidence"
+        IMPORTED_BACKFILL = "imported_backfill", "Imported backfill"
+
+    class ConfidenceBand(models.TextChoices):
+        EXACT = "exact", "Exact"
+        HIGH = "high", "High"
+        MEDIUM = "medium", "Medium"
+        LOW = "low", "Low"
 
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="email_project_links")
     email_message = models.ForeignKey(EmailMessage, on_delete=models.CASCADE, related_name="project_links")
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="email_links")
     status = models.CharField(max_length=32, choices=Status.choices, default=Status.SUGGESTED)
     confidence = models.PositiveSmallIntegerField(default=0)
+    confidence_band = models.CharField(max_length=16, choices=ConfidenceBand.choices, blank=True, default="")
+    source = models.CharField(max_length=64, choices=Source.choices, blank=True, default="")
+    is_primary = models.BooleanField(default=False)
+    evidence_summary = models.TextField(blank=True)
+    evidence_fingerprint = models.CharField(max_length=64, blank=True, db_index=True)
+    rule_version = models.CharField(max_length=32, blank=True, default="")
+    last_evaluated_at = models.DateTimeField(blank=True, null=True)
     evidence = models.JSONField(default=dict, blank=True)
     confirmed_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -210,6 +235,14 @@ class EmailProjectLink(models.Model):
 
     class Meta:
         ordering = ["email_message_id", "project__code", "id"]
+        indexes = [
+            models.Index(fields=["organization", "status"], name="email_project_org_status_idx"),
+            models.Index(fields=["project", "status"], name="email_project_proj_status_idx"),
+            models.Index(fields=["email_message", "status"], name="email_project_msg_status_idx"),
+            models.Index(fields=["source", "status"], name="email_project_src_status_idx"),
+            models.Index(fields=["confidence_band"], name="email_project_conf_band_idx"),
+            models.Index(fields=["last_evaluated_at"], name="email_project_eval_idx"),
+        ]
         constraints = [
             models.UniqueConstraint(fields=["email_message", "project"], name="unique_email_project_link"),
         ]

@@ -16,7 +16,7 @@ from django.utils import timezone
 from apps.core.models import AuditEvent
 from apps.core.services import CreateOrganizationCommand, OrganizationService
 from apps.documents.models import Document, DocumentVersion
-from apps.projects.models import Project
+from apps.projects.models import Project, ProjectParty
 from apps.workflow.models import WorkflowDefinition, WorkflowInstance, WorkflowState
 
 from .connectors import IMAPEmailConnector
@@ -40,6 +40,7 @@ from .services import (
     ConvertEmailAttachmentToDocumentCommand,
     CorrectEmailProjectLinkCommand,
     DetectEmailQuestionsCommand,
+    DeterministicEmailProjectLinkingService,
     EmailAnswerDraftService,
     EmailAttachmentDocumentService,
     EmailImportService,
@@ -61,6 +62,7 @@ from .services import (
     SyncEmailAccountCommand,
     UpdateMailboxSyncProgressCommand,
     EmailSyncService,
+    EvaluateEmailProjectLinksCommand,
 )
 
 
@@ -3377,3 +3379,186 @@ class EmailProcessingServiceTests(TestCase):
 
         self.assertEqual(suggestions, [])
         self.assertEqual(EmailProjectLink.objects.count(), 0)
+
+
+class DeterministicEmailProjectLinkingServiceTests(TestCase):
+    def test_exact_project_code_in_subject_is_boundary_aware(self):
+        organization = create_organization()
+        project = create_project(organization=organization, code="26040", name="Boundary project")
+        message = create_email_message(organization=organization, subject="[26040] Kawe Plaza")
+
+        result = DeterministicEmailProjectLinkingService.evaluate(
+            EvaluateEmailProjectLinksCommand(organization=organization, email_message_ids=(message.id,))
+        )
+
+        link = EmailProjectLink.objects.get(email_message=message, project=project)
+        self.assertEqual(result.created_count, 1)
+        self.assertEqual(link.source, EmailProjectLink.Source.EXACT_PROJECT_CODE_SUBJECT)
+        self.assertEqual(link.confidence_band, EmailProjectLink.ConfidenceBand.HIGH)
+        self.assertIn("Exact Project code 26040", link.evidence_summary)
+
+    def test_project_code_does_not_match_inside_longer_number(self):
+        organization = create_organization()
+        create_project(organization=organization, code="26040", name="Boundary project")
+        message = create_email_message(organization=organization, subject="Reference 1260407")
+
+        result = DeterministicEmailProjectLinkingService.evaluate(
+            EvaluateEmailProjectLinksCommand(organization=organization, email_message_ids=(message.id,))
+        )
+
+        self.assertEqual(result.suggestion_count, 0)
+        self.assertEqual(EmailProjectLink.objects.count(), 0)
+
+    def test_multiple_project_codes_create_separate_suggestions(self):
+        organization = create_organization()
+        first = create_project(organization=organization, code="26041", name="First project")
+        second = create_project(organization=organization, code="26042", name="Second project")
+        message = create_email_message(organization=organization, subject="26041 and 26042 both appear")
+
+        result = DeterministicEmailProjectLinkingService.evaluate(
+            EvaluateEmailProjectLinksCommand(organization=organization, email_message_ids=(message.id,))
+        )
+
+        self.assertEqual(result.suggestion_count, 2)
+        self.assertEqual(result.conflict_count, 1)
+        self.assertTrue(EmailProjectLink.objects.filter(email_message=message, project=first).exists())
+        self.assertTrue(EmailProjectLink.objects.filter(email_message=message, project=second).exists())
+
+    def test_repeated_evaluation_is_idempotent(self):
+        organization = create_organization()
+        create_project(organization=organization, code="26043", name="Idempotent project")
+        message = create_email_message(organization=organization, subject="26043 update")
+
+        DeterministicEmailProjectLinkingService.evaluate(
+            EvaluateEmailProjectLinksCommand(organization=organization, email_message_ids=(message.id,))
+        )
+        result = DeterministicEmailProjectLinkingService.evaluate(
+            EvaluateEmailProjectLinksCommand(organization=organization, email_message_ids=(message.id,))
+        )
+
+        self.assertEqual(EmailProjectLink.objects.count(), 1)
+        self.assertEqual(result.unchanged_count, 1)
+
+    def test_rejected_link_is_not_recreated(self):
+        organization = create_organization()
+        project = create_project(organization=organization, code="26044", name="Rejected deterministic project")
+        message = create_email_message(organization=organization, subject="26044 update")
+        EmailProjectLink.objects.create(
+            organization=organization,
+            email_message=message,
+            project=project,
+            status=EmailProjectLink.Status.REJECTED,
+            confidence=20,
+        )
+
+        result = DeterministicEmailProjectLinkingService.evaluate(
+            EvaluateEmailProjectLinksCommand(organization=organization, email_message_ids=(message.id,))
+        )
+
+        self.assertEqual(EmailProjectLink.objects.count(), 1)
+        self.assertEqual(result.skipped_count, 1)
+        self.assertEqual(EmailProjectLink.objects.get().status, EmailProjectLink.Status.REJECTED)
+
+    def test_dry_run_does_not_write_links(self):
+        organization = create_organization()
+        create_project(organization=organization, code="26045", name="Dry run project")
+        message = create_email_message(organization=organization, subject="26045 update")
+
+        result = DeterministicEmailProjectLinkingService.evaluate(
+            EvaluateEmailProjectLinksCommand(
+                organization=organization,
+                email_message_ids=(message.id,),
+                dry_run=True,
+            )
+        )
+
+        self.assertTrue(result.dry_run)
+        self.assertEqual(result.suggestion_count, 1)
+        self.assertEqual(EmailProjectLink.objects.count(), 0)
+
+    def test_confirmed_thread_link_creates_suggestion(self):
+        organization = create_organization()
+        account = create_email_account(organization)
+        thread = EmailThread.objects.create(
+            organization=organization,
+            account=account,
+            external_thread_id="thread-deterministic",
+            subject="Thread",
+        )
+        project = create_project(organization=organization, code="26046", name="Thread project")
+        confirmed_message = EmailMessage.objects.create(
+            organization=organization,
+            account=account,
+            thread=thread,
+            external_message_id="confirmed-thread-message",
+            subject="Already confirmed",
+        )
+        new_message = EmailMessage.objects.create(
+            organization=organization,
+            account=account,
+            thread=thread,
+            external_message_id="new-thread-message",
+            subject="Thread follow-up",
+        )
+        EmailProjectLink.objects.create(
+            organization=organization,
+            email_message=confirmed_message,
+            project=project,
+            status=EmailProjectLink.Status.CONFIRMED,
+            is_primary=True,
+        )
+
+        DeterministicEmailProjectLinkingService.evaluate(
+            EvaluateEmailProjectLinksCommand(organization=organization, email_message_ids=(new_message.id,))
+        )
+
+        link = EmailProjectLink.objects.get(email_message=new_message)
+        self.assertEqual(link.project, project)
+        self.assertEqual(link.source, EmailProjectLink.Source.CONFIRMED_THREAD_LINK)
+        self.assertEqual(link.status, EmailProjectLink.Status.SUGGESTED)
+
+    def test_participant_alone_creates_no_suggestion(self):
+        organization = create_organization()
+        project = create_project(organization=organization, code="26047", name="Participant project")
+        ProjectParty.objects.create(
+            organization=organization,
+            project=project,
+            name="Customer",
+            email="customer@example.com",
+        )
+        message = create_email_message(organization=organization, subject="General question")
+        message.sender_email = "customer@example.com"
+        message.save(update_fields=["sender_email"])
+
+        result = DeterministicEmailProjectLinkingService.evaluate(
+            EvaluateEmailProjectLinksCommand(organization=organization, email_message_ids=(message.id,))
+        )
+
+        self.assertEqual(result.suggestion_count, 0)
+        self.assertEqual(EmailProjectLink.objects.count(), 0)
+
+    def test_management_command_dry_run_summary(self):
+        organization = create_organization()
+        create_project(organization=organization, code="26048", name="Command project")
+        message = create_email_message(organization=organization, subject="26048 update")
+        output = StringIO()
+
+        call_command(
+            "evaluate_email_project_links",
+            "--organization",
+            str(organization.id),
+            "--message",
+            str(message.id),
+            "--dry-run",
+            stdout=output,
+        )
+
+        self.assertIn("evaluated=1", output.getvalue())
+        self.assertIn("dry_run=True", output.getvalue())
+        self.assertEqual(EmailProjectLink.objects.count(), 0)
+
+    def test_management_command_requires_bounded_scope(self):
+        organization = create_organization()
+
+        with self.assertRaises(CommandError):
+            call_command("evaluate_email_project_links", "--organization", str(organization.id))

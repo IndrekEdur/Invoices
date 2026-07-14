@@ -789,6 +789,14 @@ Adjusted roadmap based on the audit:
 - `EMAIL-REPLY-001`: Add reply and resolution assessment.
 - `AI-FEEDBACK-001`: Add structured feedback and quality dashboard.
 
+Implementation note for `EMAIL-PROJ-001`:
+
+- The first deterministic implementation reuses `EmailProjectLink` as the current authoritative relation instead of adding a duplicate `CommunicationProjectLink` table.
+- `EmailProjectLink` carries source, confidence band, primary flag, evidence summary, rule version, fingerprint and last evaluation metadata for deterministic suggestions.
+- Exact Project code evidence, confirmed thread evidence, attachment/document evidence and participant support are evaluated by a service layer outside mailbox sync transactions.
+- Suggested links remain reviewable; confirmed links feed Project Communications. Suggested or rejected links are not treated as operational Project communication.
+- AI, semantic similarity, task extraction, reminders, outbound delivery and automatic high-confidence confirmation remain future phases.
+
 ## 39. Migration And Backwards Compatibility
 
 Preserve:

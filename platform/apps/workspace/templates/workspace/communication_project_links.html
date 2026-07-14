@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Communication Project Links | Operations Workspace Platform{% endblock %}
+{% block content %}
+<div class="space-y-8">
+    {% include "workspace/partials/components/page_header.html" with eyebrow="Communication Intelligence" title="Project Link Review" body="Deterministic e-mail to Project suggestions are explainable and require human confirmation before becoming operational Project communications." %}
+
+    <form method="get" class="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm lg:grid-cols-[1fr_180px_180px_180px_auto]">
+        <input name="q" value="{{ filters.query }}" placeholder="Search email or project" class="rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100">
+        <select name="project" class="rounded-xl border border-slate-300 px-3 py-2 text-sm">
+            <option value="">All projects</option>
+            {% for project in projects %}
+                <option value="{{ project.id }}" {% if filters.project_id|stringformat:"s" == project.id|stringformat:"s" %}selected{% endif %}>{{ project.code }} {{ project.name }}</option>
+            {% endfor %}
+        </select>
+        <select name="source" class="rounded-xl border border-slate-300 px-3 py-2 text-sm">
+            <option value="">All sources</option>
+            {% for value,label in sources %}
+                <option value="{{ value }}" {% if filters.source == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
+        <select name="confidence" class="rounded-xl border border-slate-300 px-3 py-2 text-sm">
+            <option value="">All confidence</option>
+            {% for value,label in confidence_bands %}
+                <option value="{{ value }}" {% if filters.confidence_band == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
+        <button type="submit" class="rounded-xl bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">Filter</button>
+    </form>
+
+    {% if pending_project_links %}
+        <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-200 text-sm">
+                    <thead class="bg-slate-50">
+                        <tr>
+                            <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">E-mail</th>
+                            <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Project</th>
+                            <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Confidence</th>
+                            <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Evidence</th>
+                            <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-600">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100">
+                        {% for item in pending_project_links %}
+                            <tr class="hover:bg-blue-50/60">
+                                <td class="px-5 py-4">
+                                    <a class="font-semibold text-blue-700 hover:text-blue-900" href="{{ item.email_detail_url }}">{{ item.email.subject|default:item.email.external_message_id }}</a>
+                                    <div class="mt-1 text-xs text-slate-500">{{ item.email.sender_name|default:item.email.sender_email }} · {{ item.email.received_at|date:"Y-m-d H:i" }}</div>
+                                </td>
+                                <td class="px-5 py-4">
+                                    <div class="font-semibold text-slate-950">{{ item.project.code }} {{ item.project.name }}</div>
+                                    {% if item.has_conflict %}<div class="mt-1">{% include "workspace/partials/components/status_badge.html" with status="warning" label="conflict" %}</div>{% endif %}
+                                </td>
+                                <td class="px-5 py-4">
+                                    {% include "workspace/partials/components/status_badge.html" with status="info" label=item.confidence_band %}
+                                    <div class="mt-1 text-xs text-slate-500">{{ item.confidence }}</div>
+                                </td>
+                                <td class="max-w-md px-5 py-4">
+                                    <div class="text-sm font-medium text-slate-800">{{ item.evidence_summary|default:"Deterministic evidence available." }}</div>
+                                    <div class="mt-1 text-xs text-slate-500">{{ item.source }}</div>
+                                </td>
+                                <td class="px-5 py-4">
+                                    <div class="flex flex-wrap gap-2">
+                                        <form method="post" action="{{ item.confirm_url }}">
+                                            {% csrf_token %}
+                                            <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                                            <button type="submit" class="rounded-lg bg-green-700 px-3 py-2 text-xs font-semibold text-white hover:bg-green-800">Confirm</button>
+                                        </form>
+                                        <form method="post" action="{{ item.reject_url }}" class="flex gap-2">
+                                            {% csrf_token %}
+                                            <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                                            <input name="reason" placeholder="Reason" class="w-28 rounded-lg border border-slate-300 px-2 py-2 text-xs">
+                                            <button type="submit" class="rounded-lg bg-red-700 px-3 py-2 text-xs font-semibold text-white hover:bg-red-800">Reject</button>
+                                        </form>
+                                        <a href="{{ item.email_detail_url }}" class="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">Open email</a>
+                                    </div>
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    {% else %}
+        {% include "workspace/partials/components/empty_state.html" with title="No pending project link suggestions" body="Deterministic e-mail to Project suggestions will appear here after evaluation." %}
+    {% endif %}
+</div>
+{% endblock %}

@@ -3549,14 +3549,14 @@ class ProjectWorkspaceTests(TestCase):
             email_message=message,
             project=project,
             confidence=88,
-            status=EmailProjectLink.Status.SUGGESTED,
+            status=EmailProjectLink.Status.CONFIRMED,
         )
 
         response = self.client.get(reverse("workspace:project_detail", kwargs={"project_id": project.id}))
 
         self.assertContains(response, "Project communication")
         self.assertContains(response, "88%")
-        self.assertContains(response, "suggested")
+        self.assertContains(response, "confirmed")
 
     def test_shows_questions(self):
         organization = create_organization()
@@ -3566,6 +3566,7 @@ class ProjectWorkspaceTests(TestCase):
             organization=organization,
             email_message=message,
             project=project,
+            status=EmailProjectLink.Status.CONFIRMED,
         )
         EmailQuestion.objects.create(
             organization=organization,
@@ -3588,6 +3589,7 @@ class ProjectWorkspaceTests(TestCase):
             email_message=message,
             project=project,
             confidence=90,
+            status=EmailProjectLink.Status.CONFIRMED,
             evidence={"matched_project_code": "26206"},
         )
 
@@ -3605,6 +3607,7 @@ class ProjectWorkspaceTests(TestCase):
             organization=organization,
             email_message=message,
             project=project,
+            status=EmailProjectLink.Status.CONFIRMED,
         )
         document = Document.objects.create(
             organization=organization,
@@ -3765,6 +3768,20 @@ class ProjectLinkReviewUITests(TestCase):
         self.assertContains(response, link.email_message.subject)
         self.assertContains(response, "Suggested Project")
         self.assertContains(response, "matched_project_code")
+
+    def test_communication_project_links_route_lists_pending_links(self):
+        link, _other_project = self._suggested_link()
+        link.source = EmailProjectLink.Source.EXACT_PROJECT_CODE_SUBJECT
+        link.confidence_band = EmailProjectLink.ConfidenceBand.HIGH
+        link.evidence_summary = "Exact Project code 26300 found in subject."
+        link.save(update_fields=["source", "confidence_band", "evidence_summary", "updated_at"])
+
+        response = self.client.get(reverse("workspace:communication_project_links"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Project Link Review")
+        self.assertContains(response, link.email_message.subject)
+        self.assertContains(response, "Exact Project code 26300 found in subject.")
 
     def test_messages_are_created(self):
         link, _other_project = self._suggested_link()

@@ -61,6 +61,7 @@ def create_email_message(project, subject="Project message", body_text="Body"):
         organization=project.organization,
         email_message=message,
         project=project,
+        status=EmailProjectLink.Status.CONFIRMED,
         confidence=90,
         evidence={"matches": [{"matched_field": "subject", "matched_project_code": project.code}]},
     )

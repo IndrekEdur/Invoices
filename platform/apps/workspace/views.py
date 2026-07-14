@@ -1533,6 +1533,27 @@ class ReviewsView(WorkspacePageView):
         return context
 
 
+class CommunicationProjectLinksView(WorkspacePageView):
+    template_name = "workspace/communication_project_links.html"
+    page_title = "Communication Project Links"
+    section = "reviews"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context.update(
+            ProjectLinkReviewContextBuilder.build(
+                project_id=self.request.GET.get("project", ""),
+                account_id=self.request.GET.get("account", ""),
+                source=self.request.GET.get("source", ""),
+                confidence_band=self.request.GET.get("confidence", ""),
+                status=self.request.GET.get("status", ""),
+                conflict_only=self.request.GET.get("conflict") == "1",
+                query=self.request.GET.get("q", ""),
+            )
+        )
+        return context
+
+
 class SearchView(WorkspacePageView):
     template_name = "workspace/search.html"
     page_title = "Search"

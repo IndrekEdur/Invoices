@@ -42,6 +42,49 @@ class SuggestEmailProjectLinksCommand:
 
 
 @dataclass(frozen=True)
+class EvaluateEmailProjectLinksCommand:
+    organization: object
+    email_message_ids: tuple | list | None = None
+    account_ids: tuple | list | None = None
+    mailbox: str | None = None
+    date_from: object = None
+    date_to: object = None
+    project_ids: tuple | list | None = None
+    rule_sources: tuple | list | None = None
+    dry_run: bool = False
+    force_reprocess: bool = False
+    actor: object = None
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class ConfirmCommunicationProjectLinkCommand:
+    link: object
+    make_primary: bool = True
+    actor: object = None
+    reason: str = ""
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class RejectCommunicationProjectLinkCommand:
+    link: object
+    reason: str
+    actor: object = None
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
+class CorrectCommunicationProjectLinkCommand:
+    email_message: object
+    project: object
+    actor: object = None
+    reason: str = ""
+    make_primary: bool = True
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
 class DetectEmailQuestionsCommand:
     email_message: object
     actor: object = None
