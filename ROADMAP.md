@@ -14,11 +14,11 @@ Current engineering phase: Engineering Standards.
 
 Current implementation phase: Platform Core.
 
-Current implementation: Question and Task Candidate Extraction.
+Current implementation: Communication AI Review Queue.
 
 Planned financial follow-ups: FIN-ALERT-002 Scheduled Evaluation, FIN-ALERT-003 Weekly Alert Email Digest, role-specific notifications, true no-sales-invoice alert after sales invoice import, saved allocation templates, source freshness warnings, scheduled monthly proposal creation, multi-month historical GL backfill UI, background financial sync execution, scheduled GL synchronization, sync progress UI, COST-ALLOC-005 Allocation Revision/Audit Enhancements, management allocation reporting, financial report drafts, scheduled report distribution, and invoice/payment reconciliation.
 
-Planned communication intelligence follow-ups: MVP-AI-001 Communication AI Review Queue, TASK-001 Project Task and Question operational model, TASK-002 Task Workspace and Project integration, REMINDER-001 Reminder Candidate Engine, EMAIL-REPLY-001 Reply and Resolution Detection, EMAIL-THREAD-001 thread normalization improvements if needed, and AI-FEEDBACK-001 Structured Human Feedback.
+Planned communication intelligence follow-ups: TASK-001 Project Task and Question operational model, TASK-002 Task Workspace and Project integration, REMINDER-001 Reminder Candidate Engine, EMAIL-REPLY-001 Reply and Resolution Detection, EMAIL-THREAD-001 thread normalization improvements if needed, and AI-FEEDBACK-001 Structured Human Feedback.
 
 Planned follow-up: MERIT-014 should define explicit Merit dimension close/reopen behavior after Workspace project completion or archival. Current status changes are local, audited Workspace actions only.
 

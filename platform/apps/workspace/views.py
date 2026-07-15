@@ -1,12 +1,15 @@
 from django.contrib import messages
+from django.core.exceptions import ValidationError
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
+from django.utils.dateparse import parse_date, parse_datetime
 from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views import View
 from django.views.generic import TemplateView
 
 from apps.communications.models import (
+    CommunicationIntelligenceCandidate,
     EmailAccount,
     EmailAnswerDraft,
     EmailMessage,
@@ -27,6 +30,8 @@ from apps.communications.services import (
     MarkEmailAnswerDraftNeedsReviewCommand,
     RejectEmailAnswerDraftCommand,
     RejectEmailProjectLinkCommand,
+    ReviewCommunicationCandidateCommand,
+    CommunicationCandidateReviewService,
     SyncEmailAccountCommand,
 )
 from apps.accounting.models import (
@@ -1288,6 +1293,19 @@ class ProjectDetailView(WorkspacePageView):
         context = super().get_context_data(**kwargs)
         context.update(ProjectsContextBuilder.build_detail(project_id=self.kwargs["project_id"]))
         context["financial_alert_summary"] = FinancialAlertsContextBuilder.project_summary(context["project"])
+        pending_candidates = (
+            CommunicationIntelligenceCandidate.objects.filter(
+                project=context["project"],
+                status=CommunicationIntelligenceCandidate.Status.PENDING_REVIEW,
+            )
+            .select_related("email_message")
+            .order_by("-created_at", "-id")
+        )
+        context["pending_communication_candidate_count"] = pending_candidates.count()
+        context["latest_pending_communication_candidates"] = pending_candidates[:5]
+        context["communication_candidate_review_url"] = (
+            reverse("workspace:communication_ai_review") + f"?project={context['project'].id}"
+        )
         return context
 
 
@@ -1531,6 +1549,14 @@ class ReviewsView(WorkspacePageView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context.update(ProjectLinkReviewContextBuilder.build())
+        context["communication_candidate_summary"] = CommunicationCandidateContextBuilder.summary()
+        context["latest_communication_candidates"] = (
+            CommunicationIntelligenceCandidate.objects.filter(
+                status=CommunicationIntelligenceCandidate.Status.PENDING_REVIEW
+            )
+            .select_related("project", "email_message")
+            .order_by("-created_at", "-id")[:5]
+        )
         return context
 
 
@@ -1557,7 +1583,7 @@ class CommunicationProjectLinksView(WorkspacePageView):
 
 class CommunicationCandidatesView(WorkspacePageView):
     template_name = "workspace/communication_candidates.html"
-    page_title = "Communication Candidates"
+    page_title = "Communication AI Review"
     section = "reviews"
 
     def get_context_data(self, **kwargs):
@@ -1567,10 +1593,115 @@ class CommunicationCandidatesView(WorkspacePageView):
                 project_id=self.request.GET.get("project", ""),
                 candidate_type=self.request.GET.get("type", ""),
                 confidence=self.request.GET.get("confidence", ""),
+                status=self.request.GET.get("status", ""),
+                extraction_method=self.request.GET.get("method", ""),
+                due_filter=self.request.GET.get("due", ""),
+                include_snoozed=self.request.GET.get("include_snoozed") == "1",
                 query=self.request.GET.get("q", ""),
+                page=self.request.GET.get("page", 1),
             )
         )
         return context
+
+
+class CommunicationCandidateDetailView(WorkspacePageView):
+    template_name = "workspace/communication_candidate_detail.html"
+    page_title = "Communication Candidate Review"
+    section = "reviews"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        candidate = get_object_or_404(CommunicationIntelligenceCandidate, id=self.kwargs["candidate_id"])
+        context.update(CommunicationCandidateContextBuilder.detail(candidate))
+        return context
+
+
+class CommunicationCandidateReviewPostView(View):
+    def post(self, request, candidate_id):
+        candidate = get_object_or_404(CommunicationIntelligenceCandidate, id=candidate_id)
+        try:
+            command = self._command(request, candidate)
+            result = CommunicationCandidateReviewService.review(command)
+        except (ValidationError, ValueError) as exc:
+            messages.error(request, self._safe_error(exc))
+            return redirect("workspace:communication_candidate_review", candidate_id=candidate.id)
+        except Exception:
+            messages.error(request, "Communication candidate review failed.")
+            return redirect("workspace:communication_candidate_review", candidate_id=candidate.id)
+
+        if result.changed:
+            messages.success(request, result.message)
+        else:
+            messages.info(request, result.message)
+        return redirect(self._safe_redirect(request, candidate))
+
+    def _command(self, request, candidate):
+        outcome = request.POST.get("outcome", "")
+        project = self._project(request, candidate)
+        merge_target = self._merge_target(request, candidate)
+        due_date = parse_date(request.POST.get("due_date") or "") if request.POST.get("due_date") else None
+        snooze_until = self._snooze_until(request)
+        return ReviewCommunicationCandidateCommand(
+            candidate=candidate,
+            outcome=outcome,
+            project=project,
+            candidate_type=request.POST.get("candidate_type") or None,
+            title=request.POST.get("title") if "title" in request.POST else None,
+            description=request.POST.get("description") if "description" in request.POST else None,
+            responsible_party=request.POST.get("responsible_party") if "responsible_party" in request.POST else None,
+            responsible_email=request.POST.get("responsible_email") if "responsible_email" in request.POST else None,
+            due_date=due_date,
+            clear_due_date=request.POST.get("clear_due_date") == "1",
+            priority=request.POST.get("priority") if "priority" in request.POST else None,
+            reason=request.POST.get("reason", ""),
+            merge_target=merge_target,
+            snooze_until=snooze_until,
+            actor=self._actor(request),
+            metadata={"source": "workspace_ai_review"},
+        )
+
+    def _project(self, request, candidate):
+        project_id = request.POST.get("project_id")
+        if not project_id:
+            return None
+        return Project.objects.get(id=project_id, organization=candidate.organization)
+
+    def _merge_target(self, request, candidate):
+        target_id = request.POST.get("merge_target_id")
+        if not target_id:
+            return None
+        return CommunicationIntelligenceCandidate.objects.select_related("merged_into").get(
+            id=target_id,
+            organization=candidate.organization,
+        )
+
+    def _snooze_until(self, request):
+        raw_value = request.POST.get("snooze_until") or ""
+        if not raw_value:
+            return None
+        parsed = parse_datetime(raw_value)
+        if not parsed:
+            parsed_date = parse_date(raw_value)
+            if not parsed_date:
+                raise ValueError("Choose a valid snooze date.")
+            parsed = timezone.datetime.combine(parsed_date, timezone.datetime.min.time())
+        if timezone.is_naive(parsed):
+            parsed = timezone.make_aware(parsed)
+        return parsed
+
+    def _actor(self, request):
+        return request.user if request.user.is_authenticated else None
+
+    def _safe_redirect(self, request, candidate):
+        next_url = request.POST.get("next")
+        if next_url and url_has_allowed_host_and_scheme(next_url, allowed_hosts={request.get_host()}):
+            return next_url
+        return reverse("workspace:communication_candidate_review", kwargs={"candidate_id": candidate.id})
+
+    def _safe_error(self, exc):
+        if hasattr(exc, "messages"):
+            return " ".join(exc.messages)
+        return str(exc) or "Communication candidate review failed."
 
 
 class SearchView(WorkspacePageView):

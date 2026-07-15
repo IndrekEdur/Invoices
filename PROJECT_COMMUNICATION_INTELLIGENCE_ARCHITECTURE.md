@@ -803,7 +803,14 @@ Implementation note for `EMAIL-AI-001`:
 - Candidate extraction is eligible by default only for e-mails with confirmed `EmailProjectLink` context; suggested, rejected and superseded Project links do not become operational extraction context.
 - A provider-independent `CommunicationIntelligenceProvider` boundary accepts structured DTO context and returns immutable candidate DTOs. The initial provider is deterministic and local; no real AI/network provider is called.
 - Candidates store bounded evidence excerpts, fingerprints, extractor/rule metadata and review lifecycle fields. Full message bodies remain in `EmailMessage` and are not duplicated into candidate metadata.
-- `/workspace/communications/candidates/` provides read-only visibility for pending candidates. Approval, editing, operational task creation, reminders and reply resolution remain later phases.
+- `/workspace/communications/candidates/` provides compatibility visibility for candidates, while `/workspace/ai-review/` is the canonical human review queue.
+
+Implementation note for `MVP-AI-001`:
+
+- The first Communication AI Review Queue lets reviewers inspect bounded source evidence and correct Project, candidate type, title, description, responsible party/e-mail, due date and priority.
+- Original extraction fields remain unchanged. Reviewed fields provide centralized `effective_*` values so later operationalization can consume human-approved facts without reimplementing extraction-vs-review precedence.
+- Review actions support approve, edit and approve, reject, not actionable, duplicate, merge and snooze. AuditEvent records material transitions and structured human feedback; no full e-mail body is copied to audit metadata.
+- Approved and edited-and-approved candidates are approved only for future operationalization. They still do not create Project Tasks, Project Questions, reminders, workflow transitions, AI calls or outbound e-mails in this phase.
 
 ## 39. Migration And Backwards Compatibility
 

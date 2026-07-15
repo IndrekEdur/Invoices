@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+{% block title %}Communication Candidate Review | Operations Workspace Platform{% endblock %}
+{% block actions %}
+<a href="{% url 'workspace:communication_ai_review' %}" class="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50">Back to AI Review</a>
+{% endblock %}
+{% block content %}
+<div class="space-y-8">
+    {% include "workspace/partials/components/page_header.html" with eyebrow="Communication Intelligence" title=candidate.effective_title body="Review extracted communication evidence before it becomes future operational work." %}
+
+    <div class="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+        <section class="space-y-6">
+            <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                {% include "workspace/partials/components/section_header.html" with title="Source E-mail" body="Bounded source context. Opening the message shows the full imported body." %}
+                <div class="mt-4 grid gap-4 md:grid-cols-2">
+                    <div><div class="text-xs font-semibold uppercase text-slate-500">Subject</div><a href="{{ email_detail_url }}" class="mt-1 block font-semibold text-blue-700 hover:text-blue-900">{{ candidate.email_message.subject|default:candidate.email_message.external_message_id }}</a></div>
+                    <div><div class="text-xs font-semibold uppercase text-slate-500">Sender</div><div class="mt-1 text-sm text-slate-900">{{ candidate.email_message.sender_name|default:candidate.email_message.sender_email }}</div><div class="text-xs text-slate-500">{{ candidate.email_message.sender_email }}</div></div>
+                    <div><div class="text-xs font-semibold uppercase text-slate-500">Received</div><div class="mt-1 text-sm text-slate-900">{{ candidate.email_message.received_at|date:"Y-m-d H:i" }}</div></div>
+                    <div><div class="text-xs font-semibold uppercase text-slate-500">Extracted Project</div><a href="{{ project_detail_url }}" class="mt-1 block font-semibold text-blue-700 hover:text-blue-900">{{ candidate.project.code }} {{ candidate.project.name }}</a></div>
+                </div>
+                <div class="mt-5 rounded-xl bg-slate-50 p-4 text-sm leading-6 text-slate-800">{{ candidate.evidence_excerpt|default:"No bounded evidence excerpt stored." }}</div>
+            </article>
+
+            <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                {% include "workspace/partials/components/section_header.html" with title="Extraction and Review State" body="Original extraction is preserved. Effective values use reviewed corrections when present." %}
+                <div class="mt-4 overflow-hidden rounded-xl border border-slate-200">
+                    <table class="min-w-full divide-y divide-slate-200 text-sm">
+                        <thead class="bg-slate-50"><tr><th class="px-4 py-3 text-left">Field</th><th class="px-4 py-3 text-left">Original</th><th class="px-4 py-3 text-left">Effective</th></tr></thead>
+                        <tbody class="divide-y divide-slate-100">
+                            <tr><td class="px-4 py-3 font-semibold">Project</td><td class="px-4 py-3">{{ candidate.project.code }} {{ candidate.project.name }}</td><td class="px-4 py-3">{{ candidate.effective_project.code }} {{ candidate.effective_project.name }}</td></tr>
+                            <tr><td class="px-4 py-3 font-semibold">Type</td><td class="px-4 py-3">{{ candidate.candidate_type }}</td><td class="px-4 py-3">{{ candidate.effective_candidate_type }}</td></tr>
+                            <tr><td class="px-4 py-3 font-semibold">Title</td><td class="px-4 py-3">{{ candidate.title }}</td><td class="px-4 py-3">{{ candidate.effective_title }}</td></tr>
+                            <tr><td class="px-4 py-3 font-semibold">Description</td><td class="px-4 py-3">{{ candidate.description|default:"-" }}</td><td class="px-4 py-3">{{ candidate.effective_description|default:"-" }}</td></tr>
+                            <tr><td class="px-4 py-3 font-semibold">Responsible</td><td class="px-4 py-3">{{ candidate.suggested_responsible_email|default:candidate.suggested_responsible_party|default:"-" }}</td><td class="px-4 py-3">{{ candidate.effective_responsible_email|default:candidate.effective_responsible_party|default:"-" }}</td></tr>
+                            <tr><td class="px-4 py-3 font-semibold">Due date</td><td class="px-4 py-3">{{ candidate.suggested_due_date|default:"-" }}</td><td class="px-4 py-3">{{ candidate.effective_due_date|default:"-" }}</td></tr>
+                            <tr><td class="px-4 py-3 font-semibold">Priority</td><td class="px-4 py-3">{{ candidate.suggested_priority|default:"-" }}</td><td class="px-4 py-3">{{ candidate.effective_priority|default:"-" }}</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="mt-4 flex flex-wrap gap-2">
+                    {% include "workspace/partials/components/status_badge.html" with status=candidate.status label=candidate.status %}
+                    {% include "workspace/partials/components/badge.html" with tone="info" label=candidate.confidence_band %}
+                    {% include "workspace/partials/components/badge.html" with tone="neutral" label=candidate.extraction_method %}
+                    {% if candidate.review_outcome %}{% include "workspace/partials/components/badge.html" with tone="success" label=candidate.review_outcome %}{% endif %}
+                </div>
+            </article>
+
+            <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                {% include "workspace/partials/components/section_header.html" with title="Review History" body="Material review actions are stored as AuditEvent records. Full e-mail body is not copied into audit metadata." %}
+                {% if audit_events %}
+                    <div class="mt-4 divide-y divide-slate-100 rounded-xl border border-slate-200">
+                        {% for event in audit_events %}
+                            <div class="px-4 py-3 text-sm">
+                                <div class="font-semibold text-slate-950">{{ event.event_type }}</div>
+                                <div class="mt-1 text-xs text-slate-500">{{ event.created_at|date:"Y-m-d H:i" }}{% if event.actor %} by {{ event.actor }}{% endif %}</div>
+                                <pre class="mt-2 max-h-40 overflow-auto rounded-lg bg-slate-950 p-3 text-xs text-slate-100">{{ event.metadata }}</pre>
+                            </div>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    <div class="mt-4">{% include "workspace/partials/components/empty_state.html" with title="No review history yet" body="The first review action will create a compact audit record." %}</div>
+                {% endif %}
+            </article>
+        </section>
+
+        <aside class="space-y-6">
+            <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                {% include "workspace/partials/components/section_header.html" with title="Review Form" body="Choose one outcome. No tasks, reminders or outbound e-mails are created." %}
+                <form method="post" action="{% url 'workspace:communication_candidate_review_post' candidate.id %}" class="mt-4 space-y-4">
+                    {% csrf_token %}
+                    <input type="hidden" name="next" value="{% url 'workspace:communication_candidate_review' candidate.id %}">
+                    <div>
+                        <label class="text-xs font-semibold uppercase text-slate-500" for="outcome">Outcome</label>
+                        <select id="outcome" name="outcome" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                            {% for value,label in review_outcomes %}
+                                <option value="{{ value }}">{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-xs font-semibold uppercase text-slate-500" for="project_id">Project</label>
+                        <select id="project_id" name="project_id" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                            <option value="">Keep {{ candidate.project.code }} {{ candidate.project.name }}</option>
+                            {% for project in projects %}
+                                <option value="{{ project.id }}" {% if candidate.effective_project.id == project.id %}selected{% endif %}>{{ project.code }} {{ project.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-xs font-semibold uppercase text-slate-500" for="candidate_type">Candidate type</label>
+                        <select id="candidate_type" name="candidate_type" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                            {% for value,label in candidate_types %}
+                                <option value="{{ value }}" {% if candidate.effective_candidate_type == value %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-xs font-semibold uppercase text-slate-500" for="title">Title</label>
+                        <input id="title" name="title" value="{{ candidate.effective_title }}" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                    </div>
+                    <div>
+                        <label class="text-xs font-semibold uppercase text-slate-500" for="description">Description</label>
+                        <textarea id="description" name="description" rows="4" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">{{ candidate.effective_description }}</textarea>
+                    </div>
+                    <div class="grid gap-3 md:grid-cols-2">
+                        <div>
+                            <label class="text-xs font-semibold uppercase text-slate-500" for="responsible_party">Responsible party</label>
+                            <input id="responsible_party" name="responsible_party" value="{{ candidate.effective_responsible_party }}" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                        </div>
+                        <div>
+                            <label class="text-xs font-semibold uppercase text-slate-500" for="responsible_email">Responsible e-mail</label>
+                            <input id="responsible_email" name="responsible_email" value="{{ candidate.effective_responsible_email }}" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                        </div>
+                    </div>
+                    <div class="grid gap-3 md:grid-cols-2">
+                        <div>
+                            <label class="text-xs font-semibold uppercase text-slate-500" for="due_date">Due date</label>
+                            <input id="due_date" type="date" name="due_date" value="{{ candidate.effective_due_date|date:'Y-m-d' }}" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                            <label class="mt-2 flex items-center gap-2 text-xs text-slate-600"><input type="checkbox" name="clear_due_date" value="1"> Clear due date</label>
+                        </div>
+                        <div>
+                            <label class="text-xs font-semibold uppercase text-slate-500" for="priority">Priority</label>
+                            <select id="priority" name="priority" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                                <option value="">Unassigned</option>
+                                <option value="low" {% if candidate.effective_priority == "low" %}selected{% endif %}>Low</option>
+                                <option value="normal" {% if candidate.effective_priority == "normal" %}selected{% endif %}>Normal</option>
+                                <option value="high" {% if candidate.effective_priority == "high" %}selected{% endif %}>High</option>
+                                <option value="urgent" {% if candidate.effective_priority == "urgent" %}selected{% endif %}>Urgent</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="text-xs font-semibold uppercase text-slate-500" for="merge_target_id">Duplicate / merge target</label>
+                        <select id="merge_target_id" name="merge_target_id" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                            <option value="">No target</option>
+                            {% for target in duplicate_candidates %}
+                                <option value="{{ target.id }}">#{{ target.id }} {{ target.effective_title|truncatechars:80 }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-xs font-semibold uppercase text-slate-500" for="snooze_until">Snooze until</label>
+                        <input id="snooze_until" type="date" name="snooze_until" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                    </div>
+                    <div>
+                        <label class="text-xs font-semibold uppercase text-slate-500" for="reason">Reason</label>
+                        <textarea id="reason" name="reason" rows="3" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" placeholder="Required for reject/not actionable; useful for duplicate/merge.">{{ candidate.review_reason }}</textarea>
+                    </div>
+                    <button type="submit" class="w-full rounded-lg bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800">Record review</button>
+                </form>
+            </article>
+
+            <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                {% include "workspace/partials/components/section_header.html" with title="Possible Duplicates" body="Deterministic same-project or same-message candidates. No semantic AI search is used here." %}
+                <div class="mt-4 space-y-3">
+                    {% for target in duplicate_candidates %}
+                        <a href="{% url 'workspace:communication_candidate_review' target.id %}" class="block rounded-lg border border-slate-200 p-3 text-sm hover:bg-blue-50/60">
+                            <div class="font-semibold text-slate-950">#{{ target.id }} {{ target.effective_title }}</div>
+                            <div class="mt-1 text-xs text-slate-500">{{ target.status }} · {{ target.effective_candidate_type }}</div>
+                        </a>
+                    {% empty %}
+                        {% include "workspace/partials/components/empty_state.html" with title="No close duplicates" body="Potential merge targets will appear here when deterministic context overlaps." %}
+                    {% endfor %}
+                </div>
+            </article>
+        </aside>
+    </div>
+</div>
+{% endblock %}

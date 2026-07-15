@@ -282,6 +282,15 @@ class CommunicationIntelligenceCandidate(models.Model):
         MEDIUM = "medium", "Medium"
         LOW = "low", "Low"
 
+    class ReviewOutcome(models.TextChoices):
+        APPROVE = "approve", "Approve"
+        EDIT_AND_APPROVE = "edit_and_approve", "Edit and approve"
+        REJECT = "reject", "Reject"
+        NOT_ACTIONABLE = "not_actionable", "Not actionable"
+        DUPLICATE = "duplicate", "Duplicate"
+        MERGE = "merge", "Merge"
+        DEFER = "defer", "Defer"
+
     organization = models.ForeignKey(
         Organization,
         on_delete=models.CASCADE,
@@ -315,6 +324,26 @@ class CommunicationIntelligenceCandidate(models.Model):
     suggested_responsible_email = models.EmailField(blank=True)
     suggested_due_date = models.DateField(blank=True, null=True)
     suggested_priority = models.CharField(max_length=32, blank=True)
+    reviewed_project = models.ForeignKey(
+        Project,
+        on_delete=models.SET_NULL,
+        related_name="reviewed_communication_candidates",
+        blank=True,
+        null=True,
+    )
+    reviewed_candidate_type = models.CharField(max_length=32, choices=Type.choices, blank=True)
+    reviewed_title = models.CharField(max_length=255, blank=True)
+    reviewed_description = models.TextField(blank=True)
+    reviewed_responsible_party = models.CharField(max_length=255, blank=True)
+    reviewed_responsible_email = models.EmailField(blank=True)
+    reviewed_due_date = models.DateField(blank=True, null=True)
+    reviewed_due_date_cleared = models.BooleanField(default=False)
+    reviewed_priority = models.CharField(max_length=32, blank=True)
+    review_outcome = models.CharField(max_length=32, choices=ReviewOutcome.choices, blank=True)
+    review_reason = models.TextField(blank=True)
+    review_snoozed_until = models.DateTimeField(blank=True, null=True)
+    human_feedback = models.JSONField(default=dict, blank=True)
+    review_version = models.PositiveIntegerField(default=1)
     source_evidence_summary = models.TextField(blank=True)
     evidence_excerpt = models.TextField(blank=True)
     evidence_fingerprint = models.CharField(max_length=64)
@@ -365,6 +394,44 @@ class CommunicationIntelligenceCandidate(models.Model):
 
     def __str__(self) -> str:
         return f"{self.candidate_type}: {self.title}"
+
+    @property
+    def effective_project(self):
+        return self.reviewed_project or self.project
+
+    @property
+    def effective_candidate_type(self) -> str:
+        return self.reviewed_candidate_type or self.candidate_type
+
+    @property
+    def effective_title(self) -> str:
+        return self.reviewed_title or self.title
+
+    @property
+    def effective_description(self) -> str:
+        return self.reviewed_description or self.description
+
+    @property
+    def effective_responsible_party(self) -> str:
+        return self.reviewed_responsible_party or self.suggested_responsible_party
+
+    @property
+    def effective_responsible_email(self) -> str:
+        return self.reviewed_responsible_email or self.suggested_responsible_email
+
+    @property
+    def effective_due_date(self):
+        if self.reviewed_due_date_cleared:
+            return None
+        return self.reviewed_due_date or self.suggested_due_date
+
+    @property
+    def effective_priority(self) -> str:
+        return self.reviewed_priority or self.suggested_priority
+
+    @property
+    def is_approved_for_operationalization(self) -> bool:
+        return self.status in {self.Status.APPROVED, self.Status.EDITED_AND_APPROVED}
 
 
 class EmailQuestion(models.Model):

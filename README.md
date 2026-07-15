@@ -24,6 +24,8 @@ The communications app now includes deterministic e-mail-to-Project linking on t
 
 The communications app also includes first-pass communication intelligence candidate extraction for confirmed Project-linked e-mails. It stores pending review candidates for questions, task requests, commitments, decisions, risks, blockers, deadlines, information-only notes, and possible resolution evidence. Candidates are suggestions only: no operational Project Tasks, reminders, status changes, AI actions, or e-mail sending are created.
 
+Workspace now includes a Communication AI Review Queue at `/workspace/ai-review/`. Reviewers can inspect bounded e-mail evidence, preserve original extraction values, store corrected effective values, approve, reject, mark not actionable, mark duplicates, merge candidates, or snooze review. Approved candidates still do not create Project Tasks or Questions; operationalization remains a later phase.
+
 The communications app includes persistent mailbox sync state so each EmailAccount mailbox can later track resumable cursor progress, UIDVALIDITY, import status, safe errors, and observable counters.
 
 Normal IMAP sync now uses incremental UID-based mailbox cursors. It resumes from the last successfully processed UID, preserves bounded latest-message behavior for first/no-cursor syncs, and still leaves historical full-mailbox backfill for a later implementation.

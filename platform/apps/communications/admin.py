@@ -21,21 +21,42 @@ class CommunicationIntelligenceCandidateAdmin(admin.ModelAdmin):
         "email_message",
         "candidate_type",
         "status",
+        "review_outcome",
         "confidence_band",
         "extraction_method",
         "created_at",
         "reviewed_at",
     )
-    list_filter = ("organization", "candidate_type", "status", "confidence_band", "extraction_method", "project")
+    list_filter = (
+        "organization",
+        "candidate_type",
+        "reviewed_candidate_type",
+        "status",
+        "review_outcome",
+        "confidence_band",
+        "extraction_method",
+        "project",
+        "reviewed_project",
+    )
     search_fields = (
         "title",
+        "reviewed_title",
         "description",
+        "reviewed_description",
         "source_evidence_summary",
         "email_message__subject",
         "project__code",
         "project__name",
     )
-    readonly_fields = ("created_at", "updated_at")
+    readonly_fields = (
+        "created_at",
+        "updated_at",
+        "reviewed_at",
+        "reviewed_by",
+        "review_outcome",
+        "human_feedback",
+        "merged_into",
+    )
 
 
 @admin.register(EmailAccount)

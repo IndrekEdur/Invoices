@@ -1,6 +1,7 @@
 import shutil
 import tempfile
 from datetime import datetime
+from decimal import Decimal
 from io import StringIO
 from unittest.mock import patch
 
@@ -45,6 +46,7 @@ from .services import (
     DeterministicEmailProjectLinkingService,
     ExtractCommunicationCandidatesCommand,
     CommunicationCandidateExtractionService,
+    CommunicationCandidateReviewService,
     EmailAnswerDraftService,
     EmailAttachmentDocumentService,
     EmailImportService,
@@ -62,6 +64,7 @@ from .services import (
     ProcessEmailCommand,
     RejectEmailAnswerDraftCommand,
     RejectEmailProjectLinkCommand,
+    ReviewCommunicationCandidateCommand,
     SuggestEmailProjectLinksCommand,
     SyncEmailAccountCommand,
     UpdateMailboxSyncProgressCommand,
@@ -3738,3 +3741,232 @@ class CommunicationCandidateExtractionServiceTests(TestCase):
                 "--candidate-type",
                 "unsupported",
             )
+
+
+class CommunicationCandidateReviewServiceTests(TestCase):
+    def _candidate(self, project=None, title="Original title"):
+        organization = project.organization if project else create_organization()
+        project = project or create_project(organization=organization, code="28001", name="Review Project")
+        message = create_email_message(organization=organization, subject="Review source", body_text="Please answer.")
+        return CommunicationIntelligenceCandidate.objects.create(
+            organization=organization,
+            project=project,
+            email_message=message,
+            email_thread=message.thread,
+            candidate_type=CommunicationIntelligenceCandidate.Type.QUESTION,
+            status=CommunicationIntelligenceCandidate.Status.PENDING_REVIEW,
+            title=title,
+            description="Original description",
+            confidence_score=Decimal("90.00"),
+            confidence_band=CommunicationIntelligenceCandidate.ConfidenceBand.HIGH,
+            extraction_method=CommunicationIntelligenceCandidate.ExtractionMethod.DETERMINISTIC_RULE,
+            suggested_responsible_email="old@example.com",
+            suggested_due_date=timezone.localdate(),
+            suggested_priority="normal",
+            source_evidence_summary="Please answer.",
+            evidence_excerpt="Please answer.",
+            evidence_fingerprint=(title[:1].lower() or "x").ljust(64, "f"),
+            content_fingerprint=(title[:1].lower() or "x").ljust(64, "c"),
+            extractor_version="communication-candidates-v1",
+            rule_version="deterministic-rules-v1",
+        )
+
+    def test_approve_sets_status_and_effective_values_without_overwriting_original(self):
+        candidate = self._candidate()
+
+        result = CommunicationCandidateReviewService.review(
+            ReviewCommunicationCandidateCommand(
+                candidate=candidate,
+                outcome=CommunicationIntelligenceCandidate.ReviewOutcome.APPROVE,
+                metadata={"source": "test"},
+            )
+        )
+
+        candidate.refresh_from_db()
+        self.assertTrue(result.changed)
+        self.assertEqual(candidate.status, CommunicationIntelligenceCandidate.Status.APPROVED)
+        self.assertEqual(candidate.title, "Original title")
+        self.assertEqual(candidate.effective_title, "Original title")
+        self.assertTrue(candidate.is_approved_for_operationalization)
+        self.assertEqual(AuditEvent.objects.filter(event_type="communication_candidate.reviewed").count(), 1)
+
+    def test_idempotent_approve_does_not_create_duplicate_audit_event(self):
+        candidate = self._candidate()
+        CommunicationCandidateReviewService.review(
+            ReviewCommunicationCandidateCommand(
+                candidate=candidate,
+                outcome=CommunicationIntelligenceCandidate.ReviewOutcome.APPROVE,
+            )
+        )
+        candidate.refresh_from_db()
+
+        result = CommunicationCandidateReviewService.review(
+            ReviewCommunicationCandidateCommand(
+                candidate=candidate,
+                outcome=CommunicationIntelligenceCandidate.ReviewOutcome.APPROVE,
+            )
+        )
+
+        self.assertFalse(result.changed)
+        self.assertEqual(AuditEvent.objects.filter(event_type="communication_candidate.reviewed").count(), 1)
+
+    def test_edit_and_approve_stores_reviewed_values_separately(self):
+        candidate = self._candidate()
+        original_project_id = candidate.project_id
+        new_project = create_project(organization=candidate.organization, code="28002", name="Corrected")
+
+        CommunicationCandidateReviewService.review(
+            ReviewCommunicationCandidateCommand(
+                candidate=candidate,
+                outcome=CommunicationIntelligenceCandidate.ReviewOutcome.EDIT_AND_APPROVE,
+                project=new_project,
+                candidate_type=CommunicationIntelligenceCandidate.Type.TASK_REQUEST,
+                title="Reviewed title",
+                description="Reviewed description",
+                responsible_email="new@example.com",
+                clear_due_date=True,
+                priority="high",
+                reason="Corrected extraction",
+            )
+        )
+
+        candidate.refresh_from_db()
+        self.assertEqual(candidate.status, CommunicationIntelligenceCandidate.Status.EDITED_AND_APPROVED)
+        self.assertEqual(candidate.project_id, original_project_id)
+        self.assertEqual(candidate.reviewed_project, new_project)
+        self.assertEqual(candidate.effective_project, new_project)
+        self.assertEqual(candidate.candidate_type, CommunicationIntelligenceCandidate.Type.QUESTION)
+        self.assertEqual(candidate.effective_candidate_type, CommunicationIntelligenceCandidate.Type.TASK_REQUEST)
+        self.assertEqual(candidate.title, "Original title")
+        self.assertEqual(candidate.effective_title, "Reviewed title")
+        self.assertIsNone(candidate.effective_due_date)
+        self.assertEqual(candidate.effective_priority, "high")
+        self.assertTrue(candidate.human_feedback["title_edited"])
+
+    def test_reject_requires_reason(self):
+        candidate = self._candidate()
+
+        with self.assertRaises(ValidationError):
+            CommunicationCandidateReviewService.review(
+                ReviewCommunicationCandidateCommand(
+                    candidate=candidate,
+                    outcome=CommunicationIntelligenceCandidate.ReviewOutcome.REJECT,
+                )
+            )
+
+    def test_not_actionable_maps_to_rejected_with_feedback(self):
+        candidate = self._candidate()
+
+        CommunicationCandidateReviewService.review(
+            ReviewCommunicationCandidateCommand(
+                candidate=candidate,
+                outcome=CommunicationIntelligenceCandidate.ReviewOutcome.NOT_ACTIONABLE,
+                reason="Courtesy only",
+            )
+        )
+
+        candidate.refresh_from_db()
+        self.assertEqual(candidate.status, CommunicationIntelligenceCandidate.Status.REJECTED)
+        self.assertEqual(candidate.human_feedback["rejection_reason_code"], "not_actionable")
+
+    def test_merge_target_same_organization_and_cycle_prevented(self):
+        candidate = self._candidate(title="Merge source")
+        target = self._candidate(project=candidate.project, title="Merge target")
+
+        CommunicationCandidateReviewService.review(
+            ReviewCommunicationCandidateCommand(
+                candidate=candidate,
+                outcome=CommunicationIntelligenceCandidate.ReviewOutcome.MERGE,
+                merge_target=target,
+                reason="Same request",
+            )
+        )
+
+        candidate.refresh_from_db()
+        self.assertEqual(candidate.status, CommunicationIntelligenceCandidate.Status.MERGED)
+        self.assertEqual(candidate.merged_into, target)
+
+        target.merged_into = candidate
+        target.save(update_fields=["merged_into"])
+        with self.assertRaises(ValidationError):
+            CommunicationCandidateReviewService.review(
+                ReviewCommunicationCandidateCommand(
+                    candidate=target,
+                    outcome=CommunicationIntelligenceCandidate.ReviewOutcome.MERGE,
+                    merge_target=candidate,
+                    reason="Cycle",
+                )
+            )
+
+    def test_cross_organization_project_rejected(self):
+        candidate = self._candidate()
+        other_project = create_project(organization=create_organization("Other Org"), code="99001", name="Other")
+
+        with self.assertRaises(ValidationError):
+            CommunicationCandidateReviewService.review(
+                ReviewCommunicationCandidateCommand(
+                    candidate=candidate,
+                    outcome=CommunicationIntelligenceCandidate.ReviewOutcome.EDIT_AND_APPROVE,
+                    project=other_project,
+                    title="Cross org",
+                )
+            )
+
+    def test_metadata_is_not_mutated(self):
+        candidate = self._candidate()
+        metadata = {"source": "caller"}
+
+        CommunicationCandidateReviewService.review(
+            ReviewCommunicationCandidateCommand(
+                candidate=candidate,
+                outcome=CommunicationIntelligenceCandidate.ReviewOutcome.APPROVE,
+                metadata=metadata,
+            )
+        )
+
+        self.assertEqual(metadata, {"source": "caller"})
+
+    def test_review_does_not_create_operational_question(self):
+        candidate = self._candidate()
+
+        CommunicationCandidateReviewService.review(
+            ReviewCommunicationCandidateCommand(
+                candidate=candidate,
+                outcome=CommunicationIntelligenceCandidate.ReviewOutcome.APPROVE,
+            )
+        )
+
+        self.assertEqual(EmailQuestion.objects.count(), 0)
+
+    def test_reprocessing_does_not_overwrite_reviewed_candidate(self):
+        organization = create_organization()
+        project = create_project(organization=organization, code="28003", name="Reprocess")
+        message = create_email_message(organization=organization, subject="Kas palun vastate?", body_text="Kas palun vastate?")
+        EmailProjectLink.objects.create(
+            organization=organization,
+            email_message=message,
+            project=project,
+            status=EmailProjectLink.Status.CONFIRMED,
+            confidence=95,
+            evidence={"source": "test"},
+        )
+        CommunicationCandidateExtractionService.extract(
+            ExtractCommunicationCandidatesCommand(organization=organization, email_message_ids=(message.id,))
+        )
+        candidate = CommunicationIntelligenceCandidate.objects.first()
+        CommunicationCandidateReviewService.review(
+            ReviewCommunicationCandidateCommand(
+                candidate=candidate,
+                outcome=CommunicationIntelligenceCandidate.ReviewOutcome.EDIT_AND_APPROVE,
+                title="Human title",
+                reason="Human correction",
+            )
+        )
+
+        CommunicationCandidateExtractionService.extract(
+            ExtractCommunicationCandidatesCommand(organization=organization, email_message_ids=(message.id,))
+        )
+
+        candidate.refresh_from_db()
+        self.assertEqual(candidate.effective_title, "Human title")
+        self.assertEqual(candidate.status, CommunicationIntelligenceCandidate.Status.EDITED_AND_APPROVED)

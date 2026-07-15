@@ -102,6 +102,26 @@ class ExtractCommunicationCandidatesCommand:
 
 
 @dataclass(frozen=True)
+class ReviewCommunicationCandidateCommand:
+    candidate: object
+    outcome: str
+    project: object = None
+    candidate_type: str | None = None
+    title: str | None = None
+    description: str | None = None
+    responsible_party: str | None = None
+    responsible_email: str | None = None
+    due_date: object = None
+    clear_due_date: bool = False
+    priority: str | None = None
+    reason: str = ""
+    merge_target: object = None
+    snooze_until: object = None
+    actor: object = None
+    metadata: dict | None = None
+
+
+@dataclass(frozen=True)
 class DetectEmailQuestionsCommand:
     email_message: object
     actor: object = None

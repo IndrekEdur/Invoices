@@ -3819,9 +3819,9 @@ class ProjectLinkReviewUITests(TestCase):
 
 
 class CommunicationCandidateReviewUITests(TestCase):
-    def _candidate(self):
-        organization = create_organization()
-        project = create_project(organization, code="27300", name="Candidate UI Project")
+    def _candidate(self, project=None, title="Task request: Please provide drawings"):
+        organization = project.organization if project else create_organization()
+        project = project or create_project(organization, code="27300", name="Candidate UI Project")
         message = create_email_message(organization, subject="Candidate source email")
         message.body_text = "This full body should not appear in candidate list rendering."
         message.save(update_fields=["body_text"])
@@ -3832,15 +3832,15 @@ class CommunicationCandidateReviewUITests(TestCase):
             email_thread=message.thread,
             candidate_type=CommunicationIntelligenceCandidate.Type.TASK_REQUEST,
             status=CommunicationIntelligenceCandidate.Status.PENDING_REVIEW,
-            title="Task request: Please provide drawings",
+            title=title,
             description="Please provide drawings",
             confidence_score=Decimal("75.00"),
             confidence_band=CommunicationIntelligenceCandidate.ConfidenceBand.HIGH,
             extraction_method=CommunicationIntelligenceCandidate.ExtractionMethod.DETERMINISTIC_RULE,
             source_evidence_summary="Please provide drawings",
             evidence_excerpt="Please provide drawings",
-            evidence_fingerprint="f" * 64,
-            content_fingerprint="c" * 64,
+            evidence_fingerprint=(title[:1].lower() or "x").ljust(64, "f"),
+            content_fingerprint=(title[:1].lower() or "x").ljust(64, "c"),
             extractor_version="communication-candidates-v1",
             rule_version="deterministic-rules-v1",
         )
@@ -3849,10 +3849,10 @@ class CommunicationCandidateReviewUITests(TestCase):
     def test_candidate_list_route_returns_200(self):
         candidate = self._candidate()
 
-        response = self.client.get(reverse("workspace:communication_candidates"))
+        response = self.client.get(reverse("workspace:communication_ai_review"))
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Candidate Review")
+        self.assertContains(response, "AI Review Queue")
         self.assertContains(response, candidate.title)
         self.assertContains(response, candidate.project.code)
         self.assertContains(response, "Please provide drawings")
@@ -3861,7 +3861,7 @@ class CommunicationCandidateReviewUITests(TestCase):
         candidate = self._candidate()
 
         response = self.client.get(
-            reverse("workspace:communication_candidates"),
+            reverse("workspace:communication_ai_review"),
             {"type": CommunicationIntelligenceCandidate.Type.TASK_REQUEST},
         )
 
@@ -3870,9 +3870,139 @@ class CommunicationCandidateReviewUITests(TestCase):
     def test_candidate_list_does_not_render_full_body(self):
         self._candidate()
 
-        response = self.client.get(reverse("workspace:communication_candidates"))
+        response = self.client.get(reverse("workspace:communication_ai_review"))
 
         self.assertNotContains(response, "This full body should not appear")
+
+    def test_compatibility_candidate_route_returns_queue(self):
+        candidate = self._candidate()
+
+        response = self.client.get(reverse("workspace:communication_candidates"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, candidate.title)
+
+    def test_candidate_detail_returns_200_and_shows_review_form(self):
+        candidate = self._candidate()
+
+        response = self.client.get(reverse("workspace:communication_candidate_review", kwargs={"candidate_id": candidate.id}))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Review Form")
+        self.assertContains(response, candidate.title)
+        self.assertContains(response, "Please provide drawings")
+
+    def test_approve_post_changes_status_and_creates_message(self):
+        candidate = self._candidate()
+
+        response = self.client.post(
+            reverse("workspace:communication_candidate_review_post", kwargs={"candidate_id": candidate.id}),
+            {"outcome": CommunicationIntelligenceCandidate.ReviewOutcome.APPROVE},
+            follow=True,
+        )
+
+        candidate.refresh_from_db()
+        self.assertEqual(candidate.status, CommunicationIntelligenceCandidate.Status.APPROVED)
+        self.assertContains(response, "Candidate review recorded")
+        self.assertTrue(AuditEvent.objects.filter(event_type="communication_candidate.reviewed").exists())
+
+    def test_edit_and_approve_post_updates_effective_values(self):
+        candidate = self._candidate()
+        other_project = create_project(candidate.organization, code="27301", name="Corrected Project")
+
+        self.client.post(
+            reverse("workspace:communication_candidate_review_post", kwargs={"candidate_id": candidate.id}),
+            {
+                "outcome": CommunicationIntelligenceCandidate.ReviewOutcome.EDIT_AND_APPROVE,
+                "project_id": str(other_project.id),
+                "candidate_type": CommunicationIntelligenceCandidate.Type.QUESTION,
+                "title": "Reviewed question",
+                "description": "Reviewed description",
+                "responsible_email": "reviewer@example.com",
+                "priority": "high",
+                "reason": "Corrected",
+            },
+        )
+
+        candidate.refresh_from_db()
+        self.assertEqual(candidate.status, CommunicationIntelligenceCandidate.Status.EDITED_AND_APPROVED)
+        self.assertEqual(candidate.reviewed_project, other_project)
+        self.assertEqual(candidate.effective_title, "Reviewed question")
+        self.assertEqual(candidate.effective_responsible_email, "reviewer@example.com")
+
+    def test_reject_post_requires_reason(self):
+        candidate = self._candidate()
+
+        response = self.client.post(
+            reverse("workspace:communication_candidate_review_post", kwargs={"candidate_id": candidate.id}),
+            {"outcome": CommunicationIntelligenceCandidate.ReviewOutcome.REJECT},
+            follow=True,
+        )
+
+        candidate.refresh_from_db()
+        self.assertEqual(candidate.status, CommunicationIntelligenceCandidate.Status.PENDING_REVIEW)
+        self.assertContains(response, "requires a reason")
+
+    def test_not_actionable_and_duplicate_post(self):
+        candidate = self._candidate()
+        duplicate = self._candidate(project=candidate.project, title="Task request: Same drawings")
+
+        self.client.post(
+            reverse("workspace:communication_candidate_review_post", kwargs={"candidate_id": duplicate.id}),
+            {
+                "outcome": CommunicationIntelligenceCandidate.ReviewOutcome.DUPLICATE,
+                "merge_target_id": str(candidate.id),
+                "reason": "Same request",
+            },
+        )
+
+        duplicate.refresh_from_db()
+        self.assertEqual(duplicate.status, CommunicationIntelligenceCandidate.Status.DUPLICATE)
+        self.assertEqual(duplicate.merged_into, candidate)
+
+        candidate.refresh_from_db()
+        self.client.post(
+            reverse("workspace:communication_candidate_review_post", kwargs={"candidate_id": candidate.id}),
+            {
+                "outcome": CommunicationIntelligenceCandidate.ReviewOutcome.NOT_ACTIONABLE,
+                "reason": "Already handled verbally",
+            },
+        )
+        candidate.refresh_from_db()
+        self.assertEqual(candidate.status, CommunicationIntelligenceCandidate.Status.REJECTED)
+
+    def test_snoozed_candidate_excluded_by_default(self):
+        candidate = self._candidate()
+        candidate.review_snoozed_until = timezone.now() + timezone.timedelta(days=1)
+        candidate.save(update_fields=["review_snoozed_until"])
+
+        response = self.client.get(reverse("workspace:communication_ai_review"))
+
+        self.assertNotContains(response, candidate.title)
+
+    def test_inbox_detail_shows_candidates(self):
+        candidate = self._candidate()
+
+        response = self.client.get(reverse("workspace:inbox_detail", kwargs={"email_id": candidate.email_message_id}))
+
+        self.assertContains(response, "Communication Candidates")
+        self.assertContains(response, candidate.title)
+
+    def test_project_detail_shows_pending_candidate_count(self):
+        candidate = self._candidate()
+
+        response = self.client.get(reverse("workspace:project_detail", kwargs={"project_id": candidate.project_id}))
+
+        self.assertContains(response, "Communication suggestions awaiting review")
+        self.assertContains(response, "Pending candidates")
+
+    def test_reviews_page_links_to_ai_review_queue(self):
+        candidate = self._candidate()
+
+        response = self.client.get(reverse("workspace:reviews"))
+
+        self.assertContains(response, "Communication AI Review")
+        self.assertContains(response, candidate.title)
 
 
 class EmailReplyDraftUITests(TestCase):

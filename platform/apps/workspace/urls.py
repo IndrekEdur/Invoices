@@ -12,6 +12,8 @@ from .views import (
     AccountingDimensionConflictsView,
     AssistantView,
     CommunicationCandidatesView,
+    CommunicationCandidateDetailView,
+    CommunicationCandidateReviewPostView,
     CommunicationProjectLinksView,
     DashboardView,
     DesignSystemView,
@@ -136,6 +138,17 @@ urlpatterns = [
     ),
     path("documents/", DocumentsView.as_view(), name="documents"),
     path("reviews/", ReviewsView.as_view(), name="reviews"),
+    path("ai-review/", CommunicationCandidatesView.as_view(), name="communication_ai_review"),
+    path(
+        "ai-review/<int:candidate_id>/",
+        CommunicationCandidateDetailView.as_view(),
+        name="communication_candidate_review",
+    ),
+    path(
+        "ai-review/<int:candidate_id>/review/",
+        CommunicationCandidateReviewPostView.as_view(),
+        name="communication_candidate_review_post",
+    ),
     path(
         "communications/project-links/",
         CommunicationProjectLinksView.as_view(),

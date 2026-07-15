@@ -4,7 +4,7 @@ from django.db.models import Count, Q
 from django.urls import reverse
 from django.utils import timezone
 
-from apps.communications.models import EmailMessage, EmailProjectLink
+from apps.communications.models import CommunicationIntelligenceCandidate, EmailMessage, EmailProjectLink
 from apps.projects.models import Project
 
 
@@ -46,6 +46,10 @@ class InboxContextBuilder:
         answer_drafts = list(
             email.answer_drafts.select_related("question").order_by("-created_at", "-id")
         )
+        communication_candidates = list(
+            email.communication_candidates.select_related("project", "reviewed_project")
+            .order_by("-created_at", "-id")
+        )
 
         return {
             "email": email,
@@ -55,6 +59,10 @@ class InboxContextBuilder:
             "questions": questions,
             "attachments": attachments,
             "answer_drafts": answer_drafts,
+            "communication_candidates": [
+                InboxContextBuilder._communication_candidate_context(candidate)
+                for candidate in communication_candidates
+            ],
             "evidence_json": InboxContextBuilder._format_evidence(project_links, questions),
             "projects": Project.objects.filter(organization=email.organization).order_by("code", "id"),
         }
@@ -196,4 +204,13 @@ class InboxContextBuilder:
             "confirm_url": reverse("workspace:project_link_confirm", kwargs={"link_id": link.id}),
             "reject_url": reverse("workspace:project_link_reject", kwargs={"link_id": link.id}),
             "correct_url": reverse("workspace:project_link_correct", kwargs={"link_id": link.id}),
+        }
+
+    @staticmethod
+    def _communication_candidate_context(candidate):
+        return {
+            "candidate": candidate,
+            "review_url": reverse("workspace:communication_candidate_review", kwargs={"candidate_id": candidate.id}),
+            "project": candidate.effective_project,
+            "approved_for_operationalization": candidate.is_approved_for_operationalization,
         }

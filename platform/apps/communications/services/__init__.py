@@ -21,6 +21,7 @@ from .commands import (
     RejectCommunicationProjectLinkCommand,
     RejectEmailAnswerDraftCommand,
     RejectEmailProjectLinkCommand,
+    ReviewCommunicationCandidateCommand,
     SuggestEmailProjectLinksCommand,
     SyncEmailAccountCommand,
     UpdateMailboxSyncProgressCommand,
@@ -33,6 +34,7 @@ from .candidate_extraction import (
     ExtractCommunicationCandidatesResult,
     ExtractedCommunicationCandidate,
 )
+from .candidate_review import CommunicationCandidateReviewService, ReviewCommunicationCandidateResult
 from .context import ConversationContextBuilder
 from .imports import EmailImportService
 from .mailbox_state import EmailMailboxStateService, MailboxUIDValidityChangedError
@@ -53,6 +55,7 @@ __all__ = [
     "BuildConversationContextCommand",
     "CommunicationProjectLinkReviewService",
     "CommunicationCandidateExtractionService",
+    "CommunicationCandidateReviewService",
     "CommunicationExtractionContext",
     "CommunicationIntelligenceProvider",
     "ConfirmCommunicationProjectLinkCommand",
@@ -89,6 +92,8 @@ __all__ = [
     "RejectCommunicationProjectLinkCommand",
     "RejectEmailAnswerDraftCommand",
     "RejectEmailProjectLinkCommand",
+    "ReviewCommunicationCandidateCommand",
+    "ReviewCommunicationCandidateResult",
     "SuggestEmailProjectLinksCommand",
     "SyncEmailAccountCommand",
     "UpdateMailboxSyncProgressCommand",
